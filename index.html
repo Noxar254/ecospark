@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ecospark - Car Wash Management</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="root">
+        <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;">
+            <div style="width:40px;height:40px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+            <p style="margin-top:16px;color:#64748b;">Loading Ecospark...</p>
+        </div>
+        <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+    </div>
+    
+    <!-- React (Production) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase - Load as module and attach to window -->
+    <script type="module">
+        // Import Firebase services and wait for them to be ready
+        import './firebase-config.js';
+        import './firebase-services.js';
+        
+        // Signal that Firebase is ready
+        window.FirebaseReady = true;
+        window.dispatchEvent(new Event('firebase-ready'));
+        console.log('🔥 Firebase initialized and ready');
+    </script>
+    
+    <!-- App -->
+    <script type="text/babel" src="app.js"></script>
+</body>
+</html>
