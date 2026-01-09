@@ -13584,9 +13584,11 @@ function StaffManagement() {
     const [showAddStaffModal, setShowAddStaffModal] = useState(false);
     const [showAddUserModal, setShowAddUserModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
+    const [showEditUserModal, setShowEditUserModal] = useState(false);
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmAction, setConfirmAction] = useState(null);
     const [selectedItem, setSelectedItem] = useState(null);
+    const [selectedUser, setSelectedUser] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [error, setError] = useState(null);
     const [successMessage, setSuccessMessage] = useState(null);
@@ -13597,6 +13599,7 @@ function StaffManagement() {
 
     const [staffForm, setStaffForm] = useState({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
     const [userForm, setUserForm] = useState({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+    const [editUserForm, setEditUserForm] = useState({ displayName: '', role: 'staff', phone: '', permissions: {} });
     const [userStep, setUserStep] = useState(1);
 
     const STAFF_ROLES = ['Washer', 'Detailer', 'Supervisor', 'Technician', 'Cleaner', 'Attendant'];
@@ -13825,6 +13828,105 @@ function StaffManagement() {
         } catch (err) { setError(err.message); }
     };
 
+    // Delete user state
+    const [showDeleteUserModal, setShowDeleteUserModal] = useState(false);
+    const [userToDelete, setUserToDelete] = useState(null);
+
+    // Open delete confirmation modal
+    const handleDeleteUserClick = (user) => {
+        setUserToDelete(user);
+        setShowDeleteUserModal(true);
+    };
+
+    // Confirm delete user
+    const handleConfirmDeleteUser = async () => {
+        if (!userToDelete) return;
+        setActionLoading(true);
+        setError(null);
+        try {
+            const result = await window.FirebaseServices.userService.deleteUserProfile(userToDelete.id);
+            if (result.success) {
+                setSuccessMessage(`User ${userToDelete.displayName || userToDelete.email} deleted successfully`);
+                setShowDeleteUserModal(false);
+                setUserToDelete(null);
+            } else {
+                setError(result.error);
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Open edit user modal
+    const handleEditUser = (user) => {
+        setSelectedUser(user);
+        setEditUserForm({
+            displayName: user.displayName || '',
+            role: user.role || 'staff',
+            phone: user.phone || '',
+            permissions: user.permissions || getDefaultPermissions(user.role || 'staff')
+        });
+        setShowEditUserModal(true);
+    };
+
+    // Save edited user
+    const handleSaveEditUser = async () => {
+        if (!selectedUser) return;
+        setActionLoading(true);
+        setError(null);
+        try {
+            const result = await window.FirebaseServices.userService.updateUserProfile(selectedUser.id, {
+                displayName: editUserForm.displayName,
+                role: editUserForm.role,
+                phone: editUserForm.phone,
+                permissions: editUserForm.permissions
+            });
+            if (result.success) {
+                setSuccessMessage('User permissions updated successfully');
+                setShowEditUserModal(false);
+                setSelectedUser(null);
+            } else {
+                setError(result.error);
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Toggle permission for edit user form
+    const toggleEditUserPermission = (moduleId, action) => {
+        setEditUserForm(prev => ({
+            ...prev,
+            permissions: {
+                ...prev.permissions,
+                [moduleId]: {
+                    ...prev.permissions[moduleId],
+                    [action]: !prev.permissions[moduleId]?.[action]
+                }
+            }
+        }));
+    };
+
+    // Toggle all permissions for a module
+    const toggleEditUserAllModulePermissions = (moduleId, enabled) => {
+        setEditUserForm(prev => ({
+            ...prev,
+            permissions: {
+                ...prev.permissions,
+                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled }
+            }
+        }));
+    };
+
+    // Apply role preset to edit form
+    const applyEditRolePreset = (role) => {
+        setEditUserForm(prev => ({ ...prev, role, permissions: getDefaultPermissions(role) }));
+    };
+
     const handleToggleStaffStatus = (staff) => {
         setSelectedItem(staff);
         setConfirmAction({
@@ -13937,10 +14039,14 @@ function StaffManagement() {
                                     return (
                                         <tr key={user.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '12px 16px', color: theme.text }}><div style={{ fontWeight: '600' }}>{user.displayName || user.email?.split('@')[0]}</div><div style={{ fontSize: '12px', color: theme.textSecondary }}>{user.email}</div></td>
-                                            <td style={{ padding: '12px 16px' }}><select value={user.role} onChange={(e) => handleUpdateUser(user.id, { role: e.target.value })} style={{ padding: '6px 10px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '13px' }}>{USER_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></td>
+                                            <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 10px', background: user.role === 'admin' ? '#8b5cf620' : '#3b82f620', color: user.role === 'admin' ? '#8b5cf6' : '#3b82f6', fontWeight: '600', fontSize: '12px' }}>{roleInfo.label}</span></td>
                                             <td style={{ padding: '12px 16px', color: theme.textSecondary, fontSize: '13px' }}>{roleInfo.desc}</td>
                                             <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 12px', fontSize: '12px', fontWeight: '600', background: user.isActive ? '#d1fae5' : '#fee2e2', color: user.isActive ? '#059669' : '#dc2626' }}>{user.isActive ? 'Active' : 'Inactive'}</span></td>
-                                            <td style={{ padding: '12px 16px', textAlign: 'center' }}><button onClick={() => handleUpdateUser(user.id, { isActive: !user.isActive })} style={{ padding: '6px 12px', background: user.isActive ? '#ef4444' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' }}>{user.isActive ? 'Deactivate' : 'Activate'}</button></td>
+                                            <td style={{ padding: '12px 16px', textAlign: 'center', display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                                <button onClick={() => handleEditUser(user)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>✏️ Edit</button>
+                                                <button onClick={() => handleUpdateUser(user.id, { isActive: !user.isActive })} style={{ padding: '6px 12px', background: user.isActive ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>{user.isActive ? '⏸️ Deactivate' : '✅ Activate'}</button>
+                                                <button onClick={() => handleDeleteUserClick(user)} style={{ padding: '6px 12px', background: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>🗑️ Delete</button>
+                                            </td>
                                         </tr>
                                     );
                                 })}
@@ -14141,6 +14247,117 @@ function StaffManagement() {
                                 </div>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Edit User Modal */}
+            {showEditUserModal && selectedUser && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowEditUserModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '900px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h2 style={{ margin: 0, color: theme.text, fontSize: '20px' }}>Edit User: {selectedUser.displayName || selectedUser.email}</h2>
+                                <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Manage user details and module permissions</p>
+                            </div>
+                            <button onClick={() => setShowEditUserModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ padding: '24px' }}>
+                            {/* User Details Section */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                                <div>
+                                    <label style={labelStyle}>Display Name</label>
+                                    <input type="text" value={editUserForm.displayName} onChange={e => setEditUserForm({...editUserForm, displayName: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="Full name" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Phone Number</label>
+                                    <input type="tel" value={editUserForm.phone} onChange={e => setEditUserForm({...editUserForm, phone: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="+1234567890" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Role Preset</label>
+                                    <select value={editUserForm.role} onChange={e => applyEditRolePreset(e.target.value)} style={{...inputStyle, borderRadius: '8px'}}>
+                                        {USER_ROLES.map(r => <option key={r.id} value={r.id}>{r.label} - {r.desc}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Permissions Section */}
+                            <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h3 style={{ margin: 0, color: theme.text, fontSize: '16px' }}>Module Permissions</h3>
+                                    <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Configure which modules this user can access</p>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
+                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
+                                </div>
+                            </div>
+
+                            <div style={{ maxHeight: '350px', overflow: 'auto', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead style={{ position: 'sticky', top: 0, background: theme.bgSecondary, zIndex: 1 }}>
+                                        <tr>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '35%' }}>Module</th>
+                                            <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '10%' }}>All</th>
+                                            {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '12%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {ALL_MODULES.map((mod, idx) => {
+                                            const perms = editUserForm.permissions[mod.id] || {};
+                                            const allChecked = perms.view && perms.create && perms.edit && perms.delete;
+                                            const noneChecked = !perms.view && !perms.create && !perms.edit && !perms.delete;
+                                            return (
+                                                <tr key={mod.id} style={{ background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
+                                                    <td style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.border}` }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                            <span style={{ fontSize: '18px' }}>{mod.icon}</span>
+                                                            <div>
+                                                                <div style={{ fontWeight: '500', color: theme.text, fontSize: '13px' }}>{mod.label}</div>
+                                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{mod.category}</div>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td style={{ padding: '10px 8px', textAlign: 'center', borderBottom: `1px solid ${theme.border}` }}>
+                                                        <input type="checkbox" checked={allChecked} onChange={() => toggleEditUserAllModulePermissions(mod.id, !allChecked)} style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#10b981' }} />
+                                                    </td>
+                                                    {PERMISSION_ACTIONS.map(a => (
+                                                        <td key={a.id} style={{ padding: '10px 8px', textAlign: 'center', borderBottom: `1px solid ${theme.border}` }}>
+                                                            <input type="checkbox" checked={perms[a.id] || false} onChange={() => toggleEditUserPermission(mod.id, a.id)} style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#8b5cf6' }} />
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                                <button type="button" onClick={() => setShowEditUserModal(false)} style={{ flex: 1, padding: '14px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>Cancel</button>
+                                <button type="button" onClick={handleSaveEditUser} disabled={actionLoading} style={{ flex: 1, padding: '14px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Saving...' : '✓ Save Changes'}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete User Confirmation Modal */}
+            {showDeleteUserModal && userToDelete && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' }} onClick={() => { setShowDeleteUserModal(false); setUserToDelete(null); }}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '420px', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.4)', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', textAlign: 'center' }}>
+                            <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: '32px' }}>🗑️</div>
+                            <h3 style={{ margin: '0 0 12px', fontSize: '20px', fontWeight: '700', color: theme.text }}>Delete User</h3>
+                            <p style={{ margin: '0 0 8px', fontSize: '15px', color: theme.textSecondary, lineHeight: '1.6' }}>Are you sure you want to permanently delete</p>
+                            <p style={{ margin: '0 0 8px', fontSize: '16px', fontWeight: '600', color: theme.text }}>"{userToDelete.displayName || userToDelete.email}"?</p>
+                            <p style={{ margin: '0 0 24px', fontSize: '13px', color: '#ef4444', fontWeight: '500' }}>⚠️ This action cannot be undone.</p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => { setShowDeleteUserModal(false); setUserToDelete(null); }} style={{ flex: 1, padding: '12px 20px', background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                                <button onClick={handleConfirmDeleteUser} disabled={actionLoading} style={{ flex: 1, padding: '12px 20px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer' }}>{actionLoading ? 'Deleting...' : 'Delete User'}</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
@@ -17236,16 +17453,41 @@ function App() {
                     const profileResult = await services.userService.getUserProfile(user.uid);
                     if (profileResult.success && profileResult.data) {
                         if (profileResult.data.isActive) {
-                            // Auto-promote current user to admin if not already
-                            if (profileResult.data.role !== 'admin') {
-                                await services.userService.updateUserProfile(user.uid, { role: 'admin' });
-                                profileResult.data.role = 'admin';
-                            }
                             setCurrentUser(user);
                             setUserProfile(profileResult.data);
                             setIsAuthenticated(true);
                             // Store globally for activity logging
                             window.currentUserProfile = profileResult.data;
+                            
+                            // Redirect to first accessible module
+                            const profile = profileResult.data;
+                            const allModuleIds = menuItems.map(m => m.id);
+                            let firstModule = 'dashboard';
+                            for (const moduleId of allModuleIds) {
+                                if (profile.permissions && profile.permissions[moduleId]?.view) {
+                                    firstModule = moduleId;
+                                    break;
+                                }
+                                if (services.userService.hasModuleAccess(profile.role, moduleId, profile.permissions)) {
+                                    firstModule = moduleId;
+                                    break;
+                                }
+                            }
+                            setActiveModule(firstModule);
+                            
+                            // Subscribe to user profile changes for real-time permission updates
+                            if (services.userService.subscribeToUserProfile) {
+                                services.userService.subscribeToUserProfile(user.uid, (updatedProfile) => {
+                                    if (updatedProfile) {
+                                        setUserProfile(updatedProfile);
+                                        window.currentUserProfile = updatedProfile;
+                                        // If user is deactivated, sign them out
+                                        if (!updatedProfile.isActive) {
+                                            services.authService.signOut();
+                                        }
+                                    }
+                                });
+                            }
                         } else {
                             // User is deactivated
                             await services.authService.signOut();
@@ -17278,6 +17520,23 @@ function App() {
         setIsAuthenticated(true);
         // Store globally for activity logging
         window.currentUserProfile = profile;
+        
+        // Redirect to first accessible module
+        const getFirstAccessibleModule = () => {
+            const allModuleIds = menuItems.map(m => m.id);
+            for (const moduleId of allModuleIds) {
+                // Check if user has access via permissions or role
+                if (profile.permissions && profile.permissions[moduleId]?.view) {
+                    return moduleId;
+                }
+                // Fall back to role-based check
+                if (window.FirebaseServices?.userService?.hasModuleAccess(profile.role, moduleId, profile.permissions)) {
+                    return moduleId;
+                }
+            }
+            return 'dashboard'; // fallback
+        };
+        setActiveModule(getFirstAccessibleModule());
     };
 
     const handleLogout = async () => {
@@ -17307,7 +17566,7 @@ function App() {
     const handleModuleClick = (moduleId, tab = null) => {
         // Check if user has access to this module
         if (userProfile && window.FirebaseServices?.userService) {
-            const hasAccess = window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId);
+            const hasAccess = window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions);
             if (!hasAccess) {
                 const moduleName = menuItems.find(m => m.id === moduleId)?.label || moduleId;
                 setDeniedModule(moduleName);
@@ -17326,13 +17585,13 @@ function App() {
     const hasModuleAccess = (moduleId) => {
         if (!userProfile) return false;
         if (!window.FirebaseServices?.userService) return true;
-        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId);
+        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions);
     };
 
-    const hasPermission = (permissionKey) => {
+    const hasPermission = (moduleId, action = 'view') => {
         if (!userProfile) return false;
         if (!window.FirebaseServices?.userService) return true;
-        return window.FirebaseServices.userService.hasPermission(userProfile.role, permissionKey);
+        return window.FirebaseServices.userService.hasPermission(userProfile.role, moduleId, action, userProfile.permissions);
     };
 
     // Show login page if loading or not authenticated

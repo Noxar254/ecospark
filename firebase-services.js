@@ -2318,6 +2318,21 @@ export const userService = {
     }
   },
 
+  // Subscribe to a single user profile for real-time updates
+  subscribeToUserProfile(userId, callback) {
+    const userRef = doc(db, 'users', userId);
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        callback({ id: docSnap.id, ...docSnap.data() });
+      } else {
+        callback(null);
+      }
+    }, (error) => {
+      console.error('User profile subscription error:', error);
+    });
+    return unsubscribe;
+  },
+
   // Update user profile
   async updateUserProfile(userId, updates) {
     try {
@@ -2388,17 +2403,32 @@ export const userService = {
   },
 
   // Check if user has access to a module
-  hasModuleAccess(userRole, moduleId) {
+  hasModuleAccess(userRole, moduleId, userPermissions = null) {
+    // If user has custom permissions, check those first
+    if (userPermissions && userPermissions[moduleId]) {
+      return userPermissions[moduleId].view === true;
+    }
+    // Fall back to role-based access
     const role = DEFAULT_ROLES[userRole];
     if (!role) return false;
     return role.modules.includes(moduleId);
   },
 
-  // Check if user has a specific permission
-  hasPermission(userRole, permissionKey) {
+  // Check if user has a specific permission for a module
+  hasPermission(userRole, moduleId, action, userPermissions = null) {
+    // If user has custom permissions, check those first
+    if (userPermissions && userPermissions[moduleId]) {
+      return userPermissions[moduleId][action] === true;
+    }
+    // Fall back to role-based permissions
     const role = DEFAULT_ROLES[userRole];
     if (!role) return false;
-    return role.permissions[permissionKey] === true;
+    // For legacy permission keys like 'canManageStaff', check permissions object
+    if (typeof action === 'string' && role.permissions[action] !== undefined) {
+      return role.permissions[action] === true;
+    }
+    // Default to view access if module is in allowed list
+    return role.modules.includes(moduleId);
   },
 
   // Get user's accessible modules
