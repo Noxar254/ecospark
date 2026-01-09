@@ -16271,7 +16271,7 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
     return (
         <div style={{ padding: 0, width: '100%' }}>
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: theme.bgSecondary, borderBottom: `1px solid ${theme.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: theme.bg, borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ display: 'flex', gap: '0' }}>
                     <button onClick={() => setActiveTab('overview')} style={tabStyle(activeTab === 'overview')}>Overview</button>
                     <button onClick={() => setActiveTab('revenue')} style={tabStyle(activeTab === 'revenue')}>Revenue</button>
@@ -16932,6 +16932,747 @@ ${reportBody}
     }
 }
 
+// ==================== MARKETING CRM MODULE ====================
+function MarketingCRM() {
+    const [customers, setCustomers] = useState([]);
+    const [campaigns, setCampaigns] = useState([]);
+    const [messages, setMessages] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('customers'); // 'customers', 'campaigns', 'messages', 'templates'
+    const [searchQuery, setSearchQuery] = useState('');
+    const [selectedCustomers, setSelectedCustomers] = useState([]);
+    const [showComposeModal, setShowComposeModal] = useState(false);
+    const [showCampaignModal, setShowCampaignModal] = useState(false);
+    const [showTemplateModal, setShowTemplateModal] = useState(false);
+    const [actionLoading, setActionLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [customerFilter, setCustomerFilter] = useState('all'); // 'all', 'active', 'inactive', 'loyal', 'new'
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    // Message templates
+    const [templates, setTemplates] = useState([
+        { id: 1, name: 'Welcome Message', content: 'Welcome to EcoSpark Car Wash! Thank you for choosing us. Enjoy 10% off your next visit with code: WELCOME10', category: 'welcome' },
+        { id: 2, name: 'Service Reminder', content: 'Hi {name}, your vehicle is due for a wash! Book now and get priority service. Visit us today at EcoSpark.', category: 'reminder' },
+        { id: 3, name: 'Loyalty Reward', content: 'Congratulations {name}! You\'ve earned {points} loyalty points. Redeem them on your next visit for discounts!', category: 'loyalty' },
+        { id: 4, name: 'Special Offer', content: '🎉 Special Offer! Get 20% off all premium washes this weekend only. Don\'t miss out! - EcoSpark', category: 'promo' },
+        { id: 5, name: 'Birthday Wish', content: 'Happy Birthday {name}! 🎂 Enjoy a FREE basic wash on us. Valid this week only. - EcoSpark Team', category: 'birthday' }
+    ]);
+
+    const [composeForm, setComposeForm] = useState({
+        subject: '',
+        message: '',
+        sendVia: 'sms', // 'sms', 'email', 'both'
+        scheduleTime: '',
+        isScheduled: false
+    });
+
+    const [campaignForm, setCampaignForm] = useState({
+        name: '',
+        description: '',
+        targetAudience: 'all',
+        messageTemplate: '',
+        startDate: '',
+        endDate: '',
+        status: 'draft'
+    });
+
+    const [templateForm, setTemplateForm] = useState({
+        name: '',
+        content: '',
+        category: 'general'
+    });
+
+    // Listen for theme changes
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    // Theme colors
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        bgTertiary: isDark ? '#334155' : '#f1f5f9',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        inputBg: isDark ? '#1e293b' : 'white',
+        cardBg: isDark ? '#1e293b' : 'white',
+        hoverBg: isDark ? '#334155' : '#f1f5f9'
+    };
+
+    // Fetch customers from customer service
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services?.customerService) {
+            setLoading(false);
+            return;
+        }
+        const unsubscribe = services.customerService.subscribeToCustomers(
+            (data) => {
+                setCustomers(data);
+                setLoading(false);
+            },
+            (err) => {
+                setError('Failed to load customers');
+                setLoading(false);
+            }
+        );
+        return () => unsubscribe && unsubscribe();
+    }, []);
+
+    // Clear success message
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    // Filter customers
+    const filteredCustomers = customers.filter(customer => {
+        const matchesSearch = customer.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            customer.phone?.includes(searchQuery) ||
+            customer.email?.toLowerCase().includes(searchQuery.toLowerCase());
+        
+        if (customerFilter === 'all') return matchesSearch;
+        if (customerFilter === 'loyal') return matchesSearch && (customer.loyaltyPoints || 0) >= 100;
+        if (customerFilter === 'new') {
+            const createdAt = new Date(customer.createdAt);
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            return matchesSearch && createdAt > thirtyDaysAgo;
+        }
+        return matchesSearch;
+    });
+
+    // Toggle customer selection
+    const toggleCustomerSelection = (customerId) => {
+        setSelectedCustomers(prev => 
+            prev.includes(customerId) 
+                ? prev.filter(id => id !== customerId)
+                : [...prev, customerId]
+        );
+    };
+
+    // Select all filtered customers
+    const selectAllCustomers = () => {
+        if (selectedCustomers.length === filteredCustomers.length) {
+            setSelectedCustomers([]);
+        } else {
+            setSelectedCustomers(filteredCustomers.map(c => c.id));
+        }
+    };
+
+    // Send message to selected customers
+    const handleSendMessage = async () => {
+        if (selectedCustomers.length === 0) {
+            setError('Please select at least one customer');
+            return;
+        }
+        if (!composeForm.message.trim()) {
+            setError('Please enter a message');
+            return;
+        }
+
+        setActionLoading(true);
+        setError(null);
+
+        try {
+            const selectedCustomerData = customers.filter(c => selectedCustomers.includes(c.id));
+            
+            // Create message record
+            const newMessage = {
+                id: Date.now(),
+                subject: composeForm.subject || 'No Subject',
+                content: composeForm.message,
+                recipients: selectedCustomerData.map(c => ({ id: c.id, name: c.name, phone: c.phone, email: c.email })),
+                recipientCount: selectedCustomers.length,
+                sendVia: composeForm.sendVia,
+                status: composeForm.isScheduled ? 'scheduled' : 'sent',
+                scheduledTime: composeForm.isScheduled ? composeForm.scheduleTime : null,
+                sentAt: composeForm.isScheduled ? null : new Date().toISOString(),
+                createdAt: new Date().toISOString()
+            };
+
+            setMessages(prev => [newMessage, ...prev]);
+            setSuccessMessage(`Message ${composeForm.isScheduled ? 'scheduled' : 'sent'} to ${selectedCustomers.length} customer(s)`);
+            setShowComposeModal(false);
+            setSelectedCustomers([]);
+            setComposeForm({ subject: '', message: '', sendVia: 'sms', scheduleTime: '', isScheduled: false });
+
+            // Log activity
+            if (window.FirebaseServices?.activityService) {
+                await window.FirebaseServices.activityService.logActivity({
+                    type: 'marketing',
+                    action: 'message_sent',
+                    details: `Sent ${composeForm.sendVia} to ${selectedCustomers.length} customers`,
+                    metadata: { recipientCount: selectedCustomers.length, sendVia: composeForm.sendVia }
+                });
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Create campaign
+    const handleCreateCampaign = async () => {
+        if (!campaignForm.name.trim()) {
+            setError('Please enter campaign name');
+            return;
+        }
+
+        setActionLoading(true);
+        setError(null);
+
+        try {
+            const newCampaign = {
+                id: Date.now(),
+                ...campaignForm,
+                createdAt: new Date().toISOString(),
+                stats: { sent: 0, opened: 0, clicked: 0 }
+            };
+
+            setCampaigns(prev => [newCampaign, ...prev]);
+            setSuccessMessage('Campaign created successfully');
+            setShowCampaignModal(false);
+            setCampaignForm({ name: '', description: '', targetAudience: 'all', messageTemplate: '', startDate: '', endDate: '', status: 'draft' });
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Save template
+    const handleSaveTemplate = () => {
+        if (!templateForm.name.trim() || !templateForm.content.trim()) {
+            setError('Please fill in template name and content');
+            return;
+        }
+
+        const newTemplate = {
+            id: Date.now(),
+            ...templateForm
+        };
+
+        setTemplates(prev => [...prev, newTemplate]);
+        setSuccessMessage('Template saved successfully');
+        setShowTemplateModal(false);
+        setTemplateForm({ name: '', content: '', category: 'general' });
+    };
+
+    // Use template
+    const useTemplate = (template) => {
+        setComposeForm(prev => ({ ...prev, message: template.content }));
+        setShowComposeModal(true);
+    };
+
+    // Stats
+    const stats = {
+        totalCustomers: customers.length,
+        selectedCount: selectedCustomers.length,
+        messagesSent: messages.filter(m => m.status === 'sent').length,
+        activeCampaigns: campaigns.filter(c => c.status === 'active').length,
+        loyalCustomers: customers.filter(c => (c.loyaltyPoints || 0) >= 100).length
+    };
+
+    const inputStyle = {
+        width: '100%',
+        padding: '12px 16px',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        fontSize: '14px',
+        background: theme.inputBg,
+        color: theme.text,
+        outline: 'none'
+    };
+
+    const labelStyle = {
+        display: 'block',
+        marginBottom: '8px',
+        fontSize: '13px',
+        fontWeight: '600',
+        color: theme.textSecondary,
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px'
+    };
+
+    const tabStyle = (isActive) => ({
+        padding: '14px 28px',
+        background: isActive ? '#3b82f6' : 'transparent',
+        color: isActive ? 'white' : theme.textSecondary,
+        border: isActive ? 'none' : `1px solid ${theme.border}`,
+        cursor: 'pointer',
+        fontSize: '14px',
+        fontWeight: '600',
+        borderRadius: '4px',
+        transition: 'all 0.2s'
+    });
+
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '40px', marginBottom: '16px' }}>📣</div>
+                    <div style={{ color: theme.textSecondary }}>Loading Marketing CRM...</div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto' }}>
+            {/* Header with Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '24px', marginBottom: '32px' }}>
+                <div style={{ background: theme.cardBg, padding: '24px', borderRadius: '4px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '4px', background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>👥</div>
+                        <div>
+                            <div style={{ fontSize: '32px', fontWeight: '700', color: theme.text, lineHeight: '1' }}>{stats.totalCustomers}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Customers</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ background: theme.cardBg, padding: '24px', borderRadius: '4px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '4px', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>⭐</div>
+                        <div>
+                            <div style={{ fontSize: '32px', fontWeight: '700', color: theme.text, lineHeight: '1' }}>{stats.loyalCustomers}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Loyal Customers</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ background: theme.cardBg, padding: '24px', borderRadius: '4px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '4px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>✉️</div>
+                        <div>
+                            <div style={{ fontSize: '32px', fontWeight: '700', color: theme.text, lineHeight: '1' }}>{stats.messagesSent}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Messages Sent</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ background: theme.cardBg, padding: '24px', borderRadius: '4px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '4px', background: '#f3e8ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>📢</div>
+                        <div>
+                            <div style={{ fontSize: '32px', fontWeight: '700', color: theme.text, lineHeight: '1' }}>{stats.activeCampaigns}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Active Campaigns</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Success/Error Messages */}
+            {successMessage && (
+                <div style={{ padding: '16px 20px', background: '#d1fae5', color: '#065f46', borderRadius: '4px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px', fontWeight: '500' }}>
+                    ✅ {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ padding: '16px 20px', background: '#fee2e2', color: '#991b1b', borderRadius: '4px', marginBottom: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: '500' }}>
+                    <span>❌ {error}</span>
+                    <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#991b1b' }}>×</button>
+                </div>
+            )}
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', borderBottom: `2px solid ${theme.border}`, paddingBottom: '16px' }}>
+                <button onClick={() => setActiveTab('customers')} style={tabStyle(activeTab === 'customers')}>👥 Customers</button>
+                <button onClick={() => setActiveTab('campaigns')} style={tabStyle(activeTab === 'campaigns')}>📢 Campaigns</button>
+                <button onClick={() => setActiveTab('messages')} style={tabStyle(activeTab === 'messages')}>✉️ Message History</button>
+                <button onClick={() => setActiveTab('templates')} style={tabStyle(activeTab === 'templates')}>📝 Templates</button>
+            </div>
+
+            {/* Customers Tab */}
+            {activeTab === 'customers' && (
+                <div style={{ background: theme.cardBg, borderRadius: '4px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', background: theme.bgSecondary }}>
+                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input
+                                type="text"
+                                placeholder="Search customers..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                style={{ ...inputStyle, width: '300px' }}
+                            />
+                            <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} style={{ ...inputStyle, width: '180px' }}>
+                                <option value="all">All Customers</option>
+                                <option value="loyal">Loyal (100+ pts)</option>
+                                <option value="new">New (30 days)</option>
+                            </select>
+                        </div>
+                        <div style={{ display: 'flex', gap: '16px' }}>
+                            {selectedCustomers.length > 0 && (
+                                <button
+                                    onClick={() => setShowComposeModal(true)}
+                                    style={{ padding: '12px 24px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
+                                >
+                                    ✉️ Send Message ({selectedCustomers.length})
+                                </button>
+                            )}
+                            <button
+                                onClick={selectAllCustomers}
+                                style={{ padding: '12px 24px', background: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: '4px', fontWeight: '600', cursor: 'pointer' }}
+                            >
+                                {selectedCustomers.length === filteredCustomers.length ? 'Deselect All' : 'Select All'}
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ background: theme.bgTertiary }}>
+                                    <th style={{ padding: '16px 20px', textAlign: 'left', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, width: '50px', textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedCustomers.length === filteredCustomers.length && filteredCustomers.length > 0}
+                                            onChange={selectAllCustomers}
+                                            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                        />
+                                    </th>
+                                    <th style={{ padding: '16px 20px', textAlign: 'left', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>Customer</th>
+                                    <th style={{ padding: '16px 20px', textAlign: 'left', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>Contact</th>
+                                    <th style={{ padding: '16px 20px', textAlign: 'center', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>Loyalty</th>
+                                    <th style={{ padding: '16px 20px', textAlign: 'center', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>Visits</th>
+                                    <th style={{ padding: '16px 20px', textAlign: 'center', fontWeight: '700', color: theme.text, borderBottom: `2px solid ${theme.border}`, textTransform: 'uppercase', fontSize: '12px', letterSpacing: '0.5px' }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredCustomers.length === 0 ? (
+                                    <tr><td colSpan="6" style={{ padding: '60px', textAlign: 'center', color: theme.textSecondary, fontSize: '15px' }}>No customers found</td></tr>
+                                ) : (
+                                    filteredCustomers.map(customer => (
+                                        <tr key={customer.id} style={{ borderBottom: `1px solid ${theme.border}`, background: selectedCustomers.includes(customer.id) ? (isDark ? '#1e3a5f' : '#eff6ff') : 'transparent', transition: 'background 0.15s' }}>
+                                            <td style={{ padding: '16px 20px' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedCustomers.includes(customer.id)}
+                                                    onChange={() => toggleCustomerSelection(customer.id)}
+                                                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                                />
+                                            </td>
+                                            <td style={{ padding: '16px 20px' }}>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>{customer.name}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '4px' }}>Since {new Date(customer.createdAt).toLocaleDateString()}</div>
+                                            </td>
+                                            <td style={{ padding: '16px 20px' }}>
+                                                <div style={{ color: theme.text, fontSize: '14px' }}>{customer.phone || '-'}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '4px' }}>{customer.email || '-'}</div>
+                                            </td>
+                                            <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                                <span style={{ padding: '6px 14px', background: (customer.loyaltyPoints || 0) >= 100 ? '#d1fae5' : '#f3f4f6', color: (customer.loyaltyPoints || 0) >= 100 ? '#059669' : '#6b7280', borderRadius: '4px', fontWeight: '700', fontSize: '13px', display: 'inline-block' }}>
+                                                    ⭐ {customer.loyaltyPoints || 0}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '16px 20px', textAlign: 'center', color: theme.text, fontWeight: '700', fontSize: '15px' }}>
+                                                {customer.visitCount || 0}
+                                            </td>
+                                            <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                                <button
+                                                    onClick={() => { setSelectedCustomers([customer.id]); setShowComposeModal(true); }}
+                                                    style={{ padding: '8px 16px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
+                                                >
+                                                    ✉️ Message
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Campaigns Tab */}
+            {activeTab === 'campaigns' && (
+                <div style={{ background: theme.cardBg, borderRadius: '4px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.bgSecondary }}>
+                        <h3 style={{ margin: 0, color: theme.text, fontSize: '18px', fontWeight: '700' }}>Marketing Campaigns</h3>
+                        <button
+                            onClick={() => setShowCampaignModal(true)}
+                            style={{ padding: '12px 24px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
+                        >
+                            ➕ New Campaign
+                        </button>
+                    </div>
+                    <div style={{ padding: '24px' }}>
+                        {campaigns.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '80px 20px', color: theme.textSecondary }}>
+                                <div style={{ fontSize: '56px', marginBottom: '20px' }}>📢</div>
+                                <div style={{ fontSize: '18px', marginBottom: '8px', fontWeight: '600', color: theme.text }}>No campaigns yet</div>
+                                <div style={{ fontSize: '14px' }}>Create your first marketing campaign to engage customers</div>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'grid', gap: '20px' }}>
+                                {campaigns.map(campaign => (
+                                    <div key={campaign.id} style={{ padding: '24px', border: `1px solid ${theme.border}`, borderRadius: '4px', background: theme.bg }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                            <div>
+                                                <h4 style={{ margin: '0 0 6px', color: theme.text, fontSize: '18px', fontWeight: '700' }}>{campaign.name}</h4>
+                                                <p style={{ margin: 0, color: theme.textSecondary, fontSize: '14px' }}>{campaign.description || 'No description'}</p>
+                                            </div>
+                                            <span style={{ padding: '6px 14px', borderRadius: '4px', fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', background: campaign.status === 'active' ? '#d1fae5' : campaign.status === 'draft' ? '#fef3c7' : '#f3f4f6', color: campaign.status === 'active' ? '#059669' : campaign.status === 'draft' ? '#d97706' : '#6b7280' }}>
+                                                {campaign.status}
+                                            </span>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '32px', fontSize: '13px', color: theme.textSecondary }}>
+                                            <span>📅 {campaign.startDate || 'Not scheduled'}</span>
+                                            <span>🎯 {campaign.targetAudience === 'all' ? 'All Customers' : campaign.targetAudience}</span>
+                                            <span>📊 Sent: {campaign.stats?.sent || 0}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Messages Tab */}
+            {activeTab === 'messages' && (
+                <div style={{ background: theme.cardBg, borderRadius: '4px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                        <h3 style={{ margin: 0, color: theme.text, fontSize: '18px', fontWeight: '700' }}>Message History</h3>
+                    </div>
+                    <div style={{ padding: '24px' }}>
+                        {messages.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '80px 20px', color: theme.textSecondary }}>
+                                <div style={{ fontSize: '56px', marginBottom: '20px' }}>✉️</div>
+                                <div style={{ fontSize: '18px', marginBottom: '8px', fontWeight: '600', color: theme.text }}>No messages sent yet</div>
+                                <div style={{ fontSize: '14px' }}>Select customers and send them a message</div>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                {messages.map(message => (
+                                    <div key={message.id} style={{ padding: '20px', border: `1px solid ${theme.border}`, borderRadius: '4px', background: theme.bg }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                            <div style={{ fontWeight: '700', color: theme.text, fontSize: '16px' }}>{message.subject}</div>
+                                            <span style={{ padding: '6px 12px', borderRadius: '4px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', background: message.status === 'sent' ? '#d1fae5' : '#fef3c7', color: message.status === 'sent' ? '#059669' : '#d97706' }}>
+                                                {message.status === 'sent' ? '✓ Sent' : '⏱ Scheduled'}
+                                            </span>
+                                        </div>
+                                        <p style={{ margin: '0 0 16px', color: theme.textSecondary, fontSize: '14px', lineHeight: '1.6' }}>{message.content}</p>
+                                        <div style={{ display: 'flex', gap: '24px', fontSize: '13px', color: theme.textSecondary, paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+                                            <span>👥 {message.recipientCount} recipients</span>
+                                            <span>📱 {message.sendVia.toUpperCase()}</span>
+                                            <span>📅 {new Date(message.sentAt || message.scheduledTime).toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Templates Tab */}
+            {activeTab === 'templates' && (
+                <div style={{ background: theme.cardBg, borderRadius: '4px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.bgSecondary }}>
+                        <h3 style={{ margin: 0, color: theme.text, fontSize: '18px', fontWeight: '700' }}>Message Templates</h3>
+                        <button
+                            onClick={() => setShowTemplateModal(true)}
+                            style={{ padding: '12px 24px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', fontWeight: '600', cursor: 'pointer' }}
+                        >
+                            ➕ New Template
+                        </button>
+                    </div>
+                    <div style={{ padding: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '20px' }}>
+                        {templates.map(template => (
+                            <div key={template.id} style={{ padding: '20px', border: `1px solid ${theme.border}`, borderRadius: '4px', background: theme.bg }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                    <div style={{ fontWeight: '700', color: theme.text, fontSize: '16px' }}>{template.name}</div>
+                                    <span style={{ padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', background: theme.bgTertiary, color: theme.textSecondary }}>
+                                        {template.category}
+                                    </span>
+                                </div>
+                                <p style={{ margin: '0 0 16px', color: theme.textSecondary, fontSize: '14px', lineHeight: '1.6' }}>{template.content}</p>
+                                <button
+                                    onClick={() => useTemplate(template)}
+                                    style={{ padding: '10px 18px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
+                                >
+                                    Use Template
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Compose Message Modal */}
+            {showComposeModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowComposeModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '4px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.bgSecondary }}>
+                            <h2 style={{ margin: 0, color: theme.text, fontSize: '20px', fontWeight: '700' }}>✉️ Compose Message</h2>
+                            <button onClick={() => setShowComposeModal(false)} style={{ background: 'none', border: 'none', fontSize: '28px', cursor: 'pointer', color: theme.textSecondary, lineHeight: '1' }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            <div style={{ marginBottom: '20px', padding: '16px', background: theme.bgTertiary, borderRadius: '4px' }}>
+                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sending to:</div>
+                                <div style={{ fontWeight: '700', color: theme.text, fontSize: '16px' }}>{selectedCustomers.length} customer(s) selected</div>
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Subject (optional)</label>
+                                <input
+                                    type="text"
+                                    value={composeForm.subject}
+                                    onChange={(e) => setComposeForm({ ...composeForm, subject: e.target.value })}
+                                    placeholder="Enter subject..."
+                                    style={inputStyle}
+                                />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Message *</label>
+                                <textarea
+                                    value={composeForm.message}
+                                    onChange={(e) => setComposeForm({ ...composeForm, message: e.target.value })}
+                                    placeholder="Type your message here... Use {name} for customer name"
+                                    style={{ ...inputStyle, minHeight: '140px', resize: 'vertical' }}
+                                />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Send Via</label>
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    {['sms', 'email', 'both'].map(type => (
+                                        <button
+                                            key={type}
+                                            onClick={() => setComposeForm({ ...composeForm, sendVia: type })}
+                                            style={{ flex: 1, padding: '14px', border: `2px solid ${composeForm.sendVia === type ? '#3b82f6' : theme.border}`, background: composeForm.sendVia === type ? '#eff6ff' : 'transparent', color: composeForm.sendVia === type ? '#3b82f6' : theme.text, borderRadius: '4px', cursor: 'pointer', fontWeight: '700', fontSize: '14px' }}
+                                        >
+                                            {type === 'sms' ? '📱 SMS' : type === 'email' ? '📧 Email' : '📨 Both'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={composeForm.isScheduled}
+                                        onChange={(e) => setComposeForm({ ...composeForm, isScheduled: e.target.checked })}
+                                        style={{ width: '18px', height: '18px' }}
+                                    />
+                                    <span style={{ fontSize: '14px', color: theme.text }}>Schedule for later</span>
+                                </label>
+                                {composeForm.isScheduled && (
+                                    <input
+                                        type="datetime-local"
+                                        value={composeForm.scheduleTime}
+                                        onChange={(e) => setComposeForm({ ...composeForm, scheduleTime: e.target.value })}
+                                        style={{ ...inputStyle, marginTop: '12px' }}
+                                    />
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', marginTop: '28px' }}>
+                                <button onClick={() => setShowComposeModal(false)} style={{ flex: 1, padding: '16px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Cancel</button>
+                                <button onClick={handleSendMessage} disabled={actionLoading} style={{ flex: 1, padding: '16px', border: 'none', background: '#3b82f6', color: 'white', borderRadius: '4px', cursor: actionLoading ? 'wait' : 'pointer', fontWeight: '700', fontSize: '14px' }}>
+                                    {actionLoading ? 'Sending...' : composeForm.isScheduled ? '⏱ Schedule' : '✈️ Send Now'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Campaign Modal */}
+            {showCampaignModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowCampaignModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '4px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.bgSecondary }}>
+                            <h2 style={{ margin: 0, color: theme.text, fontSize: '20px', fontWeight: '700' }}>📢 Create Campaign</h2>
+                            <button onClick={() => setShowCampaignModal(false)} style={{ background: 'none', border: 'none', fontSize: '28px', cursor: 'pointer', color: theme.textSecondary, lineHeight: '1' }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Campaign Name *</label>
+                                <input type="text" value={campaignForm.name} onChange={(e) => setCampaignForm({ ...campaignForm, name: e.target.value })} placeholder="e.g., Summer Promotion" style={inputStyle} />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Description</label>
+                                <textarea value={campaignForm.description} onChange={(e) => setCampaignForm({ ...campaignForm, description: e.target.value })} placeholder="Describe your campaign..." style={{ ...inputStyle, minHeight: '100px', resize: 'vertical' }} />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Target Audience</label>
+                                <select value={campaignForm.targetAudience} onChange={(e) => setCampaignForm({ ...campaignForm, targetAudience: e.target.value })} style={inputStyle}>
+                                    <option value="all">All Customers</option>
+                                    <option value="loyal">Loyal Customers (100+ points)</option>
+                                    <option value="new">New Customers (30 days)</option>
+                                    <option value="inactive">Inactive Customers</option>
+                                </select>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                                <div>
+                                    <label style={labelStyle}>Start Date</label>
+                                    <input type="date" value={campaignForm.startDate} onChange={(e) => setCampaignForm({ ...campaignForm, startDate: e.target.value })} style={inputStyle} />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>End Date</label>
+                                    <input type="date" value={campaignForm.endDate} onChange={(e) => setCampaignForm({ ...campaignForm, endDate: e.target.value })} style={inputStyle} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', marginTop: '28px' }}>
+                                <button onClick={() => setShowCampaignModal(false)} style={{ flex: 1, padding: '16px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Cancel</button>
+                                <button onClick={handleCreateCampaign} disabled={actionLoading} style={{ flex: 1, padding: '16px', border: 'none', background: '#3b82f6', color: 'white', borderRadius: '4px', cursor: actionLoading ? 'wait' : 'pointer', fontWeight: '700', fontSize: '14px' }}>
+                                    {actionLoading ? 'Creating...' : '✓ Create Campaign'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Template Modal */}
+            {showTemplateModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowTemplateModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '550px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '4px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.bgSecondary }}>
+                            <h2 style={{ margin: 0, color: theme.text, fontSize: '20px', fontWeight: '700' }}>📝 New Template</h2>
+                            <button onClick={() => setShowTemplateModal(false)} style={{ background: 'none', border: 'none', fontSize: '28px', cursor: 'pointer', color: theme.textSecondary, lineHeight: '1' }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Template Name *</label>
+                                <input type="text" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} placeholder="e.g., Weekly Reminder" style={inputStyle} />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Category</label>
+                                <select value={templateForm.category} onChange={(e) => setTemplateForm({ ...templateForm, category: e.target.value })} style={inputStyle}>
+                                    <option value="general">General</option>
+                                    <option value="welcome">Welcome</option>
+                                    <option value="reminder">Reminder</option>
+                                    <option value="promo">Promotion</option>
+                                    <option value="loyalty">Loyalty</option>
+                                    <option value="birthday">Birthday</option>
+                                </select>
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Message Content *</label>
+                                <textarea value={templateForm.content} onChange={(e) => setTemplateForm({ ...templateForm, content: e.target.value })} placeholder="Enter template message... Use {name} for customer name, {points} for loyalty points" style={{ ...inputStyle, minHeight: '120px', resize: 'vertical' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', marginTop: '28px' }}>
+                                <button onClick={() => setShowTemplateModal(false)} style={{ flex: 1, padding: '16px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Cancel</button>
+                                <button onClick={handleSaveTemplate} style={{ flex: 1, padding: '16px', border: 'none', background: '#3b82f6', color: 'white', borderRadius: '4px', cursor: 'pointer', fontWeight: '700', fontSize: '14px' }}>✓ Save Template</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ==================== ACTIVITIES MODULE ====================
 function ActivitiesModule() {
     const [activities, setActivities] = useState([]);
@@ -17402,6 +18143,7 @@ function ContentArea({ activeModule, onModuleClick, settingsTab }) {
                 {activeModule === 'inventory' && <InventoryModule />}
                 {activeModule === 'expenses' && <ExpensesModule />}
                 {activeModule === 'reports' && <ReportsAnalytics />}
+                {activeModule === 'marketing' && <MarketingCRM />}
                 {activeModule === 'activities' && <ActivitiesModule />}
                 {activeModule === 'settings' && <SystemSettings initialTab={settingsTab} />}
             </div>
