@@ -17,14 +17,13 @@ function LoginPage({ onLoginSuccess }) {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [showPassword, setShowPassword] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
         
         if (!email.trim() || !password.trim()) {
-            setError('Please enter both email and password');
+            setError('Please enter email and password');
             return;
         }
 
@@ -32,339 +31,113 @@ function LoginPage({ onLoginSuccess }) {
         
         try {
             const services = window.FirebaseServices;
-            if (!services || !services.authService) {
-                throw new Error('Authentication service not available');
+            if (!services?.authService) {
+                setError('System initializing... please wait and try again');
+                setLoading(false);
+                return;
             }
 
             const result = await services.authService.signIn(email, password);
             
             if (result.success) {
-                // Get user profile
                 const userResult = await services.userService.getUserProfile(result.user.uid);
                 
                 if (userResult.success && userResult.data) {
                     if (!userResult.data.isActive) {
-                        setError('Your account has been deactivated. Please contact administrator.');
+                        setError('Account deactivated. Contact administrator.');
+                        await services.auditService?.logLogin(result.user, false, 'Account deactivated');
                         await services.authService.signOut();
+                        setLoading(false);
                         return;
                     }
+                    // Log successful login
+                    await services.auditService?.logLogin(result.user, true);
                     onLoginSuccess(result.user, userResult.data);
                 } else {
-                    // First time login or profile doesn't exist - check if first user
                     const initResult = await services.userService.initializeAdminUser(result.user.uid, result.user.email);
                     if (initResult.isFirstUser) {
                         const newUserResult = await services.userService.getUserProfile(result.user.uid);
+                        await services.auditService?.logLogin(result.user, true);
                         onLoginSuccess(result.user, newUserResult.data);
                     } else {
-                        // Not first user but no profile - create with default role
                         await services.userService.createUserProfile(result.user.uid, {
                             email: result.user.email,
                             displayName: result.user.email.split('@')[0],
                             role: 'receptionist'
                         });
                         const newUserResult = await services.userService.getUserProfile(result.user.uid);
+                        await services.auditService?.logLogin(result.user, true);
                         onLoginSuccess(result.user, newUserResult.data);
                     }
                 }
             } else {
-                // Parse Firebase error messages
-                let errorMessage = result.error;
-                if (result.error.includes('user-not-found')) {
-                    errorMessage = 'No account found with this email address';
-                } else if (result.error.includes('wrong-password')) {
-                    errorMessage = 'Incorrect password';
-                } else if (result.error.includes('invalid-email')) {
-                    errorMessage = 'Invalid email address format';
-                } else if (result.error.includes('too-many-requests')) {
-                    errorMessage = 'Too many failed attempts. Please try again later';
-                }
-                setError(errorMessage);
+                let msg = result.error || 'Login failed';
+                // Log failed login attempt
+                await services.auditService?.logLogin({ email }, false, msg);
+                if (msg.includes('user-not-found')) msg = 'No account found';
+                else if (msg.includes('wrong-password') || msg.includes('invalid-credential')) msg = 'Invalid credentials';
+                else if (msg.includes('invalid-email')) msg = 'Invalid email format';
+                else if (msg.includes('too-many-requests')) msg = 'Too many attempts. Try later.';
+                setError(msg);
             }
         } catch (err) {
-            console.error('Login error:', err);
-            setError(err.message || 'An unexpected error occurred');
+            setError(err.message || 'Login failed');
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div style={{
-            minHeight: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#1e3a5f',
-            padding: '20px'
-        }}>
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '60px',
-                maxWidth: '900px',
-                width: '100%'
-            }}>
-                {/* Left Side - Logo */}
-                <div style={{
-                    flex: '1',
-                    textAlign: 'center',
-                    color: 'white'
-                }}>
-                    <div style={{
-                        width: '100px',
-                        height: '100px',
-                        backgroundColor: 'rgba(255,255,255,0.15)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        margin: '0 auto 20px'
-                    }}>
-                        <svg width="55" height="55" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M14 16H9m10 0h3l-3.5-7a2 2 0 0 0-1.9-1.3H7.4a2 2 0 0 0-1.9 1.3L2 16h3m0 0a2 2 0 1 0 4 0m4 0a2 2 0 1 0 4 0"/>
-                        </svg>
-                    </div>
-                    
-                    <h1 style={{
-                        fontSize: '36px',
-                        fontWeight: '700',
-                        marginBottom: '8px',
-                        letterSpacing: '-0.5px'
-                    }}>
-                        EcoSpark
-                    </h1>
-                    <p style={{
-                        fontSize: '14px',
-                        color: 'rgba(255,255,255,0.7)',
-                        marginBottom: '0'
-                    }}>
-                        Car Wash & Auto Service
-                    </p>
-                    <p style={{
-                        fontSize: '14px',
-                        color: 'rgba(255,255,255,0.7)'
-                    }}>
-                        Management System
-                    </p>
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1e3a5f' }}>
+            <div style={{ background: 'white', padding: '40px', width: '100%', maxWidth: '400px', margin: '20px' }}>
+                <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '8px' }}>🚗</div>
+                    <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b', margin: 0 }}>EcoSpark</h1>
+                    <p style={{ fontSize: '13px', color: '#64748b', margin: '4px 0 0' }}>Car Wash Management</p>
                 </div>
 
-                {/* Right Side - Login Form */}
-                <div style={{
-                    flex: '1',
-                    maxWidth: '380px'
-                }}>
-                    <div style={{
-                        backgroundColor: 'white',
-                        padding: '36px 32px',
-                        boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
-                    }}>
-                        <h2 style={{
-                            fontSize: '22px',
-                            fontWeight: '600',
-                            color: '#1e293b',
-                            marginBottom: '24px',
-                            textAlign: 'center'
-                        }}>
-                            Sign In
-                        </h2>
+                {error && (
+                    <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', marginBottom: '20px', fontSize: '13px', textAlign: 'center' }}>
+                        {error}
+                    </div>
+                )}
 
-                        {error && (
-                            <div style={{
-                                backgroundColor: '#fef2f2',
-                                border: '1px solid #fecaca',
-                                color: '#dc2626',
-                                padding: '12px',
-                                marginBottom: '20px',
-                                fontSize: '13px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '10px',
-                                textAlign: 'left'
-                            }}>
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                                    <circle cx="12" cy="12" r="10"/>
-                                    <line x1="12" y1="8" x2="12" y2="12"/>
-                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
-                                </svg>
-                                {error}
-                            </div>
-                        )}
-
-                        <form onSubmit={handleSubmit}>
-                            <div style={{ marginBottom: '16px', textAlign: 'left' }}>
-                                <label style={{
-                                    display: 'block',
-                                    fontSize: '13px',
-                                    fontWeight: '500',
-                                    color: '#374151',
-                                    marginBottom: '6px'
-                                }}>
-                                    Email
-                                </label>
-                                <div style={{ position: 'relative' }}>
-                                    <span style={{
-                                        position: 'absolute',
-                                        left: '12px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        color: '#9ca3af'
-                                    }}>
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-                                            <polyline points="22,6 12,13 2,6"/>
-                                        </svg>
-                                    </span>
-                                    <input
-                                        type="email"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        placeholder="Enter your email"
-                                        style={{
-                                            width: '100%',
-                                            padding: '12px 12px 12px 42px',
-                                            border: '1px solid #e2e8f0',
-                                            fontSize: '14px',
-                                            outline: 'none',
-                                            transition: 'border-color 0.2s',
-                                            backgroundColor: '#f8fafc'
-                                        }}
-                                        onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
-                                        onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                                    />
-                                </div>
-                            </div>
-
-                            <div style={{ marginBottom: '24px', textAlign: 'left' }}>
-                                <label style={{
-                                    display: 'block',
-                                    fontSize: '13px',
-                                    fontWeight: '500',
-                                    color: '#374151',
-                                    marginBottom: '6px'
-                                }}>
-                                    Password
-                                </label>
-                                <div style={{ position: 'relative' }}>
-                                    <span style={{
-                                        position: 'absolute',
-                                        left: '12px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        color: '#9ca3af'
-                                    }}>
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                                        </svg>
-                                    </span>
-                                    <input
-                                        type={showPassword ? 'text' : 'password'}
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        placeholder="Enter your password"
-                                        style={{
-                                            width: '100%',
-                                            padding: '12px 42px 12px 42px',
-                                            border: '1px solid #e2e8f0',
-                                            fontSize: '14px',
-                                            outline: 'none',
-                                            transition: 'border-color 0.2s',
-                                            backgroundColor: '#f8fafc'
-                                        }}
-                                        onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
-                                        onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowPassword(!showPassword)}
-                                        style={{
-                                            position: 'absolute',
-                                            right: '12px',
-                                            top: '50%',
-                                            transform: 'translateY(-50%)',
-                                            background: 'none',
-                                            border: 'none',
-                                            cursor: 'pointer',
-                                            color: '#9ca3af',
-                                            padding: '0'
-                                        }}
-                                    >
-                                        {showPassword ? (
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                                                <line x1="1" y1="1" x2="23" y2="23"/>
-                                            </svg>
-                                        ) : (
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                                <circle cx="12" cy="12" r="3"/>
-                                            </svg>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <button
-                                type="submit"
-                                disabled={loading}
-                                style={{
-                                    width: '100%',
-                                    padding: '12px',
-                                    backgroundColor: loading ? '#93c5fd' : '#3b82f6',
-                                    color: 'white',
-                                    border: 'none',
-                                    fontSize: '14px',
-                                    fontWeight: '600',
-                                    cursor: loading ? 'not-allowed' : 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    transition: 'background-color 0.2s'
-                                }}
-                                onMouseEnter={(e) => !loading && (e.target.style.backgroundColor = '#2563eb')}
-                                onMouseLeave={(e) => !loading && (e.target.style.backgroundColor = '#3b82f6')}
-                            >
-                                {loading ? (
-                                    <>
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
-                                            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                                        </svg>
-                                        Signing in...
-                                    </>
-                                ) : (
-                                    'Sign In'
-                                )}
-                            </button>
-                        </form>
-
-                        <p style={{
-                            marginTop: '20px',
-                            fontSize: '12px',
-                            color: '#64748b',
-                            textAlign: 'center'
-                        }}>
-                            Need help? Contact your administrator
-                        </p>
+                <form onSubmit={handleSubmit}>
+                    <div style={{ marginBottom: '16px' }}>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>Email</label>
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="you@example.com"
+                            style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+                        />
                     </div>
 
-                    <p style={{
-                        marginTop: '20px',
-                        fontSize: '11px',
-                        color: 'rgba(255,255,255,0.5)',
-                        textAlign: 'center'
-                    }}>
-                        © 2026 EcoSpark. All rights reserved.
-                    </p>
-                </div>
+                    <div style={{ marginBottom: '24px' }}>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>Password</label>
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Enter password"
+                            style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        style={{ width: '100%', padding: '12px', background: loading ? '#93c5fd' : '#3b82f6', color: 'white', border: 'none', fontSize: '14px', fontWeight: '600', cursor: loading ? 'wait' : 'pointer' }}
+                    >
+                        {loading ? 'Signing in...' : 'Sign In'}
+                    </button>
+                </form>
+
+                <p style={{ marginTop: '20px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>
+                    Need help? Contact your administrator
+                </p>
             </div>
-
-            {/* CSS Animation for spinner */}
-            <style>{`
-                @keyframes spin {
-                    from { transform: rotate(0deg); }
-                    to { transform: rotate(360deg); }
-                }
-            `}</style>
         </div>
     );
 }
@@ -5416,11 +5189,13 @@ function GarageManagement() {
         try {
             // Calculate total cost from services
             let totalCost = 0;
+            let serviceDetails = [];
             if (job.services && job.services.length > 0) {
-                totalCost = job.services.reduce((sum, sId) => {
+                serviceDetails = job.services.map(sId => {
                     const service = garageServices.find(s => s.id === sId);
-                    return sum + (service?.price || 0);
-                }, 0);
+                    return { id: sId, name: service?.name || 'Service', price: service?.price || 0 };
+                });
+                totalCost = serviceDetails.reduce((sum, s) => sum + s.price, 0);
             } else {
                 totalCost = job.totalCost || 0;
             }
@@ -5434,6 +5209,22 @@ function GarageManagement() {
             console.log('Complete result:', result);
 
             if (result.success) {
+                // Create invoice for the completed job
+                if (services.billingService && totalCost > 0) {
+                    await services.billingService.createInvoice({
+                        source: 'garage',
+                        jobId: job.id,
+                        plateNumber: job.plateNumber,
+                        vehicleType: job.vehicleType,
+                        customerName: job.customerName || 'Walk-in',
+                        customerPhone: job.customerPhone || '',
+                        services: serviceDetails,
+                        totalAmount: totalCost,
+                        notes: job.notes || ''
+                    });
+                    console.log('Invoice created for garage job:', job.id);
+                }
+                
                 // Wait for Firebase to sync, then switch tab
                 setTimeout(() => {
                     setActiveTab('completed');
@@ -7351,8 +7142,6 @@ function WashBays() {
         // Subscribe to staff list
         let unsubStaff = null;
         if (services.staffService) {
-            // Initialize staff if needed
-            services.staffService.initializeStaff();
             unsubStaff = services.staffService.subscribeToStaff((data) => {
                 setStaffList(data);
             });
@@ -7571,6 +7360,25 @@ function WashBays() {
             
             // 3. Complete the wash bay
             await services.washBayService.completeWash(bay.id);
+
+            // 4. Create invoice for the completed wash
+            const washPrice = currentVehicle?.servicePrice || 500; // Default price if not set
+            if (services.billingService) {
+                await services.billingService.createInvoice({
+                    source: 'wash',
+                    bayId: bay.id,
+                    bayName: bay.name,
+                    plateNumber: currentVehicle?.plateNumber || 'Unknown',
+                    vehicleType: currentVehicle?.vehicleType || 'Vehicle',
+                    customerName: currentVehicle?.customerName || 'Walk-in',
+                    customerPhone: currentVehicle?.customerPhone || '',
+                    services: [{ name: currentVehicle?.service || 'Car Wash', price: washPrice }],
+                    totalAmount: washPrice,
+                    assignedTo: currentVehicle?.assignedTo || '',
+                    startTime: currentVehicle?.startTime || bay.startTime
+                });
+                console.log('Invoice created for wash:', currentVehicle?.plateNumber);
+            }
             
             // Refresh stats
             const result = await services.washBayService.getTodayStats();
@@ -8408,12 +8216,7 @@ function WashBays() {
                                             <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: theme.text }}>
                                                 Select Vehicle from Queue
                                             </label>
-                                            <div style={{ 
-                                                maxHeight: '200px', 
-                                                overflowY: 'auto',
-                                                border: `1px solid ${theme.border}`,
-                                                borderRadius: '2px'
-                                            }>
+                                            <div style={{ maxHeight: '200px', overflowY: 'auto', border: `1px solid ${theme.border}`, borderRadius: '2px' }}>
                                                 {intakeQueue.map(vehicle => (
                                                     <div
                                                         key={vehicle.id}
@@ -9242,6 +9045,2222 @@ function Dashboard({ onModuleClick }) {
     );
 }
 
+// ==================== BILLING MODULE COMPONENT ====================
+function BillingModule() {
+    const [activeTab, setActiveTab] = useState('paid');
+    const [invoices, setInvoices] = useState([]);
+    const [pendingInvoices, setPendingInvoices] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [actionLoading, setActionLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [dateFilter, setDateFilter] = useState('all');
+    const [customDateFrom, setCustomDateFrom] = useState('');
+    const [customDateTo, setCustomDateTo] = useState('');
+    const [sourceFilter, setSourceFilter] = useState('all');
+    const [billingStats, setBillingStats] = useState({
+        totalInvoices: 0,
+        pendingPayments: 0,
+        paidToday: 0,
+        totalPending: 0,
+        totalCollected: 0,
+        todayInvoiceCount: 0,
+        mpesaPayments: 0,
+        cashPayments: 0
+    });
+    
+    // Payment modal states
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [showMpesaModal, setShowMpesaModal] = useState(false);
+    const [showInvoiceDetailModal, setShowInvoiceDetailModal] = useState(false);
+    const [selectedInvoice, setSelectedInvoice] = useState(null);
+    const [mpesaPhone, setMpesaPhone] = useState('');
+    const [mpesaLoading, setMpesaLoading] = useState(false);
+    const [mpesaPaymentId, setMpesaPaymentId] = useState(null);
+    const [mpesaStatus, setMpesaStatus] = useState(null);
+    
+    // Manual billing modal states
+    const [showManualBillingModal, setShowManualBillingModal] = useState(false);
+    const [manualBillingData, setManualBillingData] = useState({
+        customerName: '',
+        customerPhone: '',
+        plateNumber: '',
+        vehicleType: 'Sedan',
+        source: 'wash',
+        selectedServices: [], // Array of service IDs
+        notes: '',
+        paymentStatus: 'unpaid',
+        paymentMethod: 'cash',
+        mpesaCode: ''
+    });
+    
+    // Service packages for billing
+    const [servicePackages, setServicePackages] = useState([]);
+    
+    // Revenue tracking
+    const [revenueToday, setRevenueToday] = useState({ total: 0, wash: 0, garage: 0, other: 0 });
+
+    // Theme detection
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        bgTertiary: isDark ? '#334155' : '#f1f5f9',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        textMuted: isDark ? '#64748b' : '#94a3b8',
+        border: isDark ? '#334155' : '#e2e8f0',
+        borderLight: isDark ? '#475569' : '#cbd5e1',
+        cardShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
+        modalOverlay: isDark ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.5)',
+        inputBg: isDark ? '#1e293b' : 'white',
+        rowHoverBg: isDark ? '#334155' : '#f8fafc',
+    };
+
+    // Auto-hide success message
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    // Initialize Firebase subscriptions
+    useEffect(() => {
+        let unsubInvoices, unsubPending;
+        
+        const initializeData = async () => {
+            let services = window.FirebaseServices;
+            let attempts = 0;
+            while (!services && attempts < 50) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                services = window.FirebaseServices;
+                attempts++;
+            }
+
+            if (!services || !services.billingService) {
+                console.error('Billing service not available');
+                setLoading(false);
+                setError('Billing service not available. Please refresh.');
+                return;
+            }
+
+            try {
+                // Subscribe to all invoices with error handling
+                unsubInvoices = services.billingService.subscribeToInvoices(
+                    (data) => {
+                        console.log('Invoices loaded:', data.length);
+                        setInvoices(data);
+                        // Also update pending invoices from the same data (fallback)
+                        const pending = data.filter(inv => inv.paymentStatus === 'unpaid' || !inv.paymentStatus);
+                        setPendingInvoices(pending);
+                        setLoading(false);
+                        setError(null);
+                    },
+                    (err) => {
+                        console.error('Invoice subscription error:', err);
+                        setError('Failed to load invoices: ' + err.message);
+                        setLoading(false);
+                    }
+                );
+
+                // Try to subscribe to pending invoices (requires Firestore index)
+                try {
+                    unsubPending = services.billingService.subscribeToPendingInvoices(
+                        (data) => {
+                            console.log('Pending invoices loaded:', data.length);
+                            setPendingInvoices(data);
+                        },
+                        (err) => {
+                            // Silently fallback to client-side filtering (already handled above)
+                            console.warn('Pending invoice subscription failed, using fallback:', err.message);
+                        }
+                    );
+                } catch (pendingErr) {
+                    console.warn('Could not subscribe to pending invoices:', pendingErr);
+                }
+
+                // Get billing stats
+                const statsResult = await services.billingService.getBillingStats();
+                if (statsResult.success) {
+                    setBillingStats(statsResult.data);
+                }
+                
+                // Load service packages
+                if (services.packagesService) {
+                    const packagesResult = await services.packagesService.getPackages();
+                    if (packagesResult.success) {
+                        setServicePackages(packagesResult.data.filter(p => p.isActive !== false));
+                    }
+                }
+            } catch (err) {
+                console.error('Error initializing billing:', err);
+                setError('Failed to load billing data: ' + err.message);
+                setLoading(false);
+            }
+        };
+
+        initializeData();
+
+        return () => {
+            if (unsubInvoices) unsubInvoices();
+            if (unsubPending) unsubPending();
+        };
+    }, []);
+
+    // Refresh stats when invoices change
+    useEffect(() => {
+        const refreshStats = async () => {
+            const services = window.FirebaseServices;
+            if (services?.billingService) {
+                const result = await services.billingService.getBillingStats();
+                if (result.success) setBillingStats(result.data);
+            }
+        };
+        refreshStats();
+        
+        // Calculate revenue breakdown from invoices
+        const today = new Date().toISOString().split('T')[0];
+        const todayPaidInvoices = invoices.filter(inv => 
+            inv.paymentStatus === 'paid' && inv.createdAt?.startsWith(today)
+        );
+        
+        const washRevenue = todayPaidInvoices
+            .filter(inv => inv.source === 'wash')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        
+        const garageRevenue = todayPaidInvoices
+            .filter(inv => inv.source === 'garage')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        
+        const otherRevenue = todayPaidInvoices
+            .filter(inv => inv.source !== 'wash' && inv.source !== 'garage')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        
+        setRevenueToday({
+            total: washRevenue + garageRevenue + otherRevenue,
+            wash: washRevenue,
+            garage: garageRevenue,
+            other: otherRevenue
+        });
+    }, [invoices]);
+
+    // Filter invoices
+    const getFilteredInvoices = () => {
+        let filtered = activeTab === 'pending' ? pendingInvoices : 
+                       activeTab === 'paid' ? invoices.filter(inv => inv.paymentStatus === 'paid') :
+                       invoices;
+
+        if (searchQuery) {
+            const query = searchQuery.toLowerCase();
+            filtered = filtered.filter(inv => 
+                inv.invoiceNumber?.toLowerCase().includes(query) ||
+                inv.customerName?.toLowerCase().includes(query) ||
+                inv.plateNumber?.toLowerCase().includes(query) ||
+                inv.mpesaCode?.toLowerCase().includes(query)
+            );
+        }
+
+        if (sourceFilter !== 'all') {
+            filtered = filtered.filter(inv => inv.source === sourceFilter);
+        }
+
+        if (dateFilter !== 'all') {
+            const today = new Date().toISOString().split('T')[0];
+            const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            
+            if (dateFilter === 'today') {
+                filtered = filtered.filter(inv => inv.createdAt?.startsWith(today));
+            } else if (dateFilter === 'yesterday') {
+                filtered = filtered.filter(inv => inv.createdAt?.startsWith(yesterday));
+            } else if (dateFilter === 'week') {
+                filtered = filtered.filter(inv => inv.createdAt >= weekAgo);
+            } else if (dateFilter === 'month') {
+                filtered = filtered.filter(inv => inv.createdAt >= monthAgo);
+            } else if (dateFilter === 'custom' && customDateFrom && customDateTo) {
+                filtered = filtered.filter(inv => {
+                    const invDate = inv.createdAt?.split('T')[0];
+                    return invDate >= customDateFrom && invDate <= customDateTo;
+                });
+            }
+        }
+
+        return filtered;
+    };
+
+    // Handle cash payment
+    const handleCashPayment = async () => {
+        if (!selectedInvoice) return;
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.billingService.markAsPaid(selectedInvoice.id, {
+                method: 'cash',
+                amount: selectedInvoice.totalAmount
+            });
+            
+            if (result.success) {
+                // Award loyalty points if customer has phone number
+                if (selectedInvoice.customerPhone) {
+                    try {
+                        const customerResult = await services.customerService.findCustomerByPhone(selectedInvoice.customerPhone);
+                        if (customerResult.success && customerResult.data) {
+                            // Award 1 point per 100 KES spent
+                            const pointsToAward = Math.floor((selectedInvoice.totalAmount || 0) / 100);
+                            if (pointsToAward > 0) {
+                                await services.customerService.addLoyaltyPoints(
+                                    customerResult.data.id, 
+                                    pointsToAward, 
+                                    `Invoice ${selectedInvoice.invoiceNumber} payment`
+                                );
+                                // Update invoice with points earned
+                                await services.billingService.updateInvoice(selectedInvoice.id, {
+                                    customerId: customerResult.data.id,
+                                    pointsEarned: pointsToAward
+                                });
+                            }
+                        }
+                    } catch (loyaltyErr) {
+                        console.log('Loyalty points error (non-critical):', loyaltyErr);
+                    }
+                }
+                setSuccessMessage('Payment recorded successfully!');
+                setShowPaymentModal(false);
+                setSelectedInvoice(null);
+            } else {
+                setError(result.error || 'Failed to record payment');
+            }
+        } catch (err) {
+            setError('Failed to record payment');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle M-Pesa payment initiation
+    const handleMpesaPayment = async () => {
+        if (!selectedInvoice || !mpesaPhone) return;
+        
+        // Validate phone number (Kenyan format)
+        const phoneRegex = /^(?:254|\+254|0)?([17]\d{8})$/;
+        if (!phoneRegex.test(mpesaPhone.replace(/\s/g, ''))) {
+            setError('Please enter a valid Kenyan phone number');
+            return;
+        }
+
+        setMpesaLoading(true);
+        setMpesaStatus({ status: 'initiating', message: 'Initiating M-Pesa payment...' });
+        
+        try {
+            const services = window.FirebaseServices;
+            const formattedPhone = mpesaPhone.replace(/\s/g, '').replace(/^0/, '254').replace(/^\+/, '');
+            
+            const result = await services.billingService.initiateMpesaPayment(
+                selectedInvoice.id,
+                formattedPhone,
+                selectedInvoice.totalAmount
+            );
+            
+            if (result.success) {
+                setMpesaPaymentId(result.paymentId);
+                setMpesaStatus({ 
+                    status: 'pending', 
+                    message: 'STK Push sent! Please check your phone and enter your M-Pesa PIN.'
+                });
+                
+                // Subscribe to payment status
+                const unsubPayment = services.billingService.subscribeToMpesaPayment(result.paymentId, (payment) => {
+                    if (payment.status === 'completed') {
+                        setMpesaStatus({ 
+                            status: 'success', 
+                            message: `Payment successful! Receipt: ${payment.mpesaReceiptNumber}` 
+                        });
+                        setSuccessMessage('M-Pesa payment received!');
+                        setTimeout(() => {
+                            setShowMpesaModal(false);
+                            setSelectedInvoice(null);
+                            setMpesaPhone('');
+                            setMpesaStatus(null);
+                            setMpesaPaymentId(null);
+                        }, 2000);
+                        unsubPayment();
+                    } else if (payment.status === 'failed') {
+                        setMpesaStatus({ status: 'failed', message: payment.resultDesc || 'Payment failed' });
+                    }
+                });
+            } else {
+                setMpesaStatus({ status: 'failed', message: result.error || 'Failed to initiate payment' });
+            }
+        } catch (err) {
+            setMpesaStatus({ status: 'failed', message: 'Failed to initiate M-Pesa payment' });
+        } finally {
+            setMpesaLoading(false);
+        }
+    };
+
+    // Simulate M-Pesa callback (for testing)
+    const handleSimulateMpesaSuccess = async () => {
+        if (!mpesaPaymentId) return;
+        
+        setMpesaStatus({ status: 'processing', message: 'Processing payment...' });
+        const services = window.FirebaseServices;
+        await services.billingService.simulateMpesaCallback(mpesaPaymentId, true);
+    };
+
+    // Open payment modal
+    const openPaymentModal = (invoice) => {
+        setSelectedInvoice(invoice);
+        setShowPaymentModal(true);
+    };
+
+    // Open M-Pesa modal
+    const openMpesaModal = () => {
+        setShowPaymentModal(false);
+        setMpesaPhone(selectedInvoice?.customerPhone || '');
+        setMpesaStatus(null);
+        setMpesaPaymentId(null);
+        setShowMpesaModal(true);
+    };
+
+    // View invoice details
+    const viewInvoiceDetails = (invoice) => {
+        setSelectedInvoice(invoice);
+        setShowInvoiceDetailModal(true);
+    };
+
+    // Delete invoice
+    const handleDeleteInvoice = async (invoice) => {
+        if (!confirm(`Delete invoice ${invoice.invoiceNumber}? This action cannot be undone.`)) return;
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.billingService.deleteInvoice(invoice.id);
+            if (result.success) {
+                setSuccessMessage('Invoice deleted successfully');
+            } else {
+                setError(result.error || 'Failed to delete invoice');
+            }
+        } catch (err) {
+            setError('Failed to delete invoice');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Cancel/Revert payment to unpaid
+    const handleCancelPayment = async (invoice) => {
+        if (!confirm(`Revert payment for ${invoice.invoiceNumber}? This will set the invoice back to unpaid.`)) return;
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.billingService.revertToUnpaid(invoice.id);
+            if (result.success) {
+                setSuccessMessage('Payment cancelled - invoice set to unpaid');
+            } else {
+                setError(result.error || 'Failed to cancel payment');
+            }
+        } catch (err) {
+            setError('Failed to cancel payment');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Print invoice receipt
+    const handlePrintReceipt = async (invoice) => {
+        const receiptWindow = window.open('', '_blank', 'width=400,height=600');
+        const servicesList = invoice.services?.map(s => 
+            `<tr><td style="padding:8px 0;border-bottom:1px dashed #ddd;">${s.name}</td><td style="padding:8px 0;border-bottom:1px dashed #ddd;text-align:right;">KES ${parseFloat(s.price).toLocaleString()}</td></tr>`
+        ).join('') || '<tr><td colspan="2">-</td></tr>';
+        
+        // Fetch customer loyalty points
+        let loyaltyPoints = 0;
+        let pointsEarned = 0;
+        if (invoice.customerPhone) {
+            try {
+                const services = window.FirebaseServices;
+                const customerResult = await services.customerService.findCustomerByPhone(invoice.customerPhone);
+                if (customerResult.success && customerResult.data) {
+                    loyaltyPoints = customerResult.data.loyaltyPoints || 0;
+                    // Points earned from this transaction (1 point per 100 KES spent)
+                    pointsEarned = invoice.pointsEarned || Math.floor((invoice.totalAmount || 0) / 100);
+                }
+            } catch (e) {
+                console.log('Could not fetch loyalty points:', e);
+            }
+        }
+        
+        receiptWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Receipt - ${invoice.invoiceNumber}</title>
+                <style>
+                    body { font-family: 'Courier New', monospace; padding: 20px; max-width: 350px; margin: 0 auto; }
+                    .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 15px; }
+                    .logo { font-size: 24px; font-weight: bold; }
+                    .tagline { font-size: 12px; color: #666; }
+                    .info-row { display: flex; justify-content: space-between; margin: 8px 0; font-size: 13px; }
+                    .services { width: 100%; border-collapse: collapse; margin: 15px 0; }
+                    .total-row { font-size: 18px; font-weight: bold; border-top: 2px solid #000; padding-top: 10px; margin-top: 10px; }
+                    .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }
+                    .paid-stamp { text-align: center; padding: 10px; background: #d1fae5; color: #059669; font-weight: bold; margin: 15px 0; }
+                    @media print { body { padding: 0; } }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="logo">🌿 ECOSPARK</div>
+                    <div class="tagline">Car Wash & Auto Services</div>
+                </div>
+                
+                <div class="info-row"><span>Receipt #:</span><span>${invoice.invoiceNumber}</span></div>
+                <div class="info-row"><span>Date:</span><span>${new Date(invoice.createdAt).toLocaleDateString()}</span></div>
+                <div class="info-row"><span>Customer:</span><span>${invoice.customerName || 'Walk-in'}</span></div>
+                <div class="info-row"><span>Phone:</span><span>${invoice.customerPhone || '-'}</span></div>
+                <div class="info-row"><span>Vehicle:</span><span>${invoice.plateNumber || '-'}</span></div>
+                <div class="info-row"><span>Source:</span><span>${(invoice.source || 'wash').toUpperCase()}</span></div>
+                
+                <table class="services">
+                    <thead><tr><th style="text-align:left;padding:8px 0;border-bottom:2px solid #000;">Service</th><th style="text-align:right;padding:8px 0;border-bottom:2px solid #000;">Amount</th></tr></thead>
+                    <tbody>${servicesList}</tbody>
+                </table>
+                
+                <div class="total-row info-row"><span>TOTAL:</span><span>KES ${parseFloat(invoice.totalAmount).toLocaleString()}</span></div>
+                
+                <div class="paid-stamp">✓ PAID - ${(invoice.paymentMethod || 'CASH').toUpperCase()}</div>
+                ${invoice.mpesaCode ? `<div class="info-row"><span>M-Pesa Code:</span><span>${invoice.mpesaCode}</span></div>` : ''}
+                <div class="info-row"><span>Paid At:</span><span>${invoice.paidAt ? new Date(invoice.paidAt).toLocaleString() : '-'}</span></div>
+                
+                ${invoice.customerPhone && invoice.customerPhone !== '-' ? `
+                <div style="border:2px dashed #f59e0b; padding:12px; margin:15px 0; text-align:center; background:#fffbeb;">
+                    <div style="font-size:11px; color:#92400e; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">⭐ Loyalty Program</div>
+                    <div style="font-size:14px; font-weight:bold; color:#d97706;">Points Earned: +${pointsEarned}</div>
+                    <div style="font-size:16px; font-weight:bold; color:#b45309; margin-top:4px;">Total Points: ${loyaltyPoints}</div>
+                </div>
+                ` : ''}
+                
+                <div class="footer">
+                    <p>Thank you for your business!</p>
+                    <p>Visit us again at EcoSpark</p>
+                </div>
+                
+                <script>setTimeout(() => window.print(), 500);</script>
+            </body>
+            </html>
+        `);
+        receiptWindow.document.close();
+    };
+
+    // Handle manual billing form change
+    const handleManualBillingChange = (field, value) => {
+        setManualBillingData(prev => ({ ...prev, [field]: value }));
+    };
+
+    // Add service line to manual billing
+    // Toggle service selection
+    const toggleServiceSelection = (serviceId) => {
+        setManualBillingData(prev => {
+            const isSelected = prev.selectedServices.includes(serviceId);
+            return {
+                ...prev,
+                selectedServices: isSelected 
+                    ? prev.selectedServices.filter(id => id !== serviceId)
+                    : [...prev.selectedServices, serviceId]
+            };
+        });
+    };
+
+    // Get selected services with details
+    const getSelectedServicesDetails = () => {
+        return manualBillingData.selectedServices
+            .map(id => servicePackages.find(s => s.id === id))
+            .filter(Boolean);
+    };
+
+    // Calculate total for manual billing
+    const getManualBillingTotal = () => {
+        return getSelectedServicesDetails().reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
+    };
+
+    // Submit manual billing
+    const handleSubmitManualBilling = async () => {
+        if (!manualBillingData.plateNumber?.trim()) {
+            setError('Please enter a plate number');
+            return;
+        }
+        
+        const selectedServices = getSelectedServicesDetails();
+        if (selectedServices.length === 0) {
+            setError('Please select at least one service');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const totalAmount = selectedServices.reduce((sum, s) => sum + parseFloat(s.price), 0);
+            const servicesList = selectedServices.map(s => ({ name: s.name, price: s.price }));
+
+            const result = await services.billingService.createInvoice({
+                source: manualBillingData.source || 'wash',
+                customerName: manualBillingData.customerName || 'Walk-in',
+                customerPhone: manualBillingData.customerPhone || '',
+                plateNumber: manualBillingData.plateNumber.toUpperCase(),
+                vehicleType: manualBillingData.vehicleType || 'Vehicle',
+                services: servicesList,
+                totalAmount: totalAmount,
+                notes: manualBillingData.notes || '',
+                createdBy: 'manual',
+                // Payment info
+                paymentStatus: manualBillingData.paymentStatus,
+                paymentMethod: manualBillingData.paymentStatus === 'paid' ? manualBillingData.paymentMethod : null,
+                paidAmount: manualBillingData.paymentStatus === 'paid' ? totalAmount : 0,
+                paidAt: manualBillingData.paymentStatus === 'paid' ? new Date().toISOString() : null,
+                mpesaCode: manualBillingData.paymentMethod === 'mpesa' && manualBillingData.paymentStatus === 'paid' ? manualBillingData.mpesaCode : null
+            });
+
+            if (result.success) {
+                // Award loyalty points if invoice is paid and has customer phone
+                if (manualBillingData.paymentStatus === 'paid' && manualBillingData.customerPhone) {
+                    try {
+                        const customerResult = await services.customerService.findCustomerByPhone(manualBillingData.customerPhone);
+                        if (customerResult.success && customerResult.data) {
+                            // Award 1 point per 100 KES spent
+                            const pointsToAward = Math.floor(totalAmount / 100);
+                            if (pointsToAward > 0) {
+                                await services.customerService.addLoyaltyPoints(
+                                    customerResult.data.id, 
+                                    pointsToAward, 
+                                    `Invoice ${result.invoiceNumber} payment`
+                                );
+                                // Update invoice with points earned and customer ID
+                                await services.billingService.updateInvoice(result.id, {
+                                    customerId: customerResult.data.id,
+                                    pointsEarned: pointsToAward
+                                });
+                            }
+                        }
+                    } catch (loyaltyErr) {
+                        console.log('Loyalty points error (non-critical):', loyaltyErr);
+                    }
+                }
+                setSuccessMessage(`Invoice ${result.invoiceNumber} created successfully!`);
+                setShowManualBillingModal(false);
+                // Reset form
+                setManualBillingData({
+                    customerName: '',
+                    customerPhone: '',
+                    plateNumber: '',
+                    vehicleType: 'Sedan',
+                    source: 'wash',
+                    selectedServices: [],
+                    notes: '',
+                    paymentStatus: 'unpaid',
+                    paymentMethod: 'cash',
+                    mpesaCode: ''
+                });
+            } else {
+                setError(result.error || 'Failed to create invoice');
+            }
+        } catch (err) {
+            console.error('Manual billing error:', err);
+            setError('Failed to create invoice: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Format currency
+    const formatCurrency = (amount) => {
+        return new Intl.NumberFormat('en-KE', { style: 'currency', currency: 'KES' }).format(amount || 0);
+    };
+
+    // Format date
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '-';
+        return new Date(dateStr).toLocaleDateString('en-KE', { 
+            day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' 
+        });
+    };
+
+    // Get source badge
+    const getSourceBadge = (source) => {
+        const config = {
+            garage: { label: 'GARAGE', color: '#f59e0b', bg: '#fef3c7' },
+            wash: { label: 'WASH', color: '#3b82f6', bg: '#dbeafe' },
+            other: { label: 'OTHER', color: '#6b7280', bg: '#f3f4f6' }
+        };
+        const c = config[source] || config.other;
+        return (
+            <span style={{ 
+                padding: '3px 10px', 
+                borderRadius: '0', 
+                fontSize: '10px', 
+                fontWeight: '700',
+                letterSpacing: '0.5px',
+                background: isDark ? c.color + '20' : c.bg,
+                color: c.color
+            }}>{c.label}</span>
+        );
+    };
+
+    // Get payment status badge
+    const getPaymentBadge = (status, method) => {
+        if (status === 'paid') {
+            const methodLabel = method === 'mpesa' ? 'M-PESA' : method === 'cash' ? 'CASH' : 'PAID';
+            return (
+                <span style={{ 
+                    padding: '4px 12px', 
+                    borderRadius: '0', 
+                    fontSize: '10px', 
+                    fontWeight: '700',
+                    letterSpacing: '0.5px',
+                    background: isDark ? '#10b98130' : '#d1fae5',
+                    color: '#10b981',
+                    borderLeft: '3px solid #10b981'
+                }}>✓ {methodLabel}</span>
+            );
+        }
+        return (
+            <span style={{ 
+                padding: '4px 12px', 
+                borderRadius: '0', 
+                fontSize: '10px', 
+                fontWeight: '700',
+                letterSpacing: '0.5px',
+                background: isDark ? '#ef444430' : '#fee2e2',
+                color: '#ef4444',
+                borderLeft: '3px solid #ef4444'
+            }}>UNPAID</span>
+        );
+    };
+
+    // Styles - Sharp edges throughout
+    const cardStyle = {
+        background: theme.bg,
+        borderRadius: '0',
+        border: `1px solid ${theme.border}`,
+        padding: '24px',
+        boxShadow: theme.cardShadow
+    };
+
+    const statCardStyle = {
+        background: theme.bg,
+        borderRadius: '0',
+        border: `1px solid ${theme.border}`,
+        padding: '20px 24px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '20px',
+        boxShadow: theme.cardShadow,
+        borderLeft: '4px solid #3b82f6'
+    };
+
+    const buttonStyle = {
+        padding: '10px 20px',
+        borderRadius: '0',
+        border: 'none',
+        cursor: 'pointer',
+        fontWeight: '700',
+        fontSize: '12px',
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+        transition: 'all 0.2s'
+    };
+
+    const inputStyle = {
+        width: '100%',
+        padding: '12px 16px',
+        borderRadius: '0',
+        border: `1px solid ${theme.border}`,
+        background: theme.inputBg,
+        color: theme.text,
+        fontSize: '14px',
+        outline: 'none'
+    };
+
+    const tabStyle = (isActive) => ({
+        padding: '12px 28px',
+        border: 'none',
+        background: isActive ? '#3b82f6' : 'transparent',
+        color: isActive ? 'white' : theme.textSecondary,
+        fontWeight: '700',
+        fontSize: '12px',
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+        cursor: 'pointer',
+        borderRadius: '0',
+        borderBottom: isActive ? '3px solid #1d4ed8' : '3px solid transparent',
+        transition: 'all 0.2s'
+    });
+
+    const filteredInvoices = getFilteredInvoices();
+
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', color: theme.textSecondary }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '12px' }}>💳</div>
+                    <div>Loading billing data...</div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '0', width: '100%' }}>
+            {/* Success/Error Messages */}
+            {successMessage && (
+                <div style={{ 
+                    position: 'fixed', top: '20px', right: '20px', zIndex: 1000,
+                    background: '#10b981', color: 'white', padding: '14px 24px',
+                    borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    fontWeight: '600', letterSpacing: '0.3px'
+                }}>
+                    ✓ {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ 
+                    position: 'fixed', top: '20px', right: '20px', zIndex: 1000,
+                    background: '#ef4444', color: 'white', padding: '14px 24px',
+                    borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+                    fontWeight: '600', letterSpacing: '0.3px'
+                }} onClick={() => setError(null)}>
+                    ✕ {error}
+                </div>
+            )}
+
+            {/* Stats Cards - Full Width Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', marginBottom: '0', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ ...statCardStyle, borderLeft: '4px solid #3b82f6', borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#3b82f615', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>📋</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '28px', fontWeight: '800', color: theme.text, letterSpacing: '-1px' }}>{billingStats.todayInvoiceCount}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Today's Invoices</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderLeft: '4px solid #ef4444', borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#ef444415', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>⏳</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '28px', fontWeight: '800', color: '#ef4444', letterSpacing: '-1px' }}>{billingStats.pendingPayments}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Pending</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderLeft: '4px solid #10b981', borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#10b98115', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>💰</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981', letterSpacing: '-0.5px' }}>{formatCurrency(billingStats.paidToday)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Collected Today</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderLeft: '4px solid #f59e0b' }}>
+                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#f59e0b15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>📊</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#f59e0b', letterSpacing: '-0.5px' }}>{formatCurrency(billingStats.totalPending)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Outstanding</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Revenue Today & Payment Methods Stats Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                {/* Revenue Today Card - Prominent */}
+                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'flex-start', gap: '16px', background: isDark ? '#1a2e4a' : '#f0f9ff', borderRight: `1px solid ${theme.border}`, borderLeft: '4px solid #10b981' }}>
+                    <div style={{ fontSize: '32px' }}>💳</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '28px', fontWeight: '800', color: '#10b981', letterSpacing: '-0.5px' }}>{formatCurrency(revenueToday.total)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600', marginBottom: '8px' }}>Revenue Today</div>
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6' }}></span>
+                                <span style={{ fontSize: '11px', color: theme.textSecondary }}>Wash:</span>
+                                <span style={{ fontSize: '12px', fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(revenueToday.wash)}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                                <span style={{ fontSize: '11px', color: theme.textSecondary }}>Garage:</span>
+                                <span style={{ fontSize: '12px', fontWeight: '700', color: '#8b5cf6' }}>{formatCurrency(revenueToday.garage)}</span>
+                            </div>
+                            {revenueToday.other > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#6b7280' }}></span>
+                                    <span style={{ fontSize: '11px', color: theme.textSecondary }}>Other:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '700', color: '#6b7280' }}>{formatCurrency(revenueToday.other)}</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: isDark ? '#1e3a5f' : '#eff6ff', borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '32px' }}>📱</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#3b82f6' }}>{billingStats.mpesaPayments}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>M-Pesa Payments</div>
+                    </div>
+                </div>
+                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: isDark ? '#1a3f2f' : '#f0fdf4', borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '32px' }}>💵</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981' }}>{billingStats.cashPayments}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Cash Payments</div>
+                    </div>
+                </div>
+                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: theme.bg }}>
+                    <div style={{ fontSize: '32px' }}>🏦</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{formatCurrency(billingStats.totalCollected)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Total Collected</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Tabs & Filters Bar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', padding: '0', background: theme.bgSecondary, borderBottom: `2px solid ${theme.border}` }}>
+                <div style={{ display: 'flex', gap: '0', alignItems: 'center' }}>
+                    <button style={tabStyle(activeTab === 'paid')} onClick={() => setActiveTab('paid')}>
+                        Paid
+                    </button>
+                    <button style={tabStyle(activeTab === 'pending')} onClick={() => setActiveTab('pending')}>
+                        Pending ({pendingInvoices.length})
+                    </button>
+                    <button style={tabStyle(activeTab === 'all')} onClick={() => setActiveTab('all')}>
+                        All Invoices
+                    </button>
+                    <button
+                        onClick={() => setShowManualBillingModal(true)}
+                        style={{
+                            ...buttonStyle,
+                            background: '#10b981',
+                            color: 'white',
+                            marginLeft: '16px',
+                            padding: '10px 20px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
+                        }}
+                    >
+                        <span style={{ fontSize: '16px' }}>+</span> NEW INVOICE
+                    </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0', padding: '0' }}>
+                    <input
+                        type="text"
+                        placeholder="Search invoices..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        style={{ ...inputStyle, width: '220px', borderRight: 'none' }}
+                    />
+                    <select
+                        value={sourceFilter}
+                        onChange={(e) => setSourceFilter(e.target.value)}
+                        style={{ ...inputStyle, width: '140px', borderRight: 'none' }}
+                    >
+                        <option value="all">All Sources</option>
+                        <option value="garage">Garage</option>
+                        <option value="wash">Car Wash</option>
+                        <option value="other">Other</option>
+                    </select>
+                    <select
+                        value={dateFilter}
+                        onChange={(e) => setDateFilter(e.target.value)}
+                        style={{ ...inputStyle, width: '140px' }}
+                    >
+                        <option value="all">All Time</option>
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="week">This Week</option>
+                        <option value="month">This Month</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                    {dateFilter === 'custom' && (
+                        <>
+                            <input
+                                type="date"
+                                value={customDateFrom}
+                                onChange={(e) => setCustomDateFrom(e.target.value)}
+                                style={{ ...inputStyle, width: '140px', marginLeft: '8px' }}
+                                placeholder="From"
+                            />
+                            <input
+                                type="date"
+                                value={customDateTo}
+                                onChange={(e) => setCustomDateTo(e.target.value)}
+                                style={{ ...inputStyle, width: '140px' }}
+                                placeholder="To"
+                            />
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Invoices Table */}
+            <div style={{ overflowX: 'auto', background: theme.bg }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ background: theme.bgTertiary, borderBottom: `2px solid ${theme.border}` }}>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice #</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vehicle</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Source</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'right', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>M-Pesa Code</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Date</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filteredInvoices.length === 0 ? (
+                            <tr>
+                                <td colSpan="9" style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>📭</div>
+                                    <div style={{ fontSize: '14px', fontWeight: '600' }}>No invoices found</div>
+                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>Invoices will appear here when jobs are completed</div>
+                                </td>
+                            </tr>
+                        ) : (
+                            filteredInvoices.map((invoice, idx) => (
+                                <tr key={invoice.id} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? theme.bg : theme.bgSecondary }}>
+                                    <td style={{ padding: '18px 20px' }}>
+                                        <span style={{ fontWeight: '700', color: '#3b82f6', cursor: 'pointer', letterSpacing: '0.3px' }} onClick={() => viewInvoiceDetails(invoice)}>
+                                            {invoice.invoiceNumber || invoice.id.slice(0, 8).toUpperCase()}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '18px 20px' }}>
+                                        <div style={{ fontWeight: '600', color: theme.text }}>{invoice.customerName || 'Walk-in'}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{invoice.customerPhone || '-'}</div>
+                                    </td>
+                                    <td style={{ padding: '18px 20px' }}>
+                                        <span style={{ fontWeight: '700', color: theme.text, background: theme.bgTertiary, padding: '4px 10px', fontSize: '12px' }}>{invoice.plateNumber || '-'}</span>
+                                    </td>
+                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>{getSourceBadge(invoice.source)}</td>
+                                    <td style={{ padding: '18px 20px', textAlign: 'right', fontWeight: '800', color: theme.text, fontSize: '15px' }}>
+                                        {formatCurrency(invoice.totalAmount)}
+                                    </td>
+                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
+                                        {getPaymentBadge(invoice.paymentStatus, invoice.paymentMethod)}
+                                    </td>
+                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
+                                        {invoice.paymentMethod === 'mpesa' && invoice.mpesaCode ? (
+                                            <span style={{ 
+                                                fontWeight: '700', 
+                                                color: '#00a651', 
+                                                background: '#d1fae5', 
+                                                padding: '4px 10px', 
+                                                fontSize: '11px',
+                                                fontFamily: 'monospace',
+                                                letterSpacing: '0.5px'
+                                            }}>
+                                                {invoice.mpesaCode}
+                                            </span>
+                                        ) : (
+                                            <span style={{ color: theme.textSecondary, fontSize: '12px' }}>-</span>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '18px 20px', color: theme.textSecondary, fontSize: '12px' }}>
+                                        {formatDate(invoice.createdAt)}
+                                    </td>
+                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                            {invoice.paymentStatus === 'paid' ? (
+                                                <>
+                                                    <span style={{ 
+                                                        padding: '8px 12px', 
+                                                        background: '#10b981', 
+                                                        color: 'white', 
+                                                        fontSize: '10px', 
+                                                        fontWeight: '700',
+                                                        letterSpacing: '0.5px',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px'
+                                                    }}>
+                                                        ✓ COMPLETED
+                                                    </span>
+                                                    <button
+                                                        onClick={() => handlePrintReceipt(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#3b82f6', color: 'white', fontSize: '12px' }}
+                                                        title="Print Receipt"
+                                                    >
+                                                        🧾
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleCancelPayment(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#f59e0b', color: 'white', fontSize: '12px' }}
+                                                        title="Cancel Payment"
+                                                    >
+                                                        ↩
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteInvoice(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#ef4444', color: 'white', fontSize: '12px' }}
+                                                        title="Delete Invoice"
+                                                    >
+                                                        🗑
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <button
+                                                        onClick={() => viewInvoiceDetails(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 14px', background: theme.bgTertiary, color: theme.text }}
+                                                        title="View Details"
+                                                    >
+                                                        VIEW
+                                                    </button>
+                                                    <button
+                                                        onClick={() => openPaymentModal(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 14px', background: '#10b981', color: 'white' }}
+                                                        title="Record Payment"
+                                                    >
+                                                        PAY
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteInvoice(invoice)}
+                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#ef4444', color: 'white', fontSize: '12px' }}
+                                                        title="Delete Invoice"
+                                                    >
+                                                        🗑
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Payment Method Modal */}
+            {showPaymentModal && selectedInvoice && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowPaymentModal(false)}>
+                    <div style={{ ...cardStyle, width: '420px', maxWidth: '90vw' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', paddingBottom: '16px', borderBottom: `2px solid ${theme.border}` }}>
+                            <h3 style={{ margin: 0, color: theme.text, fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Record Payment</h3>
+                            <button onClick={() => setShowPaymentModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+
+                        <div style={{ background: theme.bgSecondary, padding: '20px', borderRadius: '0', marginBottom: '24px', borderLeft: '4px solid #3b82f6' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ color: theme.textSecondary, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice:</span>
+                                <span style={{ fontWeight: '700', color: theme.text }}>{selectedInvoice.invoiceNumber}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ color: theme.textSecondary, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer:</span>
+                                <span style={{ color: theme.text, fontWeight: '500' }}>{selectedInvoice.customerName || 'Walk-in'}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+                                <span style={{ color: theme.textSecondary, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount Due:</span>
+                                <span style={{ fontWeight: '800', fontSize: '24px', color: '#10b981' }}>{formatCurrency(selectedInvoice.totalAmount)}</span>
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '16px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Select Payment Method:</div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <button
+                                onClick={handleCashPayment}
+                                disabled={actionLoading}
+                                style={{ 
+                                    ...buttonStyle, 
+                                    padding: '18px', 
+                                    background: '#10b981', 
+                                    color: 'white',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '12px',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                <span style={{ fontSize: '24px' }}>💵</span>
+                                {actionLoading ? 'PROCESSING...' : 'CASH PAYMENT'}
+                            </button>
+
+                            <button
+                                onClick={openMpesaModal}
+                                style={{ 
+                                    ...buttonStyle, 
+                                    padding: '18px', 
+                                    background: 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)', 
+                                    color: 'white',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '12px',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                <span style={{ fontSize: '24px' }}>📱</span>
+                                M-PESA PAYMENT
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* M-Pesa Payment Modal */}
+            {showMpesaModal && selectedInvoice && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !mpesaLoading && setShowMpesaModal(false)}>
+                    <div style={{ ...cardStyle, width: '440px', maxWidth: '90vw' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ textAlign: 'center', marginBottom: '28px', paddingBottom: '20px', borderBottom: `2px solid ${theme.border}` }}>
+                            <div style={{ 
+                                width: '80px', 
+                                height: '80px', 
+                                margin: '0 auto 16px', 
+                                background: 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)', 
+                                borderRadius: '0',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '36px',
+                                color: 'white'
+                            }}>📱</div>
+                            <h3 style={{ margin: '0 0 8px', color: theme.text, fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>M-Pesa Payment</h3>
+                            <p style={{ margin: 0, color: theme.textSecondary, fontSize: '14px', fontWeight: '500' }}>
+                                {selectedInvoice.invoiceNumber} • {formatCurrency(selectedInvoice.totalAmount)}
+                            </p>
+                        </div>
+
+                        {/* Status Display */}
+                        {mpesaStatus && (
+                            <div style={{ 
+                                padding: '20px', 
+                                borderRadius: '0', 
+                                marginBottom: '24px',
+                                textAlign: 'center',
+                                background: mpesaStatus.status === 'success' ? '#d1fae520' : 
+                                            mpesaStatus.status === 'failed' ? '#fee2e220' : 
+                                            '#dbeafe20',
+                                borderLeft: `4px solid ${
+                                    mpesaStatus.status === 'success' ? '#10b981' : 
+                                    mpesaStatus.status === 'failed' ? '#ef4444' : 
+                                    '#3b82f6'
+                                }`
+                            }}>
+                                <div style={{ 
+                                    fontSize: '36px', 
+                                    marginBottom: '12px' 
+                                }}>
+                                    {mpesaStatus.status === 'success' ? '✅' : 
+                                     mpesaStatus.status === 'failed' ? '❌' : 
+                                     mpesaStatus.status === 'pending' ? '📲' : '⏳'}
+                                </div>
+                                <div style={{ 
+                                    color: mpesaStatus.status === 'success' ? '#10b981' : 
+                                           mpesaStatus.status === 'failed' ? '#ef4444' : 
+                                           '#3b82f6',
+                                    fontWeight: '600',
+                                    fontSize: '14px'
+                                }}>
+                                    {mpesaStatus.message}
+                                </div>
+
+                                {/* Simulate button for testing */}
+                                {mpesaStatus.status === 'pending' && mpesaPaymentId && (
+                                    <button
+                                        onClick={handleSimulateMpesaSuccess}
+                                        style={{ 
+                                            ...buttonStyle, 
+                                            marginTop: '16px',
+                                            background: '#f59e0b', 
+                                            color: 'white',
+                                            fontSize: '11px',
+                                            padding: '10px 16px'
+                                        }}
+                                    >
+                                        🧪 SIMULATE SUCCESS (TESTING)
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Phone input */}
+                        {(!mpesaStatus || mpesaStatus.status === 'failed') && (
+                            <>
+                                <div style={{ marginBottom: '24px' }}>
+                                    <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                        Phone Number
+                                    </label>
+                                    <input
+                                        type="tel"
+                                        value={mpesaPhone}
+                                        onChange={(e) => setMpesaPhone(e.target.value)}
+                                        placeholder="e.g., 0712345678 or 254712345678"
+                                        style={{ ...inputStyle, padding: '14px 16px', fontSize: '16px' }}
+                                    />
+                                    <p style={{ margin: '10px 0 0', fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                        Enter the M-Pesa registered phone number
+                                    </p>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '0' }}>
+                                    <button
+                                        onClick={() => setShowMpesaModal(false)}
+                                        style={{ ...buttonStyle, flex: 1, background: theme.bgSecondary, color: theme.text, padding: '16px' }}
+                                    >
+                                        CANCEL
+                                    </button>
+                                    <button
+                                        onClick={handleMpesaPayment}
+                                        disabled={mpesaLoading || !mpesaPhone}
+                                        style={{ 
+                                            ...buttonStyle, 
+                                            flex: 2, 
+                                            background: 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)', 
+                                            color: 'white',
+                                            opacity: mpesaLoading || !mpesaPhone ? 0.6 : 1,
+                                            padding: '16px'
+                                        }}
+                                    >
+                                        {mpesaLoading ? 'SENDING...' : 'SEND STK PUSH'}
+                                    </button>
+                                </div>
+                            </>
+                        )}
+
+                        {mpesaStatus?.status === 'success' && (
+                            <button
+                                onClick={() => {
+                                    setShowMpesaModal(false);
+                                    setSelectedInvoice(null);
+                                    setMpesaStatus(null);
+                                }}
+                                style={{ ...buttonStyle, width: '100%', background: '#10b981', color: 'white', padding: '16px' }}
+                            >
+                                Done
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Invoice Detail Modal */}
+            {showInvoiceDetailModal && selectedInvoice && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowInvoiceDetailModal(false)}>
+                    <div style={{ ...cardStyle, width: '520px', maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: `2px solid ${theme.border}`, paddingBottom: '20px' }}>
+                            <div>
+                                <h3 style={{ margin: '0 0 6px', color: theme.text, fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice Details</h3>
+                                <span style={{ color: '#3b82f6', fontWeight: '700', fontSize: '14px', letterSpacing: '0.3px' }}>{selectedInvoice.invoiceNumber}</span>
+                            </div>
+                            <button onClick={() => setShowInvoiceDetailModal(false)} style={{ background: 'none', border: 'none', fontSize: '28px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+
+                        {/* Invoice Info */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Customer</div>
+                                <div style={{ fontWeight: '600', color: theme.text }}>{selectedInvoice.customerName || 'Walk-in'}</div>
+                            </div>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Phone</div>
+                                <div style={{ fontWeight: '600', color: theme.text }}>{selectedInvoice.customerPhone || '-'}</div>
+                            </div>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid #3b82f6` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Vehicle</div>
+                                <div style={{ fontWeight: '700', color: theme.text, fontSize: '16px' }}>{selectedInvoice.plateNumber || '-'}</div>
+                            </div>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Source</div>
+                                <div style={{ marginTop: '4px' }}>{getSourceBadge(selectedInvoice.source)}</div>
+                            </div>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Created</div>
+                                <div style={{ color: theme.text, fontSize: '13px' }}>{formatDate(selectedInvoice.createdAt)}</div>
+                            </div>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Status</div>
+                                <div style={{ marginTop: '4px' }}>{getPaymentBadge(selectedInvoice.paymentStatus, selectedInvoice.paymentMethod)}</div>
+                            </div>
+                        </div>
+
+                        {/* Services */}
+                        {selectedInvoice.services && selectedInvoice.services.length > 0 && (
+                            <div style={{ marginBottom: '24px' }}>
+                                <div style={{ fontSize: '12px', fontWeight: '700', color: theme.text, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Services</div>
+                                <div style={{ background: theme.bgSecondary, borderRadius: '0', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
+                                    {selectedInvoice.services.map((service, idx) => (
+                                        <div key={idx} style={{ padding: '14px 18px', borderBottom: idx < selectedInvoice.services.length - 1 ? `1px solid ${theme.border}` : 'none', display: 'flex', justifyContent: 'space-between' }}>
+                                            <span style={{ color: theme.text, fontWeight: '500' }}>{service.name || service}</span>
+                                            <span style={{ fontWeight: '700', color: theme.text }}>{formatCurrency(service.price || 0)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Total */}
+                        <div style={{ background: theme.bgTertiary, padding: '20px', borderRadius: '0', marginBottom: '24px', borderLeft: '4px solid #10b981' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '14px', fontWeight: '700', color: theme.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Amount</span>
+                                <span style={{ fontSize: '28px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(selectedInvoice.totalAmount)}</span>
+                            </div>
+                        </div>
+
+                        {/* Payment Info */}
+                        {selectedInvoice.paymentStatus === 'paid' && (
+                            <div style={{ background: '#d1fae515', borderLeft: '4px solid #10b981', padding: '20px', borderRadius: '0', marginBottom: '24px' }}>
+                                <div style={{ fontWeight: '700', color: '#10b981', marginBottom: '16px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>✓ Payment Received</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                                    <div><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Method:</span> <span style={{ color: theme.text, fontWeight: '600', display: 'block', marginTop: '4px' }}>{selectedInvoice.paymentMethod === 'mpesa' ? 'M-PESA' : 'CASH'}</span></div>
+                                    <div><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Paid:</span> <span style={{ color: theme.text, fontWeight: '600', display: 'block', marginTop: '4px' }}>{formatCurrency(selectedInvoice.paidAmount)}</span></div>
+                                    {selectedInvoice.mpesaCode && (
+                                        <div style={{ gridColumn: '1 / -1' }}><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>M-Pesa Code:</span> <span style={{ color: '#10b981', fontWeight: '700', display: 'block', marginTop: '4px', fontSize: '16px' }}>{selectedInvoice.mpesaCode}</span></div>
+                                    )}
+                                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Paid At:</span> <span style={{ color: theme.text, display: 'block', marginTop: '4px' }}>{formatDate(selectedInvoice.paidAt)}</span></div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', gap: '0' }}>
+                            <button
+                                onClick={() => setShowInvoiceDetailModal(false)}
+                                style={{ ...buttonStyle, flex: 1, background: theme.bgSecondary, color: theme.text, padding: '16px' }}
+                            >
+                                CLOSE
+                            </button>
+                            {selectedInvoice.paymentStatus !== 'paid' && (
+                                <button
+                                    onClick={() => {
+                                        setShowInvoiceDetailModal(false);
+                                        openPaymentModal(selectedInvoice);
+                                    }}
+                                    style={{ ...buttonStyle, flex: 1, background: '#10b981', color: 'white', padding: '16px' }}
+                                >
+                                    💳 RECORD PAYMENT
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Manual Billing Modal - Simple & Clean */}
+            {showManualBillingModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowManualBillingModal(false)}>
+                    <div style={{ ...cardStyle, width: '500px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                            <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>➕ New Invoice</h3>
+                            <button onClick={() => setShowManualBillingModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+
+                        {/* Customer & Vehicle Info */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                            <input type="text" value={manualBillingData.plateNumber} onChange={(e) => handleManualBillingChange('plateNumber', e.target.value.toUpperCase())} placeholder="Plate Number *" style={{ ...inputStyle, gridColumn: '1 / -1', fontWeight: '700', textTransform: 'uppercase', fontSize: '15px', padding: '12px' }} />
+                            <input type="text" value={manualBillingData.customerName} onChange={(e) => handleManualBillingChange('customerName', e.target.value)} placeholder="Customer Name" style={inputStyle} />
+                            <input type="tel" value={manualBillingData.customerPhone} onChange={(e) => handleManualBillingChange('customerPhone', e.target.value)} placeholder="Phone" style={inputStyle} />
+                        </div>
+
+                        {/* Source Selection - Garage or Wash */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Service Type</div>
+                            <div style={{ display: 'flex', gap: '0' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => handleManualBillingChange('source', 'wash')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '14px',
+                                        border: `2px solid ${manualBillingData.source === 'wash' ? '#3b82f6' : theme.border}`,
+                                        background: manualBillingData.source === 'wash' ? '#3b82f6' : theme.bg,
+                                        color: manualBillingData.source === 'wash' ? 'white' : theme.text,
+                                        fontWeight: '700',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        borderRadius: '0',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    <span style={{ fontSize: '18px' }}>🚿</span> CAR WASH
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleManualBillingChange('source', 'garage')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '14px',
+                                        border: `2px solid ${manualBillingData.source === 'garage' ? '#f59e0b' : theme.border}`,
+                                        borderLeft: 'none',
+                                        background: manualBillingData.source === 'garage' ? '#f59e0b' : theme.bg,
+                                        color: manualBillingData.source === 'garage' ? 'white' : theme.text,
+                                        fontWeight: '700',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        borderRadius: '0',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    <span style={{ fontSize: '18px' }}>🔧</span> GARAGE
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Services Selection */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Select Services</div>
+                            {servicePackages.length === 0 ? (
+                                <div style={{ padding: '20px', background: theme.bgSecondary, textAlign: 'center', color: theme.textSecondary, fontSize: '13px' }}>
+                                    No services available. Add services in Service Packages.
+                                </div>
+                            ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
+                                    {servicePackages.map(service => {
+                                        const isSelected = manualBillingData.selectedServices.includes(service.id);
+                                        return (
+                                            <button
+                                                key={service.id}
+                                                type="button"
+                                                onClick={() => toggleServiceSelection(service.id)}
+                                                style={{
+                                                    padding: '12px',
+                                                    border: `2px solid ${isSelected ? '#10b981' : theme.border}`,
+                                                    background: isSelected ? (isDark ? '#10b98120' : '#d1fae5') : theme.bg,
+                                                    cursor: 'pointer',
+                                                    textAlign: 'left',
+                                                    borderRadius: '0',
+                                                    transition: 'all 0.15s'
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                    <div style={{ flex: 1 }}>
+                                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px', marginBottom: '2px' }}>
+                                                            {isSelected && <span style={{ color: '#10b981', marginRight: '4px' }}>✓</span>}
+                                                            {service.name}
+                                                        </div>
+                                                        {service.description && (
+                                                            <div style={{ fontSize: '10px', color: theme.textSecondary }}>{service.description}</div>
+                                                        )}
+                                                    </div>
+                                                    <div style={{ fontWeight: '800', color: isSelected ? '#10b981' : '#3b82f6', fontSize: '14px', whiteSpace: 'nowrap' }}>
+                                                        {formatCurrency(service.price)}
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {/* Selected services summary */}
+                            {manualBillingData.selectedServices.length > 0 && (
+                                <div style={{ marginTop: '8px', padding: '8px 12px', background: isDark ? '#10b98115' : '#ecfdf5', borderLeft: '3px solid #10b981' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                        {manualBillingData.selectedServices.length} service(s): {getSelectedServicesDetails().map(s => s.name).join(', ')}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Payment Method */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment</div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                {[
+                                    { id: 'unpaid', label: '⏳ Unpaid', color: '#ef4444' },
+                                    { id: 'cash', label: '💵 Cash', color: '#10b981' },
+                                    { id: 'card', label: '💳 Card', color: '#3b82f6' },
+                                    { id: 'mpesa', label: '📱 M-Pesa', color: '#00a651' }
+                                ].map(opt => {
+                                    const isSelected = opt.id === 'unpaid' 
+                                        ? manualBillingData.paymentStatus === 'unpaid' 
+                                        : manualBillingData.paymentStatus === 'paid' && manualBillingData.paymentMethod === opt.id;
+                                    return (
+                                        <button
+                                            key={opt.id}
+                                            type="button"
+                                            onClick={() => {
+                                                if (opt.id === 'unpaid') {
+                                                    handleManualBillingChange('paymentStatus', 'unpaid');
+                                                } else {
+                                                    handleManualBillingChange('paymentStatus', 'paid');
+                                                    handleManualBillingChange('paymentMethod', opt.id);
+                                                }
+                                            }}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px 8px',
+                                                border: `2px solid ${isSelected ? opt.color : theme.border}`,
+                                                background: isSelected ? opt.color : theme.bg,
+                                                color: isSelected ? 'white' : theme.text,
+                                                fontSize: '11px',
+                                                fontWeight: '700',
+                                                cursor: 'pointer',
+                                                borderRadius: '0'
+                                            }}
+                                        >
+                                            {opt.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* M-Pesa Code */}
+                        {manualBillingData.paymentStatus === 'paid' && manualBillingData.paymentMethod === 'mpesa' && (
+                            <input type="text" value={manualBillingData.mpesaCode} onChange={(e) => handleManualBillingChange('mpesaCode', e.target.value.toUpperCase())} placeholder="M-Pesa Code (e.g., SBK7XXX)" style={{ ...inputStyle, marginBottom: '16px', textTransform: 'uppercase', fontWeight: '700' }} />
+                        )}
+
+                        {/* Total & Submit */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', background: theme.bgSecondary, marginBottom: '16px' }}>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase' }}>Total</div>
+                                <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(getManualBillingTotal())}</div>
+                            </div>
+                            <button
+                                onClick={handleSubmitManualBilling}
+                                disabled={actionLoading}
+                                style={{ padding: '14px 28px', background: '#10b981', color: 'white', border: 'none', fontWeight: '700', fontSize: '13px', cursor: actionLoading ? 'wait' : 'pointer', opacity: actionLoading ? 0.7 : 1 }}
+                            >
+                                {actionLoading ? 'SAVING...' : 'CREATE'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ==================== STAFF MANAGEMENT COMPONENT ====================
+function StaffManagement() {
+    const [activeTab, setActiveTab] = useState('staff');
+    const [staffList, setStaffList] = useState([]);
+    const [usersList, setUsersList] = useState([]);
+    const [auditLogs, setAuditLogs] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showAddStaffModal, setShowAddStaffModal] = useState(false);
+    const [showAddUserModal, setShowAddUserModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [confirmAction, setConfirmAction] = useState(null);
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [actionLoading, setActionLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filterStatus, setFilterStatus] = useState('active');
+    const [auditFilter, setAuditFilter] = useState({ action: '', module: '' });
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    const [staffForm, setStaffForm] = useState({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
+    const [userForm, setUserForm] = useState({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+    const [userStep, setUserStep] = useState(1);
+
+    const STAFF_ROLES = ['Washer', 'Detailer', 'Supervisor', 'Technician', 'Cleaner', 'Attendant'];
+    const DEPARTMENTS = ['Operations', 'Garage', 'Administration', 'Customer Service'];
+    
+    // All system modules with their permissions
+    const ALL_MODULES = [
+        { id: 'dashboard', label: 'Dashboard', icon: '📊', category: 'Core' },
+        { id: 'vehicle-intake', label: 'Vehicle Intake', icon: '🚗', category: 'Core' },
+        { id: 'service-packages', label: 'Service Packages', icon: '📦', category: 'Services' },
+        { id: 'garage-management', label: 'Garage Management', icon: '🏢', category: 'Operations' },
+        { id: 'wash-bays', label: 'Wash Bays', icon: '💧', category: 'Operations' },
+        { id: 'equipment', label: 'Equipment Management', icon: '🔧', category: 'Operations' },
+        { id: 'customers', label: 'Customer Management', icon: '👥', category: 'Customer Relations' },
+        { id: 'fleet', label: 'Fleet Accounts', icon: '🚛', category: 'Customer Relations' },
+        { id: 'staff', label: 'Staff Management', icon: '👷', category: 'Staff & Scheduling' },
+        { id: 'scheduling', label: 'Shift Scheduling', icon: '📅', category: 'Staff & Scheduling' },
+        { id: 'billing', label: 'Billing & Payments', icon: '💳', category: 'Financial' },
+        { id: 'inventory', label: 'Inventory Management', icon: '📋', category: 'Financial' },
+        { id: 'reports', label: 'Reports & Analytics', icon: '📈', category: 'Analytics & Marketing' },
+        { id: 'marketing', label: 'Marketing & CRM', icon: '📣', category: 'Analytics & Marketing' },
+        { id: 'settings', label: 'System Settings', icon: '⚙️', category: 'System' },
+        { id: 'audit-logs', label: 'Audit Logs', icon: '📜', category: 'System' }
+    ];
+
+    const PERMISSION_ACTIONS = [
+        { id: 'view', label: 'View', icon: '👁️' },
+        { id: 'create', label: 'Create', icon: '➕' },
+        { id: 'edit', label: 'Edit', icon: '✏️' },
+        { id: 'delete', label: 'Delete', icon: '🗑️' }
+    ];
+
+    const USER_ROLES = [
+        { id: 'admin', label: 'Admin', desc: 'Full system access' },
+        { id: 'manager', label: 'Manager', desc: 'Manage operations & staff' },
+        { id: 'supervisor', label: 'Supervisor', desc: 'Oversee daily operations' },
+        { id: 'receptionist', label: 'Receptionist', desc: 'Customer intake & billing' },
+        { id: 'technician', label: 'Technician', desc: 'Garage operations only' },
+        { id: 'staff', label: 'Staff', desc: 'Basic access only' }
+    ];
+
+    // Generate default permissions based on role
+    const getDefaultPermissions = (role) => {
+        const permissions = {};
+        ALL_MODULES.forEach(mod => {
+            if (role === 'admin') {
+                permissions[mod.id] = { view: true, create: true, edit: true, delete: true };
+            } else if (role === 'manager') {
+                permissions[mod.id] = { view: true, create: true, edit: true, delete: mod.category !== 'System' };
+            } else if (role === 'supervisor') {
+                const canManage = ['Core', 'Operations', 'Services'].includes(mod.category);
+                permissions[mod.id] = { view: true, create: canManage, edit: canManage, delete: false };
+            } else if (role === 'receptionist') {
+                const canAccess = ['Core', 'Customer Relations', 'Financial'].includes(mod.category);
+                permissions[mod.id] = { view: canAccess, create: canAccess && mod.id !== 'billing', edit: canAccess && mod.id !== 'billing', delete: false };
+            } else if (role === 'technician') {
+                const canAccess = mod.category === 'Operations' || mod.id === 'dashboard';
+                permissions[mod.id] = { view: canAccess, create: false, edit: canAccess, delete: false };
+            } else {
+                permissions[mod.id] = { view: mod.id === 'dashboard', create: false, edit: false, delete: false };
+            }
+        });
+        return permissions;
+    };
+
+    const toggleModulePermission = (moduleId, action) => {
+        setUserForm(prev => ({
+            ...prev,
+            permissions: {
+                ...prev.permissions,
+                [moduleId]: {
+                    ...prev.permissions[moduleId],
+                    [action]: !prev.permissions[moduleId]?.[action]
+                }
+            }
+        }));
+    };
+
+    const toggleAllModulePermissions = (moduleId, enabled) => {
+        setUserForm(prev => ({
+            ...prev,
+            permissions: {
+                ...prev.permissions,
+                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled }
+            }
+        }));
+    };
+
+    const applyRolePreset = (role) => {
+        setUserForm(prev => ({ ...prev, role, permissions: getDefaultPermissions(role) }));
+    };
+
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = { bg: isDark ? '#1e293b' : 'white', bgSecondary: isDark ? '#0f172a' : '#f8fafc', text: isDark ? '#f1f5f9' : '#1e293b', textSecondary: isDark ? '#94a3b8' : '#64748b', border: isDark ? '#334155' : '#e2e8f0', inputBg: isDark ? '#1e293b' : 'white' };
+
+    useEffect(() => {
+        if (successMessage) { const timer = setTimeout(() => setSuccessMessage(null), 3000); return () => clearTimeout(timer); }
+    }, [successMessage]);
+
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services) { setLoading(false); return; }
+        let unsubStaff = services.staffService?.subscribeToAllStaff((data) => { setStaffList(data); setLoading(false); });
+        let unsubUsers = services.userService?.subscribeToUsers((data) => { setUsersList(data); });
+        let unsubAudit = services.auditService?.subscribeToAuditLogs((data) => { setAuditLogs(data); });
+        return () => { if (unsubStaff) unsubStaff(); if (unsubUsers) unsubUsers(); if (unsubAudit) unsubAudit(); };
+    }, []);
+
+    const filteredAuditLogs = auditLogs.filter(log => {
+        const matchesSearch = log.userName?.toLowerCase().includes(searchTerm.toLowerCase()) || log.userEmail?.toLowerCase().includes(searchTerm.toLowerCase()) || log.details?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesAction = !auditFilter.action || log.action === auditFilter.action;
+        const matchesModule = !auditFilter.module || log.module === auditFilter.module;
+        return matchesSearch && matchesAction && matchesModule;
+    });
+
+    const getActionColor = (action) => {
+        const colors = { login: '#10b981', logout: '#6b7280', create: '#3b82f6', update: '#f59e0b', delete: '#ef4444', view: '#8b5cf6' };
+        return colors[action] || '#6b7280';
+    };
+
+    const getActionIcon = (action) => {
+        const icons = { login: '🔓', logout: '🔒', create: '➕', update: '✏️', delete: '🗑️', view: '👁️' };
+        return icons[action] || '📋';
+    };
+
+    const formatTimeAgo = (timestamp) => {
+        const now = new Date();
+        const date = new Date(timestamp);
+        const seconds = Math.floor((now - date) / 1000);
+        if (seconds < 60) return 'Just now';
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+        if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+        return date.toLocaleDateString();
+    };
+
+    const filteredStaff = staffList.filter(s => {
+        const matchesSearch = s.name?.toLowerCase().includes(searchTerm.toLowerCase()) || s.role?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesStatus = filterStatus === 'all' || s.status === filterStatus;
+        return matchesSearch && matchesStatus;
+    });
+
+    const filteredUsers = usersList.filter(u => {
+        const matchesSearch = u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) || u.email?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesStatus = filterStatus === 'all' || (filterStatus === 'active' ? u.isActive : !u.isActive);
+        return matchesSearch && matchesStatus;
+    });
+
+    const handleAddStaff = async (e) => {
+        e.preventDefault();
+        if (!staffForm.name.trim()) { setError('Staff name is required'); return; }
+        setActionLoading(true); setError(null);
+        try {
+            const result = await window.FirebaseServices.staffService.addStaff(staffForm);
+            if (result.success) {
+                setSuccessMessage('Staff added successfully');
+                setShowAddStaffModal(false);
+                setStaffForm({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
+            } else { setError(result.error); }
+        } catch (err) { setError(err.message); }
+        finally { setActionLoading(false); }
+    };
+
+    const handleAddUser = async (e) => {
+        e.preventDefault();
+        if (!userForm.email.trim() || !userForm.password.trim()) { setError('Email and password required'); return; }
+        if (userForm.password.length < 6) { setError('Password must be at least 6 characters'); return; }
+        setActionLoading(true); setError(null);
+        try {
+            const services = window.FirebaseServices;
+            const authResult = await services.authService.signUp(userForm.email, userForm.password);
+            if (authResult.success) {
+                await services.userService.createUserProfile(authResult.user.uid, { 
+                    email: userForm.email, 
+                    displayName: userForm.displayName || userForm.email.split('@')[0], 
+                    role: userForm.role, 
+                    phone: userForm.phone, 
+                    permissions: userForm.permissions,
+                    isActive: true 
+                });
+                // Log user creation in audit trail
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'create',
+                    'users',
+                    'user',
+                    authResult.user.uid,
+                    userForm.displayName || userForm.email,
+                    `Created user with role: ${userForm.role}`
+                );
+                setSuccessMessage('User created successfully');
+                setShowAddUserModal(false);
+                setUserStep(1);
+                setUserForm({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+            } else { setError(authResult.error); }
+        } catch (err) { setError(err.message); }
+        finally { setActionLoading(false); }
+    };
+
+    const handleUpdateStaff = async (e) => {
+        e.preventDefault();
+        if (!selectedItem) return;
+        setActionLoading(true); setError(null);
+        try {
+            const result = await window.FirebaseServices.staffService.updateStaff(selectedItem.id, staffForm);
+            if (result.success) { setSuccessMessage('Staff updated'); setShowEditModal(false); setSelectedItem(null); }
+            else { setError(result.error); }
+        } catch (err) { setError(err.message); }
+        finally { setActionLoading(false); }
+    };
+
+    const handleUpdateUser = async (userId, updates) => {
+        try {
+            const result = await window.FirebaseServices.userService.updateUserProfile(userId, updates);
+            if (result.success) setSuccessMessage('User updated');
+            else setError(result.error);
+        } catch (err) { setError(err.message); }
+    };
+
+    const handleToggleStaffStatus = (staff) => {
+        setSelectedItem(staff);
+        setConfirmAction({
+            type: 'toggle',
+            title: staff.status === 'active' ? 'Deactivate Staff' : 'Activate Staff',
+            message: staff.status === 'active' ? `Are you sure you want to deactivate ${staff.name}? They will no longer appear in staff assignments.` : `Are you sure you want to reactivate ${staff.name}?`,
+            confirmText: staff.status === 'active' ? 'Deactivate' : 'Activate',
+            confirmColor: staff.status === 'active' ? '#ef4444' : '#10b981'
+        });
+        setShowConfirmModal(true);
+    };
+
+    const handleDeleteStaff = (staff) => {
+        setSelectedItem(staff);
+        setConfirmAction({
+            type: 'delete',
+            title: 'Delete Staff Permanently',
+            message: `Are you sure you want to permanently delete ${staff.name}? This action cannot be undone.`,
+            confirmText: 'Delete Permanently',
+            confirmColor: '#dc2626'
+        });
+        setShowConfirmModal(true);
+    };
+
+    const executeConfirmAction = async () => {
+        if (!confirmAction || !selectedItem) return;
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (confirmAction.type === 'toggle') {
+                if (selectedItem.status === 'active') await services.staffService.deleteStaff(selectedItem.id);
+                else await services.staffService.reactivateStaff(selectedItem.id);
+                setSuccessMessage(selectedItem.status === 'active' ? 'Staff deactivated' : 'Staff activated');
+            } else if (confirmAction.type === 'delete') {
+                await services.staffService.permanentDeleteStaff(selectedItem.id);
+                setSuccessMessage('Staff permanently deleted');
+            }
+        } catch (err) { setError(err.message); }
+        finally { setActionLoading(false); setShowConfirmModal(false); setConfirmAction(null); setSelectedItem(null); }
+    };
+
+    const openEditStaff = (staff) => {
+        setSelectedItem(staff);
+        setStaffForm({ name: staff.name || '', role: staff.role || 'Washer', phone: staff.phone || '', email: staff.email || '', department: staff.department || 'Operations', hireDate: staff.hireDate || '', hourlyRate: staff.hourlyRate || '', emergencyContact: staff.emergencyContact || '', notes: staff.notes || '' });
+        setShowEditModal(true);
+    };
+
+    const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${theme.border}`, fontSize: '14px', backgroundColor: theme.inputBg, color: theme.text, boxSizing: 'border-box' };
+    const labelStyle = { display: 'block', fontSize: '13px', fontWeight: '500', color: theme.text, marginBottom: '6px' };
+
+    return (
+        <div style={{ padding: '20px' }}>
+            {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px 16px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between' }}><span>{error}</span><button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>×</button></div>}
+            {successMessage && <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#16a34a', padding: '12px 16px', marginBottom: '16px' }}>{successMessage}</div>}
+
+            <div style={{ display: 'flex', gap: '0', marginBottom: '20px', borderBottom: `2px solid ${theme.border}` }}>
+                <button onClick={() => setActiveTab('staff')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'staff' ? '#3b82f6' : 'transparent', color: activeTab === 'staff' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>👷 Staff ({staffList.filter(s => s.status === 'active').length})</button>
+                <button onClick={() => setActiveTab('users')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'users' ? '#3b82f6' : 'transparent', color: activeTab === 'users' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔐 Users ({usersList.filter(u => u.isActive).length})</button>
+                <button onClick={() => setActiveTab('audit')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'audit' ? '#3b82f6' : 'transparent', color: activeTab === 'audit' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>📜 Audit Logs</button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input type="text" placeholder={`Search ${activeTab}...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ ...inputStyle, maxWidth: '300px' }} />
+                <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ ...inputStyle, maxWidth: '150px' }}>
+                    <option value="active">Active</option><option value="inactive">Inactive</option><option value="all">All</option>
+                </select>
+                <div style={{ flex: 1 }}></div>
+                {activeTab === 'staff' && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add Staff</button>}
+                {activeTab === 'users' && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add User</button>}
+            </div>
+
+            {activeTab === 'staff' && (
+                <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
+                    {loading ? <div style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>Loading...</div> : filteredStaff.length === 0 ? (
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>👷</div><p style={{ color: theme.textSecondary }}>No staff found</p><button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add Staff</button></div>
+                    ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Name</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Department</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Phone</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
+                            <tbody>
+                                {filteredStaff.map(staff => (
+                                    <tr key={staff.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                        <td style={{ padding: '12px 16px', color: theme.text }}><div style={{ fontWeight: '600' }}>{staff.name}</div>{staff.email && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{staff.email}</div>}</td>
+                                        <td style={{ padding: '12px 16px', color: theme.text }}>{staff.role}</td>
+                                        <td style={{ padding: '12px 16px', color: theme.textSecondary }}>{staff.department || '-'}</td>
+                                        <td style={{ padding: '12px 16px', color: theme.textSecondary }}>{staff.phone || '-'}</td>
+                                        <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 12px', fontSize: '12px', fontWeight: '600', background: staff.status === 'active' ? '#d1fae5' : '#fee2e2', color: staff.status === 'active' ? '#059669' : '#dc2626' }}>{staff.status === 'active' ? 'Active' : 'Inactive'}</span></td>
+                                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                            <button onClick={() => openEditStaff(staff)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>Edit</button>
+                                            <button onClick={() => handleToggleStaffStatus(staff)} style={{ padding: '6px 12px', background: staff.status === 'active' ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>{staff.status === 'active' ? 'Deactivate' : 'Activate'}</button>
+                                            <button onClick={() => handleDeleteStaff(staff)} style={{ padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' }}>Delete</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'users' && (
+                <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
+                    {filteredUsers.length === 0 ? (
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div><p style={{ color: theme.textSecondary }}>No users found</p><button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add User</button></div>
+                    ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>User</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Description</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
+                            <tbody>
+                                {filteredUsers.map(user => {
+                                    const roleInfo = USER_ROLES.find(r => r.id === user.role) || { label: user.role, desc: '' };
+                                    return (
+                                        <tr key={user.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '12px 16px', color: theme.text }}><div style={{ fontWeight: '600' }}>{user.displayName || user.email?.split('@')[0]}</div><div style={{ fontSize: '12px', color: theme.textSecondary }}>{user.email}</div></td>
+                                            <td style={{ padding: '12px 16px' }}><select value={user.role} onChange={(e) => handleUpdateUser(user.id, { role: e.target.value })} style={{ padding: '6px 10px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '13px' }}>{USER_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></td>
+                                            <td style={{ padding: '12px 16px', color: theme.textSecondary, fontSize: '13px' }}>{roleInfo.desc}</td>
+                                            <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 12px', fontSize: '12px', fontWeight: '600', background: user.isActive ? '#d1fae5' : '#fee2e2', color: user.isActive ? '#059669' : '#dc2626' }}>{user.isActive ? 'Active' : 'Inactive'}</span></td>
+                                            <td style={{ padding: '12px 16px', textAlign: 'center' }}><button onClick={() => handleUpdateUser(user.id, { isActive: !user.isActive })} style={{ padding: '6px 12px', background: user.isActive ? '#ef4444' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' }}>{user.isActive ? 'Deactivate' : 'Activate'}</button></td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'audit' && (
+                <div>
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input type="text" placeholder={'Search logs...'} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ ...inputStyle, maxWidth: '250px', borderRadius: '8px' }} />
+                        <select value={auditFilter.action} onChange={(e) => setAuditFilter(prev => ({ ...prev, action: e.target.value }))} style={{ ...inputStyle, maxWidth: '150px', borderRadius: '8px' }}>
+                            <option value="">All Actions</option>
+                            <option value="login">Login</option>
+                            <option value="logout">Logout</option>
+                            <option value="create">Create</option>
+                            <option value="update">Update</option>
+                            <option value="delete">Delete</option>
+                            <option value="view">View</option>
+                        </select>
+                        <select value={auditFilter.module} onChange={(e) => setAuditFilter(prev => ({ ...prev, module: e.target.value }))} style={{ ...inputStyle, maxWidth: '180px', borderRadius: '8px' }}>
+                            <option value="">All Modules</option>
+                            <option value="auth">Authentication</option>
+                            <option value="staff">Staff</option>
+                            <option value="users">Users</option>
+                            <option value="customers">Customers</option>
+                            <option value="vehicles">Vehicles</option>
+                            <option value="billing">Billing</option>
+                            <option value="settings">Settings</option>
+                        </select>
+                        <div style={{ flex: 1 }}></div>
+                        <div style={{ color: theme.textSecondary, fontSize: '13px' }}>Showing {filteredAuditLogs.length} of {auditLogs.length} logs</div>
+                    </div>
+
+                    <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
+                        {filteredAuditLogs.length === 0 ? (
+                            <div style={{ padding: '60px', textAlign: 'center' }}>
+                                <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                                <p style={{ color: theme.textSecondary }}>No audit logs found</p>
+                                <p style={{ color: theme.textSecondary, fontSize: '13px' }}>System activity will appear here once users start interacting</p>
+                            </div>
+                        ) : (
+                            <div style={{ maxHeight: '600px', overflow: 'auto' }}>
+                                {filteredAuditLogs.map((log, idx) => (
+                                    <div key={log.id || idx} style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: '16px', alignItems: 'flex-start', background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
+                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: `${getActionColor(log.action)}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>
+                                            {getActionIcon(log.action)}
+                                        </div>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+                                                <div>
+                                                    <span style={{ fontWeight: '600', color: theme.text }}>{log.userName || 'Unknown'}</span>
+                                                    <span style={{ color: theme.textSecondary }}> performed </span>
+                                                    <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: '600', background: `${getActionColor(log.action)}20`, color: getActionColor(log.action) }}>{log.action?.toUpperCase()}</span>
+                                                    <span style={{ color: theme.textSecondary }}> on </span>
+                                                    <span style={{ fontWeight: '500', color: theme.text }}>{log.module}</span>
+                                                    {log.targetName && <span style={{ color: theme.textSecondary }}> ({log.targetName})</span>}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, whiteSpace: 'nowrap' }}>{formatTimeAgo(log.timestamp)}</div>
+                                            </div>
+                                            {log.details && <div style={{ marginTop: '6px', fontSize: '13px', color: theme.textSecondary }}>{log.details}</div>}
+                                            <div style={{ marginTop: '6px', fontSize: '11px', color: theme.textSecondary }}>
+                                                <span>{log.userEmail}</span>
+                                                <span style={{ margin: '0 8px' }}>•</span>
+                                                <span>{new Date(log.timestamp).toLocaleString()}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {showAddStaffModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowAddStaffModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '12px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', borderRadius: '12px 12px 0 0' }}><h2 style={{ margin: 0, color: theme.text }}>Add Staff Member</h2><button onClick={() => setShowAddStaffModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button></div>
+                        <form onSubmit={handleAddStaff} style={{ padding: '20px' }}>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} required /></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Role</label><select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} style={{...inputStyle, borderRadius: '8px'}}>{STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select></div><div><label style={labelStyle}>Department</label><select value={staffForm.department} onChange={e => setStaffForm({...staffForm, department: e.target.value})} style={{...inputStyle, borderRadius: '8px'}}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Phone</label><input type="tel" value={staffForm.phone} onChange={e => setStaffForm({...staffForm, phone: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} /></div><div><label style={labelStyle}>Email</label><input type="email" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} /></div></div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowAddStaffModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Adding...' : 'Add Staff'}</button></div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {showAddUserModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowAddUserModal(false); setUserStep(1); }}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '800px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h2 style={{ margin: 0, color: theme.text, fontSize: '20px' }}>Add System User</h2>
+                                <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Step {userStep} of 2: {userStep === 1 ? 'User Details' : 'Module Permissions'}</p>
+                            </div>
+                            <button onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ display: 'flex', padding: '0 24px', borderBottom: `1px solid ${theme.border}` }}>
+                            <button onClick={() => setUserStep(1)} style={{ padding: '16px 24px', border: 'none', background: 'transparent', color: userStep === 1 ? '#8b5cf6' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderBottom: userStep === 1 ? '2px solid #8b5cf6' : '2px solid transparent', marginBottom: '-1px' }}>1. User Details</button>
+                            <button onClick={() => userStep === 1 && userForm.email && userForm.password ? setUserStep(2) : null} style={{ padding: '16px 24px', border: 'none', background: 'transparent', color: userStep === 2 ? '#8b5cf6' : theme.textSecondary, fontWeight: '600', cursor: userForm.email && userForm.password ? 'pointer' : 'not-allowed', borderBottom: userStep === 2 ? '2px solid #8b5cf6' : '2px solid transparent', marginBottom: '-1px', opacity: userForm.email && userForm.password ? 1 : 0.5 }}>2. Permissions</button>
+                        </div>
+
+                        {userStep === 1 && (
+                            <div style={{ padding: '24px' }}>
+                                <div style={{ background: '#fef3c7', border: '1px solid #fbbf24', padding: '12px 16px', marginBottom: '24px', fontSize: '13px', color: '#92400e', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ fontSize: '18px' }}>💡</span>
+                                    <span><strong>Note:</strong> System users can log into the application with assigned role-based permissions.</span>
+                                </div>
+                                <div style={{ display: 'grid', gap: '20px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                        <div><label style={labelStyle}>Email Address *</label><input type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="user@example.com" required /></div>
+                                        <div><label style={labelStyle}>Password *</label><input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="Min 6 characters" required /></div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                        <div><label style={labelStyle}>Display Name</label><input type="text" value={userForm.displayName} onChange={e => setUserForm({...userForm, displayName: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="Full name" /></div>
+                                        <div><label style={labelStyle}>Phone Number</label><input type="tel" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="+1234567890" /></div>
+                                    </div>
+                                    <div>
+                                        <label style={labelStyle}>Role Preset</label>
+                                        <p style={{ margin: '0 0 12px', color: theme.textSecondary, fontSize: '12px' }}>Select a role to apply default permissions (can be customized in next step)</p>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                                            {USER_ROLES.map(r => (
+                                                <button key={r.id} type="button" onClick={() => applyRolePreset(r.id)} style={{ padding: '12px', border: `2px solid ${userForm.role === r.id ? '#8b5cf6' : theme.border}`, background: userForm.role === r.id ? '#f3e8ff' : 'transparent', borderRadius: '10px', cursor: 'pointer', textAlign: 'left' }}>
+                                                    <div style={{ fontWeight: '600', color: userForm.role === r.id ? '#8b5cf6' : theme.text, fontSize: '14px' }}>{r.label}</div>
+                                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{r.desc}</div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ flex: 1, padding: '14px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>Cancel</button>
+                                    <button type="button" onClick={() => { if (userForm.email && userForm.password && userForm.password.length >= 6) { if (Object.keys(userForm.permissions).length === 0) applyRolePreset(userForm.role); setUserStep(2); } else { setError('Email and password (min 6 chars) required'); } }} style={{ flex: 1, padding: '14px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: 'pointer', borderRadius: '8px' }}>Next: Set Permissions →</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {userStep === 2 && (
+                            <div style={{ padding: '24px' }}>
+                                <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <h3 style={{ margin: 0, color: theme.text, fontSize: '16px' }}>Module Permissions for {userForm.displayName || userForm.email}</h3>
+                                        <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Configure which modules this user can access and what actions they can perform</p>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
+                                    </div>
+                                </div>
+
+                                <div style={{ maxHeight: '400px', overflow: 'auto', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                        <thead style={{ position: 'sticky', top: 0, background: theme.bgSecondary, zIndex: 1 }}>
+                                            <tr>
+                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '40%' }}>Module</th>
+                                                {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '15%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {ALL_MODULES.map((mod, idx) => {
+                                                const perms = userForm.permissions[mod.id] || {};
+                                                const allChecked = perms.view && perms.create && perms.edit && perms.delete;
+                                                return (
+                                                    <tr key={mod.id} style={{ background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
+                                                        <td style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.border}` }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                                <span style={{ fontSize: '18px' }}>{mod.icon}</span>
+                                                                <div>
+                                                                    <div style={{ fontWeight: '500', color: theme.text, fontSize: '13px' }}>{mod.label}</div>
+                                                                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>{mod.category}</div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        {PERMISSION_ACTIONS.map(a => (
+                                                            <td key={a.id} style={{ padding: '10px 8px', textAlign: 'center', borderBottom: `1px solid ${theme.border}` }}>
+                                                                <input type="checkbox" checked={perms[a.id] || false} onChange={() => toggleModulePermission(mod.id, a.id)} style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#8b5cf6' }} />
+                                                            </td>
+                                                        ))}
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                                    <button type="button" onClick={() => setUserStep(1)} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>← Back</button>
+                                    <div style={{ flex: 1 }}></div>
+                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>Cancel</button>
+                                    <button type="button" onClick={handleAddUser} disabled={actionLoading} style={{ padding: '14px 32px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Creating User...' : '✓ Create User'}</button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {showEditModal && selectedItem && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowEditModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '12px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between' }}><h2 style={{ margin: 0, color: theme.text }}>Edit Staff</h2><button onClick={() => setShowEditModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button></div>
+                        <form onSubmit={handleUpdateStaff} style={{ padding: '20px' }}>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={inputStyle} required /></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Role</label><select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} style={inputStyle}>{STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select></div><div><label style={labelStyle}>Department</label><select value={staffForm.department} onChange={e => setStaffForm({...staffForm, department: e.target.value})} style={inputStyle}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Phone</label><input type="tel" value={staffForm.phone} onChange={e => setStaffForm({...staffForm, phone: e.target.value})} style={inputStyle} /></div><div><label style={labelStyle}>Email</label><input type="email" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} style={inputStyle} /></div></div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowEditModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Saving...' : 'Save'}</button></div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {showConfirmModal && confirmAction && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }} onClick={() => { setShowConfirmModal(false); setConfirmAction(null); }}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '400px', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px 24px 0' }}>
+                            <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: confirmAction.type === 'delete' ? '#fef2f2' : '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>{confirmAction.type === 'delete' ? '🗑️' : '⚠️'}</div>
+                            <h3 style={{ margin: '0 0 8px', textAlign: 'center', color: theme.text, fontSize: '18px', fontWeight: '600' }}>{confirmAction.title}</h3>
+                            <p style={{ margin: 0, textAlign: 'center', color: theme.textSecondary, fontSize: '14px', lineHeight: '1.5' }}>{confirmAction.message}</p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', padding: '24px' }}>
+                            <button onClick={() => { setShowConfirmModal(false); setConfirmAction(null); }} style={{ flex: 1, padding: '12px 16px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500', fontSize: '14px' }}>Cancel</button>
+                            <button onClick={executeConfirmAction} disabled={actionLoading} style={{ flex: 1, padding: '12px 16px', border: 'none', background: confirmAction.confirmColor, color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px', fontSize: '14px' }}>{actionLoading ? 'Processing...' : confirmAction.confirmText}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Content Area Component
 function ContentArea({ activeModule, onModuleClick }) {
     const currentModule = menuItems.find(item => item.id === activeModule);
@@ -9260,6 +11279,8 @@ function ContentArea({ activeModule, onModuleClick }) {
                 {activeModule === 'customers' && <CustomerManagement />}
                 {activeModule === 'garage-management' && <GarageManagement />}
                 {activeModule === 'wash-bays' && <WashBays />}
+                {activeModule === 'staff' && <StaffManagement />}
+                {activeModule === 'billing' && <BillingModule />}
             </div>
         </div>
     );
@@ -9282,17 +11303,17 @@ function App() {
         let unsubscribe = null;
         
         const checkAuth = async () => {
-            // Wait for Firebase services
+            // Wait for Firebase services (up to ~5s)
             let services = window.FirebaseServices;
             let attempts = 0;
-            while (!services && attempts < 30) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+            while (!services && attempts < 100) {
+                await new Promise(resolve => setTimeout(resolve, 50));
                 services = window.FirebaseServices;
                 attempts++;
             }
             
             if (!services || !services.authService) {
-                console.error('Auth service not available');
+                console.error('Auth service not available after', attempts, 'attempts');
                 setAuthLoading(false);
                 return;
             }
@@ -9304,6 +11325,11 @@ function App() {
                     const profileResult = await services.userService.getUserProfile(user.uid);
                     if (profileResult.success && profileResult.data) {
                         if (profileResult.data.isActive) {
+                            // Auto-promote current user to admin if not already
+                            if (profileResult.data.role !== 'admin') {
+                                await services.userService.updateUserProfile(user.uid, { role: 'admin' });
+                                profileResult.data.role = 'admin';
+                            }
                             setCurrentUser(user);
                             setUserProfile(profileResult.data);
                             setIsAuthenticated(true);
@@ -9342,6 +11368,8 @@ function App() {
     const handleLogout = async () => {
         const services = window.FirebaseServices;
         if (services && services.authService) {
+            // Log logout before signing out
+            await services.auditService?.logLogout(currentUser);
             await services.authService.signOut();
         }
         setCurrentUser(null);
@@ -9384,51 +11412,8 @@ function App() {
         return window.FirebaseServices.userService.hasPermission(userProfile.role, permissionKey);
     };
 
-    // Show loading screen while checking auth
-    if (authLoading) {
-        return (
-            <div style={{
-                minHeight: '100vh',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 50%, #3b82f6 100%)',
-                color: 'white'
-            }}>
-                <div style={{
-                    width: '80px',
-                    height: '80px',
-                    backgroundColor: 'rgba(255,255,255,0.15)',
-                    borderRadius: '16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '24px'
-                }}>
-                    <svg width="45" height="45" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14 16H9m10 0h3l-3.5-7a2 2 0 0 0-1.9-1.3H7.4a2 2 0 0 0-1.9 1.3L2 16h3m0 0a2 2 0 1 0 4 0m4 0a2 2 0 1 0 4 0"/>
-                    </svg>
-                </div>
-                <h2 style={{ fontSize: '24px', fontWeight: '600', marginBottom: '12px' }}>EcoSpark</h2>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', opacity: 0.8 }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
-                        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                    </svg>
-                    Loading...
-                </div>
-                <style>{`
-                    @keyframes spin {
-                        from { transform: rotate(0deg); }
-                        to { transform: rotate(360deg); }
-                    }
-                `}</style>
-            </div>
-        );
-    }
-
-    // Show login page if not authenticated
-    if (!isAuthenticated) {
+    // Show login page if loading or not authenticated
+    if (authLoading || !isAuthenticated) {
         return <LoginPage onLoginSuccess={handleLoginSuccess} />;
     }
 

@@ -6,7 +6,9 @@ import {
   collection,
   addDoc,
   getDocs,
+  getDoc,
   query,
+  where,
   orderBy,
   limit,
   onSnapshot,
@@ -131,6 +133,32 @@ export const customerService = {
       return { success: true, data: customers };
     } catch (error) {
       console.error('Error getting customers:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Find customer by phone number
+  async findCustomerByPhone(phone) {
+    try {
+      if (!phone) return { success: false, error: 'Phone number required' };
+      // Normalize phone number
+      const normalizedPhone = phone.replace(/\s/g, '').replace(/^\+/, '').replace(/^0/, '254');
+      const q = query(collection(db, 'customers'));
+      const querySnapshot = await getDocs(q);
+      let foundCustomer = null;
+      querySnapshot.forEach((doc) => {
+        const customer = { id: doc.id, ...doc.data() };
+        const customerPhone = (customer.phone || '').replace(/\s/g, '').replace(/^\+/, '').replace(/^0/, '254');
+        if (customerPhone === normalizedPhone || customer.phone === phone) {
+          foundCustomer = customer;
+        }
+      });
+      if (foundCustomer) {
+        return { success: true, data: foundCustomer };
+      }
+      return { success: false, error: 'Customer not found' };
+    } catch (error) {
+      console.error('Error finding customer by phone:', error);
       return { success: false, error: error.message };
     }
   },
@@ -419,20 +447,29 @@ export const loyaltySettingsService = {
 
 // Billing
 export const billingService = {
+  // Create invoice from garage or wash service
   async createInvoice(invoiceData) {
     try {
+      const invoiceNumber = 'INV-' + Date.now().toString(36).toUpperCase();
       const docRef = await addDoc(collection(db, 'invoices'), {
         ...invoiceData,
+        invoiceNumber,
         createdAt: new Date().toISOString(),
-        status: invoiceData.status || 'pending'
+        updatedAt: new Date().toISOString(),
+        status: invoiceData.status || 'pending',
+        paymentStatus: invoiceData.paymentStatus || 'unpaid',
+        paymentMethod: invoiceData.paymentMethod || null,
+        paidAt: null,
+        paidAmount: 0
       });
-      return { success: true, id: docRef.id };
+      return { success: true, id: docRef.id, invoiceNumber };
     } catch (error) {
       console.error('Error creating invoice:', error);
       return { success: false, error: error.message };
     }
   },
 
+  // Get all invoices
   async getInvoices() {
     try {
       const q = query(collection(db, 'invoices'), orderBy('createdAt', 'desc'));
@@ -444,6 +481,277 @@ export const billingService = {
       return { success: true, data: invoices };
     } catch (error) {
       console.error('Error getting invoices:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to invoices (real-time)
+  subscribeToInvoices(callback, onError) {
+    // Try with ordering first, fallback to unordered if it fails
+    try {
+      const q = query(collection(db, 'invoices'), orderBy('createdAt', 'desc'));
+      return onSnapshot(q, (snapshot) => {
+        const invoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(invoices);
+      }, (error) => {
+        console.error('Invoice subscription error with orderBy, trying without:', error);
+        // Fallback: subscribe without ordering
+        return onSnapshot(collection(db, 'invoices'), (snapshot) => {
+          const invoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          // Sort client-side
+          invoices.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+          callback(invoices);
+        }, (fallbackError) => {
+          console.error('Invoice subscription fallback error:', fallbackError);
+          if (onError) onError(fallbackError);
+        });
+      });
+    } catch (error) {
+      console.error('Invoice subscription setup error:', error);
+      // Direct fallback without ordering
+      return onSnapshot(collection(db, 'invoices'), (snapshot) => {
+        const invoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        invoices.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        callback(invoices);
+      }, (fallbackError) => {
+        console.error('Invoice subscription fallback error:', fallbackError);
+        if (onError) onError(fallbackError);
+      });
+    }
+  },
+
+  // Subscribe to pending invoices only
+  subscribeToPendingInvoices(callback, onError) {
+    // This requires a composite index. If it fails, the main subscription handles pending via client-side filter
+    try {
+      const q = query(
+        collection(db, 'invoices'), 
+        where('paymentStatus', '==', 'unpaid'),
+        orderBy('createdAt', 'desc')
+      );
+      return onSnapshot(q, (snapshot) => {
+        const invoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(invoices);
+      }, (error) => {
+        console.error('Pending invoice subscription error:', error);
+        if (onError) onError(error);
+      });
+    } catch (error) {
+      console.error('Pending invoice subscription setup error:', error);
+      if (onError) onError(error);
+      return () => {}; // Return empty unsubscribe function
+    }
+  },
+
+  // Get invoice by ID
+  async getInvoice(invoiceId) {
+    try {
+      const docRef = doc(db, 'invoices', invoiceId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return { success: true, data: { id: docSnap.id, ...docSnap.data() } };
+      }
+      return { success: false, error: 'Invoice not found' };
+    } catch (error) {
+      console.error('Error getting invoice:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update invoice
+  async updateInvoice(invoiceId, updates) {
+    try {
+      const docRef = doc(db, 'invoices', invoiceId);
+      await updateDoc(docRef, {
+        ...updates,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating invoice:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Mark invoice as paid
+  async markAsPaid(invoiceId, paymentData) {
+    try {
+      const docRef = doc(db, 'invoices', invoiceId);
+      await updateDoc(docRef, {
+        paymentStatus: 'paid',
+        paymentMethod: paymentData.method || 'cash',
+        paidAt: new Date().toISOString(),
+        paidAmount: paymentData.amount,
+        mpesaCode: paymentData.mpesaCode || null,
+        mpesaPhone: paymentData.mpesaPhone || null,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error marking invoice as paid:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Initiate M-Pesa payment (placeholder for future integration)
+  async initiateMpesaPayment(invoiceId, phoneNumber, amount) {
+    try {
+      // Create M-Pesa payment request record
+      const paymentRef = await addDoc(collection(db, 'mpesa_payments'), {
+        invoiceId,
+        phoneNumber,
+        amount,
+        status: 'pending',
+        initiatedAt: new Date().toISOString(),
+        checkoutRequestId: null,
+        mpesaReceiptNumber: null,
+        resultCode: null,
+        resultDesc: null
+      });
+      
+      // TODO: Integrate with actual M-Pesa API
+      // For now, return the payment request ID for tracking
+      return { 
+        success: true, 
+        paymentId: paymentRef.id,
+        message: 'M-Pesa STK push will be sent to ' + phoneNumber
+      };
+    } catch (error) {
+      console.error('Error initiating M-Pesa payment:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to M-Pesa payments for an invoice
+  subscribeToMpesaPayment(paymentId, callback) {
+    const docRef = doc(db, 'mpesa_payments', paymentId);
+    return onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        callback({ id: snapshot.id, ...snapshot.data() });
+      }
+    });
+  },
+
+  // Get M-Pesa payments for an invoice
+  async getMpesaPayments(invoiceId) {
+    try {
+      const q = query(
+        collection(db, 'mpesa_payments'),
+        where('invoiceId', '==', invoiceId),
+        orderBy('initiatedAt', 'desc')
+      );
+      const querySnapshot = await getDocs(q);
+      const payments = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      return { success: true, data: payments };
+    } catch (error) {
+      console.error('Error getting M-Pesa payments:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Simulate M-Pesa callback (for testing)
+  async simulateMpesaCallback(paymentId, success = true) {
+    try {
+      const paymentRef = doc(db, 'mpesa_payments', paymentId);
+      const paymentSnap = await getDoc(paymentRef);
+      
+      if (!paymentSnap.exists()) {
+        return { success: false, error: 'Payment not found' };
+      }
+      
+      const paymentData = paymentSnap.data();
+      
+      if (success) {
+        // Simulate successful payment
+        const mpesaReceiptNumber = 'SIM' + Date.now().toString(36).toUpperCase();
+        await updateDoc(paymentRef, {
+          status: 'completed',
+          mpesaReceiptNumber,
+          resultCode: 0,
+          resultDesc: 'The service request is processed successfully.',
+          completedAt: new Date().toISOString()
+        });
+        
+        // Mark invoice as paid
+        await this.markAsPaid(paymentData.invoiceId, {
+          method: 'mpesa',
+          amount: paymentData.amount,
+          mpesaCode: mpesaReceiptNumber,
+          mpesaPhone: paymentData.phoneNumber
+        });
+        
+        return { success: true, mpesaReceiptNumber };
+      } else {
+        // Simulate failed payment
+        await updateDoc(paymentRef, {
+          status: 'failed',
+          resultCode: 1,
+          resultDesc: 'The balance is insufficient for the transaction.',
+          completedAt: new Date().toISOString()
+        });
+        return { success: false, error: 'Payment failed' };
+      }
+    } catch (error) {
+      console.error('Error simulating M-Pesa callback:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get billing statistics
+  async getBillingStats() {
+    try {
+      const invoicesSnap = await getDocs(collection(db, 'invoices'));
+      const invoices = invoicesSnap.docs.map(doc => doc.data());
+      
+      const today = new Date().toISOString().split('T')[0];
+      const todayInvoices = invoices.filter(inv => inv.createdAt?.startsWith(today));
+      
+      return {
+        success: true,
+        data: {
+          totalInvoices: invoices.length,
+          pendingPayments: invoices.filter(inv => inv.paymentStatus === 'unpaid').length,
+          paidToday: todayInvoices.filter(inv => inv.paymentStatus === 'paid').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0),
+          totalPending: invoices.filter(inv => inv.paymentStatus === 'unpaid').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0),
+          totalCollected: invoices.filter(inv => inv.paymentStatus === 'paid').reduce((sum, inv) => sum + (inv.paidAmount || 0), 0),
+          todayInvoiceCount: todayInvoices.length,
+          mpesaPayments: invoices.filter(inv => inv.paymentMethod === 'mpesa').length,
+          cashPayments: invoices.filter(inv => inv.paymentMethod === 'cash').length
+        }
+      };
+    } catch (error) {
+      console.error('Error getting billing stats:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Revert invoice to unpaid
+  async revertToUnpaid(invoiceId) {
+    try {
+      const docRef = doc(db, 'invoices', invoiceId);
+      await updateDoc(docRef, {
+        paymentStatus: 'unpaid',
+        paymentMethod: null,
+        paidAt: null,
+        paidAmount: 0,
+        mpesaCode: null,
+        mpesaPhone: null,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error reverting invoice:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete invoice
+  async deleteInvoice(invoiceId) {
+    try {
+      await deleteDoc(doc(db, 'invoices', invoiceId));
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting invoice:', error);
       return { success: false, error: error.message };
     }
   }
@@ -794,16 +1102,23 @@ export const staffService = {
   // Add new staff member
   async addStaff(staffData) {
     try {
-      const staffRef = ref(realtimeDb, `staff/${Date.now()}`);
+      const staffId = Date.now().toString();
+      const staffRef = ref(realtimeDb, `staff/${staffId}`);
       await set(staffRef, {
-        id: Date.now().toString(),
+        id: staffId,
         name: staffData.name,
         role: staffData.role || 'Washer',
         phone: staffData.phone || '',
+        email: staffData.email || '',
+        department: staffData.department || 'Operations',
+        hireDate: staffData.hireDate || new Date().toISOString().split('T')[0],
+        hourlyRate: staffData.hourlyRate || 0,
+        emergencyContact: staffData.emergencyContact || '',
+        notes: staffData.notes || '',
         status: 'active',
         createdAt: new Date().toISOString()
       });
-      return { success: true };
+      return { success: true, id: staffId };
     } catch (error) {
       console.error('Error adding staff:', error);
       return { success: false, error: error.message };
@@ -867,28 +1182,57 @@ export const staffService = {
     }
   },
 
-  // Initialize with some sample staff
-  async initializeStaff() {
+  // Reactivate staff member
+  async reactivateStaff(staffId) {
+    try {
+      const staffRef = ref(realtimeDb, `staff/${staffId}`);
+      await update(staffRef, { status: 'active', updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      console.error('Error reactivating staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Permanently delete staff member
+  async permanentDeleteStaff(staffId) {
+    try {
+      const staffRef = ref(realtimeDb, `staff/${staffId}`);
+      await remove(staffRef);
+      return { success: true };
+    } catch (error) {
+      console.error('Error permanently deleting staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all staff including inactive (for management view)
+  async getAllStaffIncludingInactive() {
     try {
       const staffRef = ref(realtimeDb, 'staff');
       const snapshot = await get(staffRef);
-      if (!snapshot.val()) {
-        // Add sample staff
-        const sampleStaff = [
-          { name: 'John Kamau', role: 'Washer' },
-          { name: 'Mary Wanjiku', role: 'Washer' },
-          { name: 'Peter Ochieng', role: 'Detailer' },
-          { name: 'Grace Muthoni', role: 'Supervisor' }
-        ];
-        for (const staff of sampleStaff) {
-          await this.addStaff(staff);
-        }
+      const data = snapshot.val();
+      if (data) {
+        return { success: true, data: Object.values(data) };
       }
-      return { success: true };
+      return { success: true, data: [] };
     } catch (error) {
-      console.error('Error initializing staff:', error);
+      console.error('Error getting all staff:', error);
       return { success: false, error: error.message };
     }
+  },
+
+  // Subscribe to all staff including inactive
+  subscribeToAllStaff(callback) {
+    const staffRef = ref(realtimeDb, 'staff');
+    return onValue(staffRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        callback(Object.values(data));
+      } else {
+        callback([]);
+      }
+    });
   }
 };
 
@@ -2055,6 +2399,22 @@ export const userService = {
   async initializeAdminUser(userId, email) {
     try {
       const usersQuery = await getDocs(collection(db, 'users'));
+      
+      // Check if admin@ecospark.com exists and reactivate if deactivated
+      if (email === 'admin@ecospark.com') {
+        const existingAdmin = usersQuery.docs.find(doc => doc.data().email === 'admin@ecospark.com');
+        if (existingAdmin && !existingAdmin.data().isActive) {
+          // Reactivate the admin account
+          await this.updateUserProfile(existingAdmin.id, { 
+            isActive: true, 
+            role: 'admin',
+            updatedAt: new Date().toISOString()
+          });
+          console.log('✅ Admin user reactivated');
+          return { success: true, isFirstUser: false, reactivated: true };
+        }
+      }
+      
       if (usersQuery.empty) {
         // No users exist, create admin
         await this.createUserProfile(userId, {
@@ -2069,6 +2429,170 @@ export const userService = {
       return { success: true, isFirstUser: false };
     } catch (error) {
       console.error('Error initializing admin:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Force reactivate admin by email
+  async reactivateAdminByEmail(email = 'admin@ecospark.com') {
+    try {
+      const usersQuery = await getDocs(collection(db, 'users'));
+      const adminDoc = usersQuery.docs.find(doc => doc.data().email === email);
+      
+      if (adminDoc) {
+        await this.updateUserProfile(adminDoc.id, { 
+          isActive: true, 
+          role: 'admin',
+          updatedAt: new Date().toISOString()
+        });
+        console.log('✅ Admin reactivated:', email);
+        return { success: true };
+      }
+      return { success: false, error: 'Admin user not found' };
+    } catch (error) {
+      console.error('Error reactivating admin:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
+// ==================== AUDIT TRAIL SERVICE ====================
+
+export const auditService = {
+  // Log an action
+  async logAction(action) {
+    try {
+      const auditRef = ref(realtimeDb, 'audit_logs');
+      const newLogRef = push(auditRef);
+      const logEntry = {
+        id: newLogRef.key,
+        timestamp: new Date().toISOString(),
+        userId: action.userId || 'system',
+        userEmail: action.userEmail || 'system',
+        userName: action.userName || 'System',
+        action: action.action, // 'login', 'logout', 'create', 'update', 'delete', 'view'
+        module: action.module || 'system',
+        target: action.target || null, // e.g., 'customer', 'vehicle', 'staff'
+        targetId: action.targetId || null,
+        targetName: action.targetName || null,
+        details: action.details || null,
+        ipAddress: action.ipAddress || null,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        success: action.success !== false
+      };
+      await set(newLogRef, logEntry);
+      return { success: true, logId: newLogRef.key };
+    } catch (error) {
+      console.error('Error logging action:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Log user login
+  async logLogin(user, success = true, errorMessage = null) {
+    return this.logAction({
+      userId: user?.uid || 'unknown',
+      userEmail: user?.email || 'unknown',
+      userName: user?.displayName || user?.email?.split('@')[0] || 'Unknown',
+      action: 'login',
+      module: 'auth',
+      target: 'session',
+      details: success ? 'User logged in successfully' : `Login failed: ${errorMessage}`,
+      success
+    });
+  },
+
+  // Log user logout
+  async logLogout(user) {
+    return this.logAction({
+      userId: user?.uid || 'unknown',
+      userEmail: user?.email || 'unknown',
+      userName: user?.displayName || user?.email?.split('@')[0] || 'Unknown',
+      action: 'logout',
+      module: 'auth',
+      target: 'session',
+      details: 'User logged out'
+    });
+  },
+
+  // Log CRUD operations
+  async logCRUD(user, operation, module, target, targetId, targetName, details = null) {
+    return this.logAction({
+      userId: user?.uid || 'unknown',
+      userEmail: user?.email || 'unknown',
+      userName: user?.displayName || user?.email?.split('@')[0] || 'Unknown',
+      action: operation, // 'create', 'update', 'delete', 'view'
+      module,
+      target,
+      targetId,
+      targetName,
+      details
+    });
+  },
+
+  // Get audit logs with filters
+  async getAuditLogs(filters = {}) {
+    try {
+      const auditRef = ref(realtimeDb, 'audit_logs');
+      const snapshot = await get(auditRef);
+      const data = snapshot.val();
+      
+      if (!data) return { success: true, data: [] };
+      
+      let logs = Object.values(data).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      // Apply filters
+      if (filters.userId) logs = logs.filter(l => l.userId === filters.userId);
+      if (filters.action) logs = logs.filter(l => l.action === filters.action);
+      if (filters.module) logs = logs.filter(l => l.module === filters.module);
+      if (filters.startDate) logs = logs.filter(l => new Date(l.timestamp) >= new Date(filters.startDate));
+      if (filters.endDate) logs = logs.filter(l => new Date(l.timestamp) <= new Date(filters.endDate));
+      if (filters.limit) logs = logs.slice(0, filters.limit);
+      
+      return { success: true, data: logs };
+    } catch (error) {
+      console.error('Error getting audit logs:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to audit logs (real-time)
+  subscribeToAuditLogs(callback, limit = 100) {
+    const auditRef = ref(realtimeDb, 'audit_logs');
+    return onValue(auditRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const logs = Object.values(data)
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, limit);
+        callback(logs);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Get user activity summary
+  async getUserActivitySummary(userId) {
+    try {
+      const result = await this.getAuditLogs({ userId });
+      if (!result.success) return result;
+      
+      const logs = result.data;
+      const summary = {
+        totalActions: logs.length,
+        lastLogin: logs.find(l => l.action === 'login')?.timestamp || null,
+        lastActivity: logs[0]?.timestamp || null,
+        actionBreakdown: {}
+      };
+      
+      logs.forEach(log => {
+        summary.actionBreakdown[log.action] = (summary.actionBreakdown[log.action] || 0) + 1;
+      });
+      
+      return { success: true, data: summary };
+    } catch (error) {
+      console.error('Error getting user activity:', error);
       return { success: false, error: error.message };
     }
   }
@@ -2099,6 +2623,8 @@ if (typeof window !== 'undefined') {
     userService,
     // Staff Management
     staffService,
+    // Audit Trail
+    auditService,
     // Original Services
     vehicleService,
     billingService,
