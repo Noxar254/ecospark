@@ -542,8 +542,81 @@ export const realtimeStatsService = {
   }
 };
 
-// Wash Bay status (real-time)
+// ==================== WASH BAY SERVICE (REAL-TIME) ====================
+
 export const washBayService = {
+  // Initialize default bays if none exist
+  async initializeBays() {
+    try {
+      const baysRef = ref(realtimeDb, 'washBays');
+      const snapshot = await get(baysRef);
+      
+      if (!snapshot.exists()) {
+        const defaultBays = {
+          bay1: { id: 'bay1', name: 'Bay 1', status: 'available', type: 'standard', currentVehicle: null, startTime: null },
+          bay2: { id: 'bay2', name: 'Bay 2', status: 'available', type: 'standard', currentVehicle: null, startTime: null },
+          bay3: { id: 'bay3', name: 'Bay 3', status: 'available', type: 'premium', currentVehicle: null, startTime: null },
+          bay4: { id: 'bay4', name: 'Bay 4', status: 'available', type: 'express', currentVehicle: null, startTime: null }
+        };
+        await set(baysRef, defaultBays);
+        return { success: true, initialized: true };
+      }
+      return { success: true, initialized: false };
+    } catch (error) {
+      console.error('Error initializing bays:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add a new bay
+  async addBay(bayData) {
+    try {
+      const bayId = `bay${Date.now()}`;
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await set(bayRef, {
+        id: bayId,
+        name: bayData.name,
+        type: bayData.type || 'standard',
+        status: 'available',
+        currentVehicle: null,
+        startTime: null,
+        createdAt: new Date().toISOString()
+      });
+      return { success: true, id: bayId };
+    } catch (error) {
+      console.error('Error adding bay:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update bay details
+  async updateBay(bayId, updates) {
+    try {
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await update(bayRef, {
+        ...updates,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating bay:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete a bay
+  async deleteBay(bayId) {
+    try {
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await remove(bayRef);
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting bay:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update bay status
   async updateBayStatus(bayId, status) {
     try {
       const bayRef = ref(realtimeDb, `washBays/${bayId}`);
@@ -558,12 +631,264 @@ export const washBayService = {
     }
   },
 
-  subscribeToBayStatus(callback) {
+  // Assign vehicle to bay
+  async assignVehicle(bayId, vehicleData) {
+    try {
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await update(bayRef, {
+        status: 'occupied',
+        currentVehicle: {
+          plateNumber: vehicleData.plateNumber,
+          customerName: vehicleData.customerName || '',
+          vehicleType: vehicleData.vehicleType || '',
+          service: vehicleData.service || 'Basic Wash',
+          assignedBy: vehicleData.assignedBy || ''
+        },
+        startTime: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
+      });
+      
+      // Note: History is logged only on completion (includes start time, end time, duration)
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error assigning vehicle:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Complete wash and release bay
+  async completeWash(bayId, completionData = {}) {
+    try {
+      // Get current bay data first
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      const snapshot = await get(bayRef);
+      const bayData = snapshot.val();
+      
+      if (bayData?.currentVehicle) {
+        // Log completion to history
+        const historyRef = ref(realtimeDb, `washHistory/${Date.now()}`);
+        await set(historyRef, {
+          bayId,
+          bayName: bayData.name,
+          action: 'completed',
+          vehicle: bayData.currentVehicle,
+          startTime: bayData.startTime,
+          endTime: new Date().toISOString(),
+          duration: bayData.startTime ? Math.round((Date.now() - new Date(bayData.startTime).getTime()) / 60000) : 0,
+          notes: completionData.notes || '',
+          completedBy: completionData.completedBy || '',
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Clear the bay
+      await update(bayRef, {
+        status: 'available',
+        currentVehicle: null,
+        startTime: null,
+        lastUpdated: new Date().toISOString()
+      });
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error completing wash:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Set bay to maintenance mode
+  async setMaintenance(bayId, maintenanceData = {}) {
+    try {
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await update(bayRef, {
+        status: 'maintenance',
+        currentVehicle: null,
+        startTime: null,
+        maintenanceNote: maintenanceData.note || '',
+        maintenanceBy: maintenanceData.by || '',
+        lastUpdated: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error setting maintenance:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to all bays (real-time)
+  subscribeToBays(callback) {
     const baysRef = ref(realtimeDb, 'washBays');
     return onValue(baysRef, (snapshot) => {
       const data = snapshot.val();
-      callback(data || {});
+      if (data) {
+        // Convert object to array
+        const baysArray = Object.values(data);
+        callback(baysArray);
+      } else {
+        callback([]);
+      }
     });
+  },
+
+  // Subscribe to wash history (real-time)
+  subscribeToHistory(callback, limitCount = 50) {
+    const historyRef = ref(realtimeDb, 'washHistory');
+    return onValue(historyRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const historyArray = Object.entries(data)
+          .map(([key, value]) => ({ id: key, ...value }))
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, limitCount);
+        callback(historyArray);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Get today's stats
+  async getTodayStats() {
+    try {
+      const historyRef = ref(realtimeDb, 'washHistory');
+      const snapshot = await get(historyRef);
+      const data = snapshot.val();
+      
+      if (!data) return { success: true, data: { completed: 0, totalMinutes: 0 } };
+      
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      let completed = 0;
+      let totalMinutes = 0;
+      
+      Object.values(data).forEach(record => {
+        if (record.action === 'completed') {
+          const recordDate = new Date(record.timestamp);
+          recordDate.setHours(0, 0, 0, 0);
+          if (recordDate.getTime() === today.getTime()) {
+            completed++;
+            totalMinutes += record.duration || 0;
+          }
+        }
+      });
+      
+      return { 
+        success: true, 
+        data: { 
+          completed, 
+          totalMinutes,
+          avgTime: completed > 0 ? Math.round(totalMinutes / completed) : 0
+        } 
+      };
+    } catch (error) {
+      console.error('Error getting today stats:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
+// ==================== STAFF SERVICE ====================
+export const staffService = {
+  // Add new staff member
+  async addStaff(staffData) {
+    try {
+      const staffRef = ref(realtimeDb, `staff/${Date.now()}`);
+      await set(staffRef, {
+        id: Date.now().toString(),
+        name: staffData.name,
+        role: staffData.role || 'Washer',
+        phone: staffData.phone || '',
+        status: 'active',
+        createdAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error adding staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all staff members
+  async getStaff() {
+    try {
+      const staffRef = ref(realtimeDb, 'staff');
+      const snapshot = await get(staffRef);
+      const data = snapshot.val();
+      if (data) {
+        return { success: true, data: Object.values(data) };
+      }
+      return { success: true, data: [] };
+    } catch (error) {
+      console.error('Error getting staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to staff (real-time)
+  subscribeToStaff(callback) {
+    const staffRef = ref(realtimeDb, 'staff');
+    return onValue(staffRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const staffArray = Object.values(data).filter(s => s.status === 'active');
+        callback(staffArray);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Update staff member
+  async updateStaff(staffId, updateData) {
+    try {
+      const staffRef = ref(realtimeDb, `staff/${staffId}`);
+      await update(staffRef, {
+        ...updateData,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete (deactivate) staff member
+  async deleteStaff(staffId) {
+    try {
+      const staffRef = ref(realtimeDb, `staff/${staffId}`);
+      await update(staffRef, { status: 'inactive' });
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting staff:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Initialize with some sample staff
+  async initializeStaff() {
+    try {
+      const staffRef = ref(realtimeDb, 'staff');
+      const snapshot = await get(staffRef);
+      if (!snapshot.val()) {
+        // Add sample staff
+        const sampleStaff = [
+          { name: 'John Kamau', role: 'Washer' },
+          { name: 'Mary Wanjiku', role: 'Washer' },
+          { name: 'Peter Ochieng', role: 'Detailer' },
+          { name: 'Grace Muthoni', role: 'Supervisor' }
+        ];
+        for (const staff of sampleStaff) {
+          await this.addStaff(staff);
+        }
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error initializing staff:', error);
+      return { success: false, error: error.message };
+    }
   }
 };
 
@@ -1772,6 +2097,8 @@ if (typeof window !== 'undefined') {
     garageServicesService,
     // User & Permissions
     userService,
+    // Staff Management
+    staffService,
     // Original Services
     vehicleService,
     billingService,

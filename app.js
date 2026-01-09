@@ -7238,6 +7238,1653 @@ function GarageManagement() {
     );
 }
 
+// ==================== WASH BAYS MODULE ====================
+function WashBays() {
+    const [bays, setBays] = useState([]);
+    const [history, setHistory] = useState([]);
+    const [intakeQueue, setIntakeQueue] = useState([]);
+    const [staffList, setStaffList] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [showAssignModal, setShowAssignModal] = useState(false);
+    const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
+    const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [confirmAction, setConfirmAction] = useState(null);
+    const [maintenanceNote, setMaintenanceNote] = useState('');
+    const [selectedBay, setSelectedBay] = useState(null);
+    const [actionLoading, setActionLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [activeTab, setActiveTab] = useState('bays');
+    const [todayStats, setTodayStats] = useState({ completed: 0, avgTime: 0 });
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    const [assignMode, setAssignMode] = useState('select'); // 'select' or 'new'
+    const [selectedVehicleId, setSelectedVehicleId] = useState('');
+
+    // Form states
+    const [bayForm, setBayForm] = useState({ name: '', type: 'standard' });
+    const [assignForm, setAssignForm] = useState({ 
+        plateNumber: '', 
+        customerName: '', 
+        vehicleType: 'sedan', 
+        service: 'Basic Wash',
+        assignedTo: ''
+    });
+
+    // Auto-hide success message
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    // Theme detection
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        cardShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
+        inputBg: isDark ? '#1e293b' : 'white',
+    };
+
+    const BAY_TYPES = [
+        { id: 'standard', name: 'Standard', color: '#3b82f6' },
+        { id: 'premium', name: 'Premium', color: '#8b5cf6' },
+        { id: 'express', name: 'Express', color: '#10b981' }
+    ];
+
+    const VEHICLE_TYPES = ['Sedan', 'SUV', 'Truck', 'Van', 'Motorcycle', 'Bus'];
+    const SERVICES = ['Basic Wash', 'Full Service', 'Premium Detail', 'Express Wash', 'Interior Only', 'Exterior Only'];
+
+    const STATUS_CONFIG = {
+        available: { label: 'Available', color: '#10b981', bg: '#d1fae5' },
+        occupied: { label: 'In Progress', color: '#3b82f6', bg: '#dbeafe' },
+        maintenance: { label: 'Maintenance', color: '#f59e0b', bg: '#fef3c7' }
+    };
+
+    // Subscribe to real-time data
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services?.washBayService) {
+            setLoading(false);
+            return;
+        }
+
+        // Initialize bays if needed
+        services.washBayService.initializeBays();
+
+        // Subscribe to bays
+        const unsubBays = services.washBayService.subscribeToBays((data) => {
+            setBays(data);
+            setLoading(false);
+        });
+
+        // Subscribe to history
+        const unsubHistory = services.washBayService.subscribeToHistory((data) => {
+            setHistory(data);
+        });
+
+        // Subscribe to intake queue (vehicles waiting)
+        let unsubQueue = null;
+        if (services.intakeQueueService) {
+            unsubQueue = services.intakeQueueService.subscribeToQueue((data) => {
+                // Filter only waiting vehicles
+                setIntakeQueue(data.filter(v => v.status === 'waiting'));
+            });
+        }
+
+        // Subscribe to staff list
+        let unsubStaff = null;
+        if (services.staffService) {
+            // Initialize staff if needed
+            services.staffService.initializeStaff();
+            unsubStaff = services.staffService.subscribeToStaff((data) => {
+                setStaffList(data);
+            });
+        }
+
+        // Get today's stats
+        services.washBayService.getTodayStats().then(result => {
+            if (result.success) setTodayStats(result.data);
+        });
+
+        return () => {
+            if (unsubBays) unsubBays();
+            if (unsubHistory) unsubHistory();
+            if (unsubQueue) unsubQueue();
+            if (unsubStaff) unsubStaff();
+        };
+    }, []);
+
+    // Calculate elapsed time for occupied bays
+    const getElapsedTime = (startTime) => {
+        if (!startTime) return '0:00';
+        const elapsed = Math.floor((Date.now() - new Date(startTime).getTime()) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    // Auto-update elapsed times
+    const [, forceUpdate] = useState(0);
+    useEffect(() => {
+        const interval = setInterval(() => forceUpdate(n => n + 1), 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const handleAddBay = async (e) => {
+        e.preventDefault();
+        if (!bayForm.name.trim()) {
+            setError('Bay name is required');
+            return;
+        }
+
+        setActionLoading(true);
+        setError(null);
+
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.washBayService.addBay(bayForm);
+            if (result.success) {
+                setShowAddModal(false);
+                setBayForm({ name: '', type: 'standard' });
+            } else {
+                setError(result.error);
+            }
+        } catch (err) {
+            setError('Failed to add bay');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleAssignVehicle = async (e) => {
+        e.preventDefault();
+        
+        // Validate staff selection
+        if (!assignForm.assignedTo) {
+            setError('Please select a staff member');
+            return;
+        }
+        
+        setActionLoading(true);
+        setError(null);
+
+        try {
+            const services = window.FirebaseServices;
+            let vehicleData;
+            let queueVehicle = null;
+
+            if (assignMode === 'select' && selectedVehicleId) {
+                // Use selected vehicle from queue
+                queueVehicle = intakeQueue.find(v => v.id === selectedVehicleId);
+                if (!queueVehicle) {
+                    setError('Selected vehicle not found');
+                    setActionLoading(false);
+                    return;
+                }
+                vehicleData = {
+                    plateNumber: queueVehicle.plateNumber,
+                    customerName: queueVehicle.customerName || queueVehicle.ownerName || '',
+                    vehicleType: queueVehicle.vehicleType || 'sedan',
+                    service: assignForm.service,
+                    assignedBy: assignForm.assignedTo,
+                    queueId: queueVehicle.id
+                };
+            } else {
+                // Create new vehicle entry
+                if (!assignForm.plateNumber.trim()) {
+                    setError('Plate number is required');
+                    setActionLoading(false);
+                    return;
+                }
+                vehicleData = {
+                    plateNumber: assignForm.plateNumber.toUpperCase(),
+                    customerName: assignForm.customerName,
+                    vehicleType: assignForm.vehicleType,
+                    service: assignForm.service,
+                    assignedBy: assignForm.assignedTo
+                };
+            }
+
+            // 1. Create record in Vehicle Intake Records (Firestore) for tracking
+            let recordId = null;
+            if (services.intakeRecordsService) {
+                const recordData = {
+                    plateNumber: vehicleData.plateNumber,
+                    customerName: vehicleData.customerName,
+                    vehicleType: vehicleData.vehicleType,
+                    service: { name: vehicleData.service },
+                    status: 'in-progress',
+                    assignedBay: selectedBay.name,
+                    assignedBayId: selectedBay.id,
+                    assignedTime: new Date().toISOString(),
+                    timeIn: new Date().toISOString(),
+                    source: assignMode === 'select' ? 'queue' : 'wash-bay-direct',
+                    queueId: vehicleData.queueId || null
+                };
+                const recordResult = await services.intakeRecordsService.addRecord(recordData);
+                if (recordResult.success) {
+                    recordId = recordResult.id;
+                    vehicleData.recordId = recordId;
+                }
+            }
+
+            // 2. If from queue, update queue status to in-progress (or remove it)
+            if (assignMode === 'select' && queueVehicle && services.intakeQueueService) {
+                // Remove from queue since it's now in records
+                await services.intakeQueueService.removeFromQueue(queueVehicle.id);
+            } else if (assignMode === 'new' && services.intakeQueueService) {
+                // For new vehicles, add to queue with in-progress status for tracking
+                const queueResult = await services.intakeQueueService.addToQueue({
+                    plateNumber: vehicleData.plateNumber,
+                    customerName: vehicleData.customerName,
+                    vehicleType: vehicleData.vehicleType,
+                    selectedServices: [vehicleData.service],
+                    status: 'in-progress',
+                    assignedBay: selectedBay.name,
+                    assignedBayId: selectedBay.id,
+                    washStartTime: new Date().toISOString(),
+                    recordId: recordId,
+                    source: 'wash-bay-direct'
+                });
+                if (queueResult.success) {
+                    vehicleData.queueId = queueResult.id;
+                }
+            }
+
+            // 3. Assign to wash bay (Realtime DB)
+            const result = await services.washBayService.assignVehicle(selectedBay.id, vehicleData);
+            if (result.success) {
+                setShowAssignModal(false);
+                setSelectedBay(null);
+                setSelectedVehicleId('');
+                setAssignMode('select');
+                setAssignForm({ plateNumber: '', customerName: '', vehicleType: 'sedan', service: 'Basic Wash', assignedTo: '' });
+            } else {
+                setError(result.error);
+            }
+        } catch (err) {
+            console.error('Error assigning vehicle:', err);
+            setError('Failed to assign vehicle');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const openAssignModal = (bay) => {
+        setSelectedBay(bay);
+        setShowAssignModal(true);
+        setError(null);
+        setAssignMode(intakeQueue.length > 0 ? 'select' : 'new');
+        setSelectedVehicleId('');
+        setAssignForm({ plateNumber: '', customerName: '', vehicleType: 'sedan', service: 'Basic Wash', assignedTo: '' });
+    };
+
+    const handleCompleteWash = async (bay) => {
+        setSelectedBay(bay);
+        setConfirmAction({
+            type: 'complete',
+            title: 'Complete Wash',
+            message: `Complete wash for ${bay.currentVehicle?.plateNumber}?`,
+            confirmText: '✓ Complete',
+            confirmColor: '#10b981'
+        });
+        setShowConfirmModal(true);
+    };
+
+    const executeCompleteWash = async () => {
+        const bay = selectedBay;
+        setShowConfirmModal(false);
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const currentVehicle = bay.currentVehicle;
+            
+            // 1. Update the intake record in Firestore (main tracking)
+            if (currentVehicle?.recordId && services.intakeRecordsService) {
+                await services.intakeRecordsService.updateRecord(currentVehicle.recordId, {
+                    status: 'completed',
+                    timeOut: new Date().toISOString()
+                });
+            }
+            
+            // 2. If vehicle has queue entry, remove or update it
+            if (currentVehicle?.queueId && services.intakeQueueService) {
+                await services.intakeQueueService.removeFromQueue(currentVehicle.queueId);
+            }
+            
+            // 3. Complete the wash bay
+            await services.washBayService.completeWash(bay.id);
+            
+            // Refresh stats
+            const result = await services.washBayService.getTodayStats();
+            if (result.success) setTodayStats(result.data);
+            
+            setSuccessMessage(`${currentVehicle?.plateNumber} wash completed!`);
+        } catch (err) {
+            console.error('Complete wash error:', err);
+            setError('Failed to complete wash');
+        } finally {
+            setActionLoading(false);
+            setSelectedBay(null);
+        }
+    };
+
+    const handleSetMaintenance = (bay) => {
+        setSelectedBay(bay);
+        setMaintenanceNote('');
+        setShowMaintenanceModal(true);
+    };
+
+    const executeSetMaintenance = async () => {
+        setShowMaintenanceModal(false);
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.washBayService.setMaintenance(selectedBay.id, { note: maintenanceNote });
+            setSuccessMessage(`${selectedBay.name} set to maintenance`);
+        } catch (err) {
+            setError('Failed to set maintenance');
+        } finally {
+            setActionLoading(false);
+            setSelectedBay(null);
+            setMaintenanceNote('');
+        }
+    };
+
+    const handleClearMaintenance = (bay) => {
+        setSelectedBay(bay);
+        setConfirmAction({
+            type: 'clearMaintenance',
+            title: 'Clear Maintenance',
+            message: `Mark ${bay.name} as available again?`,
+            confirmText: '✓ Clear Maintenance',
+            confirmColor: '#10b981'
+        });
+        setShowConfirmModal(true);
+    };
+
+    const executeClearMaintenance = async () => {
+        setShowConfirmModal(false);
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.washBayService.updateBayStatus(selectedBay.id, 'available');
+            setSuccessMessage(`${selectedBay.name} is now available`);
+        } catch (err) {
+            setError('Failed to clear maintenance');
+        } finally {
+            setActionLoading(false);
+            setSelectedBay(null);
+        }
+    };
+
+    const handleDeleteBay = (bay) => {
+        setSelectedBay(bay);
+        setConfirmAction({
+            type: 'delete',
+            title: 'Delete Bay',
+            message: `Delete ${bay.name}? This cannot be undone.`,
+            confirmText: '🗑️ Delete',
+            confirmColor: '#ef4444'
+        });
+        setShowConfirmModal(true);
+    };
+
+    const executeDeleteBay = async () => {
+        setShowConfirmModal(false);
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.washBayService.deleteBay(selectedBay.id);
+            setSuccessMessage(`${selectedBay.name} deleted`);
+        } catch (err) {
+            setError('Failed to delete bay');
+        } finally {
+            setActionLoading(false);
+            setSelectedBay(null);
+        }
+    };
+
+    // Handle confirm action
+    const handleConfirmAction = async () => {
+        if (!confirmAction) return;
+        
+        switch (confirmAction.type) {
+            case 'complete':
+                await executeCompleteWash();
+                break;
+            case 'clearMaintenance':
+                await executeClearMaintenance();
+                break;
+            case 'delete':
+                await executeDeleteBay();
+                break;
+            default:
+                setShowConfirmModal(false);
+        }
+        setConfirmAction(null);
+    };
+
+    // Stats cards
+    const statsCards = [
+        { 
+            label: 'In Queue', 
+            value: intakeQueue.length, 
+            icon: '⏳',
+            color: '#6366f1'
+        },
+        { 
+            label: 'Available Bays', 
+            value: bays.filter(b => b.status === 'available').length, 
+            icon: '✅',
+            color: '#10b981'
+        },
+        { 
+            label: 'In Progress', 
+            value: bays.filter(b => b.status === 'occupied').length, 
+            icon: '🚗',
+            color: '#f59e0b'
+        },
+        { 
+            label: 'Completed Today', 
+            value: todayStats.completed, 
+            icon: '🏁',
+            color: '#8b5cf6'
+        }
+    ];
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
+                    <p style={{ color: theme.textSecondary }}>Loading wash bays...</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '24px' }}>
+            {/* Error Banner */}
+            {error && (
+                <div style={{ 
+                    padding: '12px 16px', 
+                    backgroundColor: '#fee2e2', 
+                    color: '#dc2626', 
+                    borderRadius: '2px', 
+                    marginBottom: '20px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                }}>
+                    <span>{error}</span>
+                    <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>×</button>
+                </div>
+            )}
+
+            {/* Stats Cards */}
+            <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+                gap: '16px', 
+                marginBottom: '24px' 
+            }}>
+                {statsCards.map((stat, i) => (
+                    <div key={i} style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        padding: '20px',
+                        boxShadow: theme.cardShadow,
+                        border: `1px solid ${theme.border}`
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ 
+                                width: '48px', 
+                                height: '48px', 
+                                borderRadius: '2px', 
+                                backgroundColor: `${stat.color}15`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '24px'
+                            }}>
+                                {stat.icon}
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '28px', fontWeight: '700', color: theme.text }}>{stat.value}</div>
+                                <div style={{ fontSize: '13px', color: theme.textSecondary }}>{stat.label}</div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Tabs & Add Button */}
+            <div style={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                marginBottom: '20px' 
+            }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    {['bays', 'history'].map(tab => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            style={{
+                                padding: '10px 20px',
+                                borderRadius: '2px',
+                                border: 'none',
+                                backgroundColor: activeTab === tab ? '#3b82f6' : theme.bgSecondary,
+                                color: activeTab === tab ? 'white' : theme.text,
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                textTransform: 'capitalize'
+                            }}
+                        >
+                            {tab === 'bays' ? '🚿 Wash Bays' : '📋 History'}
+                        </button>
+                    ))}
+                </div>
+                {activeTab === 'bays' && (
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        style={{
+                            padding: '10px 20px',
+                            borderRadius: '2px',
+                            border: 'none',
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
+                        }}
+                    >
+                        <span style={{ fontSize: '18px' }}>+</span> Add Bay
+                    </button>
+                )}
+            </div>
+
+            {/* Bays Grid */}
+            {activeTab === 'bays' && (
+                <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', 
+                    gap: '20px' 
+                }}>
+                    {bays.length === 0 ? (
+                        <div style={{ 
+                            gridColumn: '1/-1', 
+                            textAlign: 'center', 
+                            padding: '60px 20px',
+                            backgroundColor: theme.bg,
+                            borderRadius: '2px',
+                            border: `1px solid ${theme.border}`
+                        }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚿</div>
+                            <h3 style={{ color: theme.text, marginBottom: '8px' }}>No Wash Bays</h3>
+                            <p style={{ color: theme.textSecondary }}>Click "Add Bay" to create your first wash bay</p>
+                        </div>
+                    ) : (
+                        bays.map(bay => {
+                            const statusConfig = STATUS_CONFIG[bay.status] || STATUS_CONFIG.available;
+                            const bayType = BAY_TYPES.find(t => t.id === bay.type) || BAY_TYPES[0];
+
+                            return (
+                                <div key={bay.id} style={{
+                                    backgroundColor: theme.bg,
+                                    borderRadius: '2px',
+                                    overflow: 'hidden',
+                                    boxShadow: theme.cardShadow,
+                                    border: `1px solid ${theme.border}`,
+                                    transition: 'transform 0.2s, box-shadow 0.2s'
+                                }}>
+                                    {/* Bay Header */}
+                                    <div style={{
+                                        padding: '16px 20px',
+                                        backgroundColor: `${bayType.color}10`,
+                                        borderBottom: `1px solid ${theme.border}`,
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center'
+                                    }}>
+                                        <div>
+                                            <h3 style={{ 
+                                                margin: 0, 
+                                                fontSize: '18px', 
+                                                fontWeight: '700',
+                                                color: theme.text 
+                                            }}>
+                                                {bay.name}
+                                            </h3>
+                                            <span style={{
+                                                display: 'inline-block',
+                                                marginTop: '4px',
+                                                padding: '2px 8px',
+                                                borderRadius: '2px',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
+                                                backgroundColor: bayType.color,
+                                                color: 'white'
+                                            }}>
+                                                {bayType.name}
+                                            </span>
+                                        </div>
+                                        <div style={{
+                                            padding: '6px 12px',
+                                            borderRadius: '2px',
+                                            backgroundColor: statusConfig.bg,
+                                            color: statusConfig.color,
+                                            fontSize: '12px',
+                                            fontWeight: '600'
+                                        }}>
+                                            {statusConfig.label}
+                                        </div>
+                                    </div>
+
+                                    {/* Bay Content */}
+                                    <div style={{ padding: '20px' }}>
+                                        {bay.status === 'occupied' && bay.currentVehicle ? (
+                                            <div>
+                                                <div style={{ 
+                                                    display: 'flex', 
+                                                    alignItems: 'center', 
+                                                    gap: '12px',
+                                                    marginBottom: '16px'
+                                                }}>
+                                                    <div style={{
+                                                        width: '50px',
+                                                        height: '50px',
+                                                        borderRadius: '2px',
+                                                        backgroundColor: '#3b82f6',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        color: 'white',
+                                                        fontSize: '24px'
+                                                    }}>
+                                                        🚗
+                                                    </div>
+                                                    <div>
+                                                        <div style={{ 
+                                                            fontWeight: '700', 
+                                                            fontSize: '16px',
+                                                            color: theme.text 
+                                                        }}>
+                                                            {bay.currentVehicle.plateNumber}
+                                                        </div>
+                                                        <div style={{ 
+                                                            fontSize: '13px', 
+                                                            color: theme.textSecondary 
+                                                        }}>
+                                                            {bay.currentVehicle.customerName || 'Walk-in Customer'}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div style={{ 
+                                                    display: 'grid', 
+                                                    gridTemplateColumns: '1fr 1fr', 
+                                                    gap: '12px',
+                                                    marginBottom: '16px'
+                                                }}>
+                                                    <div style={{
+                                                        padding: '10px',
+                                                        backgroundColor: theme.bgSecondary,
+                                                        borderRadius: '2px'
+                                                    }}>
+                                                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Service</div>
+                                                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text }}>{bay.currentVehicle.service}</div>
+                                                    </div>
+                                                    <div style={{
+                                                        padding: '10px',
+                                                        backgroundColor: '#dbeafe',
+                                                        borderRadius: '2px'
+                                                    }}>
+                                                        <div style={{ fontSize: '11px', color: '#3b82f6', marginBottom: '2px' }}>Time Elapsed</div>
+                                                        <div style={{ fontSize: '16px', fontWeight: '700', color: '#3b82f6' }}>{getElapsedTime(bay.startTime)}</div>
+                                                    </div>
+                                                </div>
+
+                                                <button
+                                                    onClick={() => handleCompleteWash(bay)}
+                                                    disabled={actionLoading}
+                                                    style={{
+                                                        width: '100%',
+                                                        padding: '12px',
+                                                        borderRadius: '2px',
+                                                        border: 'none',
+                                                        backgroundColor: '#10b981',
+                                                        color: 'white',
+                                                        fontWeight: '600',
+                                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                                        fontSize: '14px'
+                                                    }}
+                                                >
+                                                    ✓ Complete Wash
+                                                </button>
+                                            </div>
+                                        ) : bay.status === 'maintenance' ? (
+                                            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                                                <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔧</div>
+                                                <p style={{ color: theme.textSecondary, marginBottom: '16px' }}>
+                                                    {bay.maintenanceNote || 'Under maintenance'}
+                                                </p>
+                                                <button
+                                                    onClick={() => handleClearMaintenance(bay)}
+                                                    disabled={actionLoading}
+                                                    style={{
+                                                        padding: '10px 24px',
+                                                        borderRadius: '2px',
+                                                        border: 'none',
+                                                        backgroundColor: '#10b981',
+                                                        color: 'white',
+                                                        fontWeight: '600',
+                                                        cursor: actionLoading ? 'not-allowed' : 'pointer'
+                                                    }}
+                                                >
+                                                    Mark Available
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                                                <div style={{ fontSize: '40px', marginBottom: '12px' }}>✨</div>
+                                                <p style={{ color: theme.textSecondary, marginBottom: '16px' }}>Ready for next vehicle</p>
+                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                    <button
+                                                        onClick={() => openAssignModal(bay)}
+                                                        style={{
+                                                            flex: 1,
+                                                            padding: '10px',
+                                                            borderRadius: '2px',
+                                                            border: 'none',
+                                                            backgroundColor: '#3b82f6',
+                                                            color: 'white',
+                                                            fontWeight: '600',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        Assign Vehicle
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSetMaintenance(bay)}
+                                                        style={{
+                                                            padding: '10px 16px',
+                                                            borderRadius: '2px',
+                                                            border: `1px solid ${theme.border}`,
+                                                            backgroundColor: 'transparent',
+                                                            color: theme.textSecondary,
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        title="Set Maintenance"
+                                                    >
+                                                        🔧
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Bay Footer - Delete */}
+                                    {bay.status === 'available' && (
+                                        <div style={{
+                                            padding: '12px 20px',
+                                            borderTop: `1px solid ${theme.border}`,
+                                            display: 'flex',
+                                            justifyContent: 'flex-end'
+                                        }}>
+                                            <button
+                                                onClick={() => handleDeleteBay(bay)}
+                                                style={{
+                                                    padding: '6px 12px',
+                                                    borderRadius: '2px',
+                                                    border: 'none',
+                                                    backgroundColor: '#fee2e2',
+                                                    color: '#dc2626',
+                                                    fontSize: '12px',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                Delete Bay
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+            )}
+
+            {/* History Tab */}
+            {activeTab === 'history' && (
+                <div style={{
+                    backgroundColor: theme.bg,
+                    borderRadius: '2px',
+                    border: `1px solid ${theme.border}`,
+                    overflow: 'hidden'
+                }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                            <tr style={{ backgroundColor: theme.bgSecondary }}>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Bay</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Vehicle</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Service</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Washed By</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Started</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Completed</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(() => {
+                                // Group history by combining started and completed records
+                                const completedRecords = history.filter(r => r.action === 'completed');
+                                
+                                if (completedRecords.length === 0) {
+                                    // Show in-progress items (started but not completed)
+                                    const startedRecords = history.filter(r => r.action === 'started');
+                                    if (startedRecords.length === 0) {
+                                        return (
+                                            <tr>
+                                                <td colSpan="8" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>
+                                                    No wash history yet
+                                                </td>
+                                            </tr>
+                                        );
+                                    }
+                                    return startedRecords.map(record => (
+                                        <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text, fontWeight: '500' }}>
+                                                {record.bayName || record.bayId}
+                                            </td>
+                                            <td style={{ padding: '14px 16px' }}>
+                                                <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
+                                                {record.vehicle?.service || '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
+                                                {record.vehicle?.assignedBy || '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.text }}>
+                                                {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.textSecondary }}>
+                                                -
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.textSecondary }}>
+                                                -
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '12px',
+                                                    fontWeight: '500',
+                                                    backgroundColor: '#fef3c7',
+                                                    color: '#d97706'
+                                                }}>
+                                                    In Progress
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ));
+                                }
+                                
+                                // Show completed records (they have all the info including start time)
+                                return completedRecords.map(record => (
+                                    <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                        <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text, fontWeight: '500' }}>
+                                            {record.bayName || record.bayId}
+                                        </td>
+                                        <td style={{ padding: '14px 16px' }}>
+                                            <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber}</div>
+                                            <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
+                                            {record.vehicle?.service || '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
+                                            {record.vehicle?.assignedBy || record.completedBy || '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.text }}>
+                                            {record.startTime ? new Date(record.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.text }}>
+                                            {record.endTime ? new Date(record.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', fontWeight: '600', color: '#3b82f6' }}>
+                                            {record.duration ? `${record.duration} min` : '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            <span style={{
+                                                padding: '4px 10px',
+                                                borderRadius: '12px',
+                                                fontSize: '12px',
+                                                fontWeight: '500',
+                                                backgroundColor: '#d1fae5',
+                                                color: '#059669'
+                                            }}>
+                                                ✓ Done
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ));
+                            })()}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            {/* Add Bay Modal */}
+            {showAddModal && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000
+                }} onClick={() => setShowAddModal(false)}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '400px',
+                        margin: '20px'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h2 style={{ margin: 0, color: theme.text }}>Add New Bay</h2>
+                        </div>
+                        <form onSubmit={handleAddBay} style={{ padding: '20px' }}>
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Bay Name *</label>
+                                <input
+                                    type="text"
+                                    value={bayForm.name}
+                                    onChange={e => setBayForm({ ...bayForm, name: e.target.value })}
+                                    placeholder="e.g., Bay 5"
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: theme.inputBg,
+                                        color: theme.text,
+                                        fontSize: '14px'
+                                    }}
+                                />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Bay Type</label>
+                                <select
+                                    value={bayForm.type}
+                                    onChange={e => setBayForm({ ...bayForm, type: e.target.value })}
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: theme.inputBg,
+                                        color: theme.text,
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {BAY_TYPES.map(t => (
+                                        <option key={t.id} value={t.id}>{t.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddModal(false)}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: 'transparent',
+                                        color: theme.text,
+                                        fontWeight: '600',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={actionLoading}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: '#10b981',
+                                        color: 'white',
+                                        fontWeight: '600',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {actionLoading ? 'Adding...' : 'Add Bay'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Assign Vehicle Modal */}
+            {showAssignModal && selectedBay && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000
+                }} onClick={() => setShowAssignModal(false)}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '500px',
+                        margin: '20px',
+                        maxHeight: '90vh',
+                        overflow: 'auto'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h2 style={{ margin: 0, color: theme.text }}>Assign Vehicle to {selectedBay.name}</h2>
+                        </div>
+                        
+                        <form onSubmit={handleAssignVehicle} style={{ padding: '20px' }}>
+                            {/* Mode Toggle */}
+                            <div style={{ 
+                                display: 'flex', 
+                                gap: '8px', 
+                                marginBottom: '20px',
+                                padding: '4px',
+                                backgroundColor: theme.bgSecondary,
+                                borderRadius: '2px'
+                            }}>
+                                <button
+                                    type="button"
+                                    onClick={() => { setAssignMode('select'); setSelectedVehicleId(''); }}
+                                    style={{
+                                        flex: 1,
+                                        padding: '10px 16px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: assignMode === 'select' ? '#3b82f6' : 'transparent',
+                                        color: assignMode === 'select' ? 'white' : theme.textSecondary,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '13px'
+                                    }}
+                                >
+                                    📋 From Queue ({intakeQueue.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssignMode('new')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '10px 16px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: assignMode === 'new' ? '#3b82f6' : 'transparent',
+                                        color: assignMode === 'new' ? 'white' : theme.textSecondary,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '13px'
+                                    }}
+                                >
+                                    ➕ New Vehicle
+                                </button>
+                            </div>
+
+                            {/* Select from Queue */}
+                            {assignMode === 'select' && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    {intakeQueue.length === 0 ? (
+                                        <div style={{ 
+                                            textAlign: 'center', 
+                                            padding: '30px 20px',
+                                            backgroundColor: theme.bgSecondary,
+                                            borderRadius: '2px',
+                                            border: `1px dashed ${theme.border}`
+                                        }}>
+                                            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🚗</div>
+                                            <p style={{ color: theme.textSecondary, marginBottom: '12px' }}>No vehicles waiting in queue</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setAssignMode('new')}
+                                                style={{
+                                                    padding: '8px 16px',
+                                                    borderRadius: '2px',
+                                                    border: 'none',
+                                                    backgroundColor: '#3b82f6',
+                                                    color: 'white',
+                                                    fontWeight: '500',
+                                                    cursor: 'pointer',
+                                                    fontSize: '13px'
+                                                }}
+                                            >
+                                                Add New Vehicle
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: theme.text }}>
+                                                Select Vehicle from Queue
+                                            </label>
+                                            <div style={{ 
+                                                maxHeight: '200px', 
+                                                overflowY: 'auto',
+                                                border: `1px solid ${theme.border}`,
+                                                borderRadius: '2px'
+                                            }>
+                                                {intakeQueue.map(vehicle => (
+                                                    <div
+                                                        key={vehicle.id}
+                                                        onClick={() => setSelectedVehicleId(vehicle.id)}
+                                                        style={{
+                                                            padding: '12px 16px',
+                                                            borderBottom: `1px solid ${theme.border}`,
+                                                            cursor: 'pointer',
+                                                            backgroundColor: selectedVehicleId === vehicle.id ? '#dbeafe' : 'transparent',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '12px',
+                                                            transition: 'background-color 0.15s'
+                                                        }}
+                                                    >
+                                                        <div style={{
+                                                            width: '20px',
+                                                            height: '20px',
+                                                            borderRadius: '50%',
+                                                            border: `2px solid ${selectedVehicleId === vehicle.id ? '#3b82f6' : theme.border}`,
+                                                            backgroundColor: selectedVehicleId === vehicle.id ? '#3b82f6' : 'transparent',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}>
+                                                            {selectedVehicleId === vehicle.id && (
+                                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
+                                                                    <polyline points="20 6 9 17 4 12"/>
+                                                                </svg>
+                                                            )}
+                                                        </div>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>
+                                                                {vehicle.plateNumber}
+                                                            </div>
+                                                            <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                                                {vehicle.customerName || vehicle.ownerName || 'Walk-in'} • {vehicle.vehicleType || 'Vehicle'}
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ 
+                                                            fontSize: '11px', 
+                                                            color: theme.textSecondary,
+                                                            textAlign: 'right'
+                                                        }}>
+                                                            {new Date(vehicle.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* New Vehicle Form */}
+                            {assignMode === 'new' && (
+                                <>
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Plate Number *</label>
+                                        <input
+                                            type="text"
+                                            value={assignForm.plateNumber}
+                                            onChange={e => setAssignForm({ ...assignForm, plateNumber: e.target.value.toUpperCase() })}
+                                            placeholder="e.g., KBZ 123A"
+                                            style={{
+                                                width: '100%',
+                                                padding: '12px',
+                                                borderRadius: '2px',
+                                                border: `1px solid ${theme.border}`,
+                                                backgroundColor: theme.inputBg,
+                                                color: theme.text,
+                                                fontSize: '14px',
+                                                textTransform: 'uppercase'
+                                            }}
+                                        />
+                                    </div>
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Customer Name</label>
+                                        <input
+                                            type="text"
+                                            value={assignForm.customerName}
+                                            onChange={e => setAssignForm({ ...assignForm, customerName: e.target.value })}
+                                            placeholder="Optional"
+                                            style={{
+                                                width: '100%',
+                                                padding: '12px',
+                                                borderRadius: '2px',
+                                                border: `1px solid ${theme.border}`,
+                                                backgroundColor: theme.inputBg,
+                                                color: theme.text,
+                                                fontSize: '14px'
+                                            }}
+                                        />
+                                    </div>
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Vehicle Type</label>
+                                        <select
+                                            value={assignForm.vehicleType}
+                                            onChange={e => setAssignForm({ ...assignForm, vehicleType: e.target.value })}
+                                            style={{
+                                                width: '100%',
+                                                padding: '12px',
+                                                borderRadius: '2px',
+                                                border: `1px solid ${theme.border}`,
+                                                backgroundColor: theme.inputBg,
+                                                color: theme.text,
+                                                fontSize: '14px'
+                                            }}
+                                        >
+                                            {VEHICLE_TYPES.map(t => (
+                                                <option key={t} value={t.toLowerCase()}>{t}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+
+                            {/* Service Selection (always shown) */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Service</label>
+                                <select
+                                    value={assignForm.service}
+                                    onChange={e => setAssignForm({ ...assignForm, service: e.target.value })}
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: theme.inputBg,
+                                        color: theme.text,
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {SERVICES.map(s => (
+                                        <option key={s} value={s}>{s}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Staff Assignment (always shown) */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>
+                                    Assign to Staff <span style={{ color: '#ef4444' }}>*</span>
+                                </label>
+                                {staffList.length === 0 ? (
+                                    <div style={{ 
+                                        padding: '12px', 
+                                        backgroundColor: theme.bgSecondary, 
+                                        borderRadius: '2px',
+                                        border: `1px dashed ${theme.border}`,
+                                        textAlign: 'center',
+                                        color: theme.textSecondary,
+                                        fontSize: '13px'
+                                    }}>
+                                        No staff members available. Add staff in Staff Management.
+                                    </div>
+                                ) : (
+                                    <select
+                                        value={assignForm.assignedTo}
+                                        onChange={e => setAssignForm({ ...assignForm, assignedTo: e.target.value })}
+                                        required
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${assignForm.assignedTo ? theme.border : '#f59e0b'}`,
+                                            backgroundColor: theme.inputBg,
+                                            color: theme.text,
+                                            fontSize: '14px'
+                                        }}
+                                    >
+                                        <option value="">-- Select Staff Member --</option>
+                                        {staffList.map(staff => (
+                                            <option key={staff.id} value={staff.name}>
+                                                {staff.name} ({staff.role})
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAssignModal(false)}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: 'transparent',
+                                        color: theme.text,
+                                        fontWeight: '600',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={actionLoading || (assignMode === 'select' && !selectedVehicleId)}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: (assignMode === 'select' && !selectedVehicleId) ? '#94a3b8' : '#3b82f6',
+                                        color: 'white',
+                                        fontWeight: '600',
+                                        cursor: (actionLoading || (assignMode === 'select' && !selectedVehicleId)) ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {actionLoading ? 'Assigning...' : '🚿 Start Wash'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirmation Modal */}
+            {showConfirmModal && confirmAction && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1100
+                }} onClick={() => { setShowConfirmModal(false); setConfirmAction(null); }}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '400px',
+                        margin: '20px',
+                        boxShadow: '0 20px 40px rgba(0,0,0,0.3)'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', textAlign: 'center' }}>
+                            <div style={{ 
+                                fontSize: '48px', 
+                                marginBottom: '16px'
+                            }}>
+                                {confirmAction.type === 'delete' ? '🗑️' : confirmAction.type === 'complete' ? '✅' : '🔧'}
+                            </div>
+                            <h3 style={{ 
+                                margin: '0 0 8px 0', 
+                                color: theme.text,
+                                fontSize: '18px',
+                                fontWeight: '600'
+                            }}>
+                                {confirmAction.title}
+                            </h3>
+                            <p style={{ 
+                                margin: '0 0 24px 0', 
+                                color: theme.textSecondary,
+                                fontSize: '14px',
+                                lineHeight: '1.5'
+                            }}>
+                                {confirmAction.message}
+                            </p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={() => { setShowConfirmModal(false); setConfirmAction(null); }}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: 'transparent',
+                                        color: theme.text,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleConfirmAction}
+                                    disabled={actionLoading}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: confirmAction.confirmColor || '#3b82f6',
+                                        color: 'white',
+                                        fontWeight: '600',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {actionLoading ? 'Please wait...' : confirmAction.confirmText}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Maintenance Modal */}
+            {showMaintenanceModal && selectedBay && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1100
+                }} onClick={() => setShowMaintenanceModal(false)}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '450px',
+                        margin: '20px',
+                        boxShadow: '0 20px 40px rgba(0,0,0,0.3)'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ 
+                            padding: '20px', 
+                            borderBottom: `1px solid ${theme.border}`,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px'
+                        }}>
+                            <div style={{ 
+                                width: '40px', 
+                                height: '40px', 
+                                borderRadius: '2px',
+                                backgroundColor: '#fef3c7',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '20px'
+                            }}>
+                                🔧
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, color: theme.text, fontSize: '16px' }}>
+                                    Set Maintenance Mode
+                                </h3>
+                                <p style={{ margin: 0, color: theme.textSecondary, fontSize: '13px' }}>
+                                    {selectedBay.name}
+                                </p>
+                            </div>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            <label style={{ 
+                                display: 'block', 
+                                marginBottom: '8px', 
+                                fontWeight: '500', 
+                                color: theme.text,
+                                fontSize: '14px'
+                            }}>
+                                Maintenance Note (optional)
+                            </label>
+                            <textarea
+                                value={maintenanceNote}
+                                onChange={e => setMaintenanceNote(e.target.value)}
+                                placeholder="e.g., Water pump repair, Floor cleaning..."
+                                rows={3}
+                                style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    borderRadius: '2px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.text,
+                                    fontSize: '14px',
+                                    resize: 'vertical',
+                                    fontFamily: 'inherit'
+                                }}
+                            />
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+                                <button
+                                    onClick={() => setShowMaintenanceModal(false)}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: 'transparent',
+                                        color: theme.text,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={executeSetMaintenance}
+                                    disabled={actionLoading}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: '#f59e0b',
+                                        color: 'white',
+                                        fontWeight: '600',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {actionLoading ? 'Saving...' : '🔧 Set Maintenance'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Success Toast */}
+            {successMessage && (
+                <div style={{
+                    position: 'fixed',
+                    bottom: '24px',
+                    right: '24px',
+                    backgroundColor: '#10b981',
+                    color: 'white',
+                    padding: '16px 24px',
+                    borderRadius: '2px',
+                    boxShadow: '0 4px 20px rgba(16, 185, 129, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    zIndex: 1200,
+                    animation: 'slideInRight 0.3s ease'
+                }}>
+                    <span style={{ fontSize: '20px' }}>✓</span>
+                    <span style={{ fontWeight: '500' }}>{successMessage}</span>
+                </div>
+            )}
+
+            {/* Error Toast */}
+            {error && (
+                <div style={{
+                    position: 'fixed',
+                    bottom: '24px',
+                    right: '24px',
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    padding: '16px 24px',
+                    borderRadius: '2px',
+                    boxShadow: '0 4px 20px rgba(239, 68, 68, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    zIndex: 1200,
+                    cursor: 'pointer'
+                }} onClick={() => setError(null)}>
+                    <span style={{ fontSize: '20px' }}>⚠️</span>
+                    <span style={{ fontWeight: '500' }}>{error}</span>
+                    <span style={{ marginLeft: '8px', opacity: 0.7 }}>✕</span>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Dashboard Component - Real-time Firebase Integration
 function Dashboard({ onModuleClick }) {
     const [searchQuery, setSearchQuery] = useState('');
@@ -7612,6 +9259,7 @@ function ContentArea({ activeModule, onModuleClick }) {
                 {activeModule === 'equipment' && <EquipmentManagement />}
                 {activeModule === 'customers' && <CustomerManagement />}
                 {activeModule === 'garage-management' && <GarageManagement />}
+                {activeModule === 'wash-bays' && <WashBays />}
             </div>
         </div>
     );
