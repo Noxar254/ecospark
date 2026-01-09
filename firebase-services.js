@@ -1298,6 +1298,19 @@ export const storageService = {
     }
   },
 
+  async uploadProfileImage(userId, file) {
+    try {
+      const path = `profile-images/${userId}/${Date.now()}_${file.name}`;
+      const fileRef = storageRef(storage, path);
+      const snapshot = await uploadBytes(fileRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      return { success: true, url: downloadURL, path };
+    } catch (error) {
+      console.error('Error uploading profile image:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
   async deleteFile(path) {
     try {
       const fileRef = storageRef(storage, path);
@@ -2181,7 +2194,7 @@ const DEFAULT_ROLES = {
   admin: {
     name: 'Administrator',
     description: 'Full access to all modules and features',
-    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'scheduling', 'billing', 'inventory', 'reports', 'marketing', 'settings', 'users'],
+    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'expenses', 'billing', 'inventory', 'reports', 'activities', 'marketing', 'settings', 'users'],
     permissions: {
       canCreate: true,
       canEdit: true,
@@ -2197,7 +2210,7 @@ const DEFAULT_ROLES = {
   manager: {
     name: 'Manager',
     description: 'Manage operations and staff',
-    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'scheduling', 'billing', 'inventory', 'reports'],
+    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'expenses', 'billing', 'inventory', 'reports', 'activities'],
     permissions: {
       canCreate: true,
       canEdit: true,
@@ -2213,7 +2226,7 @@ const DEFAULT_ROLES = {
   cashier: {
     name: 'Cashier',
     description: 'Handle billing and payments',
-    modules: ['dashboard', 'vehicle-intake', 'billing', 'customers'],
+    modules: ['dashboard', 'vehicle-intake', 'billing', 'customers', 'expenses'],
     permissions: {
       canCreate: true,
       canEdit: false,
@@ -2245,7 +2258,7 @@ const DEFAULT_ROLES = {
   receptionist: {
     name: 'Receptionist',
     description: 'Vehicle intake and customer management',
-    modules: ['dashboard', 'vehicle-intake', 'customers', 'scheduling'],
+    modules: ['dashboard', 'vehicle-intake', 'customers'],
     permissions: {
       canCreate: true,
       canEdit: true,
@@ -2598,11 +2611,642 @@ export const auditService = {
   }
 };
 
+// ==================== INVENTORY SERVICE ====================
+
+const inventoryService = {
+  // Get all inventory items
+  async getAll() {
+    try {
+      const snapshot = await getDocs(collection(db, 'inventory'));
+      return {
+        success: true,
+        data: snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      };
+    } catch (error) {
+      console.error('Error fetching inventory:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get single item
+  async getById(id) {
+    try {
+      const docRef = doc(db, 'inventory', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return { success: true, data: { id: docSnap.id, ...docSnap.data() } };
+      }
+      return { success: false, error: 'Item not found' };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add new item
+  async add(itemData) {
+    try {
+      const data = {
+        ...itemData,
+        quantity: Number(itemData.quantity) || 0,
+        minStock: Number(itemData.minStock) || 5,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const docRef = await addDoc(collection(db, 'inventory'), data);
+      return { success: true, id: docRef.id };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update item
+  async update(id, updates) {
+    try {
+      const docRef = doc(db, 'inventory', id);
+      await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete item
+  async delete(id) {
+    try {
+      await deleteDoc(doc(db, 'inventory', id));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Adjust stock (add or remove)
+  async adjustStock(id, adjustment, reason = '') {
+    try {
+      const docRef = doc(db, 'inventory', id);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Item not found' };
+      
+      const currentQty = docSnap.data().quantity || 0;
+      const newQty = Math.max(0, currentQty + adjustment);
+      
+      await updateDoc(docRef, { 
+        quantity: newQty, 
+        updatedAt: new Date().toISOString(),
+        lastAdjustment: { amount: adjustment, reason, timestamp: new Date().toISOString() }
+      });
+      
+      return { success: true, newQuantity: newQty };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Record usage (for consumables)
+  async recordUsage(id, amount, notes = '') {
+    try {
+      const docRef = doc(db, 'inventory', id);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Item not found' };
+      
+      const data = docSnap.data();
+      const currentQty = data.quantity || 0;
+      const usageAmount = Math.abs(Number(amount));
+      const newQty = Math.max(0, currentQty - usageAmount);
+      
+      // Get existing usage history or create new
+      const usageHistory = data.usageHistory || [];
+      usageHistory.push({
+        amount: usageAmount,
+        date: new Date().toISOString(),
+        notes,
+        remainingQty: newQty
+      });
+      
+      // Keep only last 30 records
+      const trimmedHistory = usageHistory.slice(-30);
+      
+      // Calculate daily usage rate (last 7 days)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const recentUsage = trimmedHistory.filter(u => new Date(u.date) >= sevenDaysAgo);
+      const totalRecentUsage = recentUsage.reduce((sum, u) => sum + u.amount, 0);
+      const dailyUsageRate = recentUsage.length > 0 ? totalRecentUsage / 7 : 0;
+      
+      await updateDoc(docRef, { 
+        quantity: newQty,
+        usageHistory: trimmedHistory,
+        dailyUsageRate: Math.round(dailyUsageRate * 100) / 100,
+        lastUsage: { amount: usageAmount, date: new Date().toISOString(), notes },
+        updatedAt: new Date().toISOString()
+      });
+      
+      return { success: true, newQuantity: newQty, dailyUsageRate };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get usage alert status
+  getUsageAlert(item) {
+    const dailyRate = item.dailyUsageRate || 0;
+    const quantity = item.quantity || 0;
+    const alertThreshold = item.usageAlertDays || 7; // Default: alert if less than 7 days supply
+    
+    if (dailyRate === 0) return null;
+    
+    const daysRemaining = Math.floor(quantity / dailyRate);
+    
+    if (daysRemaining <= 3) return { level: 'critical', days: daysRemaining, message: `Only ${daysRemaining} days supply left!` };
+    if (daysRemaining <= alertThreshold) return { level: 'warning', days: daysRemaining, message: `${daysRemaining} days supply remaining` };
+    return { level: 'ok', days: daysRemaining, message: `${daysRemaining} days supply` };
+  },
+
+  // Get stock status
+  getStockStatus(quantity, minStock) {
+    if (quantity === 0) return 'out-of-stock';
+    if (quantity <= minStock) return 'low-stock';
+    return 'in-stock';
+  },
+
+  // Subscribe to inventory items with realtime updates
+  subscribeToItems(callback) {
+    const inventoryRef = collection(db, 'inventory');
+    return onSnapshot(inventoryRef, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(items);
+    }, (error) => {
+      console.error('Error subscribing to inventory:', error);
+      callback([]);
+    });
+  }
+};
+
+// ==================== FLEET ACCOUNTS SERVICE ====================
+
+const fleetService = {
+  // Subscribe to fleet accounts with realtime updates
+  subscribeToAccounts(callback) {
+    const fleetRef = collection(db, 'fleetAccounts');
+    const q = query(fleetRef, orderBy('companyName', 'asc'));
+    return onSnapshot(q, (snapshot) => {
+      const accounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(accounts);
+    }, (error) => {
+      console.error('Error subscribing to fleet accounts:', error);
+      callback([]);
+    });
+  },
+
+  // Get single fleet account
+  async getAccount(id) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return { success: true, data: { id: docSnap.id, ...docSnap.data() } };
+      }
+      return { success: false, error: 'Account not found' };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add new fleet account
+  async addAccount(accountData) {
+    try {
+      const data = {
+        ...accountData,
+        accountNumber: `FLT-${Date.now().toString(36).toUpperCase()}`,
+        balance: Number(accountData.balance) || 0,
+        creditLimit: Number(accountData.creditLimit) || 0,
+        discount: Number(accountData.discount) || 0,
+        status: accountData.status || 'active',
+        totalSpent: 0,
+        totalServices: 0,
+        vehicles: [],
+        authorizedContacts: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const docRef = await addDoc(collection(db, 'fleetAccounts'), data);
+      return { success: true, id: docRef.id, accountNumber: data.accountNumber };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update fleet account
+  async updateAccount(id, updates) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', id);
+      await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete fleet account
+  async deleteAccount(id) {
+    try {
+      await deleteDoc(doc(db, 'fleetAccounts', id));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add vehicle to fleet account
+  async addVehicle(accountId, vehicleData) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const vehicles = docSnap.data().vehicles || [];
+      const newVehicle = {
+        id: `VEH-${Date.now().toString(36).toUpperCase()}`,
+        ...vehicleData,
+        totalServices: 0,
+        totalSpent: 0,
+        lastService: null,
+        addedAt: new Date().toISOString()
+      };
+      vehicles.push(newVehicle);
+      await updateDoc(docRef, { vehicles, updatedAt: new Date().toISOString() });
+      return { success: true, vehicleId: newVehicle.id };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update vehicle in fleet account
+  async updateVehicle(accountId, vehicleId, updates) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const vehicles = docSnap.data().vehicles || [];
+      const idx = vehicles.findIndex(v => v.id === vehicleId);
+      if (idx === -1) return { success: false, error: 'Vehicle not found' };
+      
+      vehicles[idx] = { ...vehicles[idx], ...updates };
+      await updateDoc(docRef, { vehicles, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Remove vehicle from fleet account
+  async removeVehicle(accountId, vehicleId) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const vehicles = (docSnap.data().vehicles || []).filter(v => v.id !== vehicleId);
+      await updateDoc(docRef, { vehicles, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add authorized contact
+  async addContact(accountId, contactData) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const contacts = docSnap.data().authorizedContacts || [];
+      const newContact = {
+        id: `CON-${Date.now().toString(36).toUpperCase()}`,
+        ...contactData,
+        addedAt: new Date().toISOString()
+      };
+      contacts.push(newContact);
+      await updateDoc(docRef, { authorizedContacts: contacts, updatedAt: new Date().toISOString() });
+      return { success: true, contactId: newContact.id };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Remove authorized contact
+  async removeContact(accountId, contactId) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const contacts = (docSnap.data().authorizedContacts || []).filter(c => c.id !== contactId);
+      await updateDoc(docRef, { authorizedContacts: contacts, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add balance (top-up)
+  async addBalance(accountId, amount, note = '') {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const currentBalance = docSnap.data().balance || 0;
+      const transactions = docSnap.data().transactions || [];
+      transactions.unshift({
+        id: `TXN-${Date.now().toString(36).toUpperCase()}`,
+        type: 'credit',
+        amount: Number(amount),
+        note,
+        balanceAfter: currentBalance + Number(amount),
+        date: new Date().toISOString()
+      });
+      
+      await updateDoc(docRef, {
+        balance: currentBalance + Number(amount),
+        transactions: transactions.slice(0, 100), // Keep last 100 transactions
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true, newBalance: currentBalance + Number(amount) };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Deduct balance (charge)
+  async chargeAccount(accountId, amount, serviceDetails) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const data = docSnap.data();
+      const currentBalance = data.balance || 0;
+      const creditLimit = data.creditLimit || 0;
+      
+      if (currentBalance + creditLimit < Number(amount)) {
+        return { success: false, error: 'Insufficient balance and credit' };
+      }
+      
+      const transactions = data.transactions || [];
+      transactions.unshift({
+        id: `TXN-${Date.now().toString(36).toUpperCase()}`,
+        type: 'debit',
+        amount: Number(amount),
+        serviceDetails,
+        balanceAfter: currentBalance - Number(amount),
+        date: new Date().toISOString()
+      });
+      
+      // Update vehicle stats if provided
+      let vehicles = data.vehicles || [];
+      if (serviceDetails?.plateNumber) {
+        const vIdx = vehicles.findIndex(v => v.plateNumber === serviceDetails.plateNumber);
+        if (vIdx !== -1) {
+          vehicles[vIdx].totalServices = (vehicles[vIdx].totalServices || 0) + 1;
+          vehicles[vIdx].totalSpent = (vehicles[vIdx].totalSpent || 0) + Number(amount);
+          vehicles[vIdx].lastService = new Date().toISOString();
+        }
+      }
+      
+      await updateDoc(docRef, {
+        balance: currentBalance - Number(amount),
+        totalSpent: (data.totalSpent || 0) + Number(amount),
+        totalServices: (data.totalServices || 0) + 1,
+        vehicles,
+        transactions: transactions.slice(0, 100),
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true, newBalance: currentBalance - Number(amount) };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to service history for fleet account
+  subscribeToServiceHistory(accountId, callback) {
+    const historyRef = collection(db, 'fleetAccounts', accountId, 'serviceHistory');
+    const q = query(historyRef, orderBy('date', 'desc'));
+    return onSnapshot(q, (snapshot) => {
+      const history = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(history);
+    }, (error) => {
+      console.error('Error subscribing to service history:', error);
+      callback([]);
+    });
+  },
+
+  // Add service record to fleet account
+  async addServiceRecord(accountId, serviceData) {
+    try {
+      const historyRef = collection(db, 'fleetAccounts', accountId, 'serviceHistory');
+      const data = {
+        ...serviceData,
+        date: new Date().toISOString()
+      };
+      await addDoc(historyRef, data);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get fleet statistics
+  getStats(accounts) {
+    const active = accounts.filter(a => a.status === 'active').length;
+    const suspended = accounts.filter(a => a.status === 'suspended').length;
+    const totalVehicles = accounts.reduce((sum, a) => sum + (a.vehicles?.length || 0), 0);
+    const totalBalance = accounts.reduce((sum, a) => sum + (a.balance || 0), 0);
+    const totalSpent = accounts.reduce((sum, a) => sum + (a.totalSpent || 0), 0);
+    const totalServices = accounts.reduce((sum, a) => sum + (a.totalServices || 0), 0);
+    const totalExpenditures = accounts.reduce((sum, a) => sum + (a.totalExpenditures || 0), 0);
+    
+    return { total: accounts.length, active, suspended, totalVehicles, totalBalance, totalSpent, totalServices, totalExpenditures };
+  },
+
+  // Add expenditure to fleet account
+  async addExpenditure(accountId, expenditureData) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const data = docSnap.data();
+      const expenditures = data.expenditures || [];
+      const newExpenditure = {
+        id: `EXP-${Date.now().toString(36).toUpperCase()}`,
+        description: expenditureData.description,
+        category: expenditureData.category || 'General',
+        amount: Number(expenditureData.amount) || 0,
+        date: expenditureData.date || new Date().toISOString().split('T')[0],
+        note: expenditureData.note || '',
+        vehicle: expenditureData.vehicle || null,
+        createdAt: new Date().toISOString()
+      };
+      expenditures.unshift(newExpenditure);
+      
+      const totalExpenditures = (data.totalExpenditures || 0) + Number(expenditureData.amount);
+      
+      await updateDoc(docRef, {
+        expenditures: expenditures.slice(0, 200), // Keep last 200 expenditures
+        totalExpenditures,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true, expenditureId: newExpenditure.id, totalExpenditures };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update expenditure
+  async updateExpenditure(accountId, expenditureId, updates) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const data = docSnap.data();
+      const expenditures = data.expenditures || [];
+      const idx = expenditures.findIndex(e => e.id === expenditureId);
+      if (idx === -1) return { success: false, error: 'Expenditure not found' };
+      
+      const oldAmount = expenditures[idx].amount || 0;
+      const newAmount = Number(updates.amount) || 0;
+      const amountDiff = newAmount - oldAmount;
+      
+      expenditures[idx] = { 
+        ...expenditures[idx], 
+        ...updates, 
+        amount: newAmount,
+        updatedAt: new Date().toISOString() 
+      };
+      
+      const totalExpenditures = (data.totalExpenditures || 0) + amountDiff;
+      
+      await updateDoc(docRef, {
+        expenditures,
+        totalExpenditures,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true, totalExpenditures };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete expenditure
+  async deleteExpenditure(accountId, expenditureId) {
+    try {
+      const docRef = doc(db, 'fleetAccounts', accountId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { success: false, error: 'Account not found' };
+      
+      const data = docSnap.data();
+      const expenditures = data.expenditures || [];
+      const exp = expenditures.find(e => e.id === expenditureId);
+      if (!exp) return { success: false, error: 'Expenditure not found' };
+      
+      const totalExpenditures = Math.max(0, (data.totalExpenditures || 0) - (exp.amount || 0));
+      const filteredExpenditures = expenditures.filter(e => e.id !== expenditureId);
+      
+      await updateDoc(docRef, {
+        expenditures: filteredExpenditures,
+        totalExpenditures,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true, totalExpenditures };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+};
+
+// ==================== EXPENSES SERVICE ====================
+
+const expensesService = {
+  // Get all expenses with realtime updates
+  subscribeToExpenses(callback) {
+    const expensesRef = collection(db, 'expenses');
+    const q = query(expensesRef, orderBy('date', 'desc'));
+    return onSnapshot(q, (snapshot) => {
+      const expenses = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(expenses);
+    }, (error) => {
+      console.error('Error subscribing to expenses:', error);
+      callback([]);
+    });
+  },
+
+  // Add new expense
+  async add(expenseData) {
+    try {
+      const data = {
+        ...expenseData,
+        amount: Number(expenseData.amount) || 0,
+        date: expenseData.date || new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const docRef = await addDoc(collection(db, 'expenses'), data);
+      return { success: true, id: docRef.id };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update expense
+  async update(id, updates) {
+    try {
+      const docRef = doc(db, 'expenses', id);
+      await updateDoc(docRef, { ...updates, amount: Number(updates.amount) || 0, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete expense
+  async delete(id) {
+    try {
+      await deleteDoc(doc(db, 'expenses', id));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get expenses summary
+  getSummary(expenses) {
+    const today = new Date().toISOString().split('T')[0];
+    const thisMonth = today.slice(0, 7);
+    const thisWeekStart = new Date();
+    thisWeekStart.setDate(thisWeekStart.getDate() - 7);
+    
+    return {
+      total: expenses.reduce((sum, e) => sum + (e.amount || 0), 0),
+      today: expenses.filter(e => e.date === today).reduce((sum, e) => sum + (e.amount || 0), 0),
+      thisWeek: expenses.filter(e => new Date(e.date) >= thisWeekStart).reduce((sum, e) => sum + (e.amount || 0), 0),
+      thisMonth: expenses.filter(e => e.date?.startsWith(thisMonth)).reduce((sum, e) => sum + (e.amount || 0), 0),
+      count: expenses.length
+    };
+  }
+};
+
 // ==================== MAKE SERVICES GLOBALLY AVAILABLE ====================
 
 // Attach to window for use in non-module scripts (React via Babel)
 if (typeof window !== 'undefined') {
   window.FirebaseServices = {
+    inventoryService,
+    expensesService,
+    fleetService,
     // Vehicle Intake Services
     intakeQueueService,
     intakeRecordsService,

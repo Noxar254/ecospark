@@ -421,7 +421,7 @@ body {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 20px;
 }
 
@@ -456,14 +456,14 @@ body {
 }
 
 .stat-card-body {
-    padding: 16px 20px 20px 20px;
+    padding: 16px 20px 24px 20px;
 }
 
 .stat-card-value {
     font-size: 32px;
     font-weight: 700;
     color: var(--text-primary);
-    margin-bottom: 4px;
+    margin-bottom: 6px;
     line-height: 1;
 }
 
@@ -474,24 +474,18 @@ body {
 }
 
 /* Responsive Grid */
-@media (max-width: 1400px) {
-    .stats-grid {
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    }
-}
-
 @media (max-width: 768px) {
     .stats-grid {
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        grid-template-columns: repeat(2, 1fr);
         gap: 16px;
     }
     
     .stat-card-value {
-        font-size: 28px;
+        font-size: 26px;
     }
     
     .content-placeholder {
-        padding: 20px;
+        padding: 16px;
     }
 }
 
@@ -3170,4 +3164,23 @@ body {
         opacity: 1;
         transform: scale(1);
     }
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Search Result Hover */
+.search-result-item:hover {
+    background: var(--bg-secondary, #f8fafc) !important;
+}
+
+/* Notification Item Hover */
+.notification-item:hover {
+    background: var(--bg-secondary, #f8fafc) !important;
 }

@@ -221,16 +221,16 @@ const menuGroups = [
         ]
     },
     {
-        label: 'Staff & Scheduling',
+        label: 'Staff',
         items: [
-            { id: 'staff', label: 'Staff Management', icon: Icons.briefcase },
-            { id: 'scheduling', label: 'Shift Scheduling', icon: Icons.calendar }
+            { id: 'staff', label: 'Staff Management', icon: Icons.briefcase }
         ]
     },
     {
         label: 'Financial',
         items: [
             { id: 'billing', label: 'Billing Payments', icon: Icons.creditCard },
+            { id: 'expenses', label: 'Expenses', icon: Icons.trendingUp },
             { id: 'inventory', label: 'Inventory Management', icon: Icons.clipboard }
         ]
     },
@@ -350,26 +350,446 @@ function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasMod
     );
 }
 
-// Notification Dropdown Component
-function NotificationDropdown({ isOpen, onClose }) {
+// Notification Dropdown Component - Real-time Global Notifications
+function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
+    const [notifications, setNotifications] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [readNotifications, setReadNotifications] = useState(() => {
+        // Load read notifications from localStorage
+        try {
+            const saved = localStorage.getItem('ecospark_read_notifications');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+
+    // Save read notifications to localStorage
+    const saveReadNotifications = (ids) => {
+        try {
+            localStorage.setItem('ecospark_read_notifications', JSON.stringify(ids));
+        } catch (e) { console.log('Error saving read notifications:', e); }
+    };
+
+    useEffect(() => {
+        if (!isOpen) return;
+        
+        let cancelled = false;
+        const allNotifications = [];
+
+        const loadNotifications = async () => {
+            setLoading(true);
+            const svc = window.FirebaseServices;
+            if (!svc) {
+                setLoading(false);
+                return;
+            }
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayStr = today.toISOString().split('T')[0];
+
+            // Get activities (recent ones)
+            if (svc.activityService?.getRecentActivities) {
+                try {
+                    const activities = await svc.activityService.getRecentActivities(10);
+                    activities.forEach(a => {
+                        allNotifications.push({
+                            id: `activity-${a.id}`,
+                            type: 'activity',
+                            icon: a.type === 'intake' ? '🚗' : a.type === 'billing' ? '💳' : a.type === 'wash' ? '🚿' : a.type === 'garage' ? '🔧' : '📋',
+                            title: a.description,
+                            subtitle: a.user || 'System',
+                            timestamp: a.timestamp,
+                            module: a.type === 'intake' ? 'vehicle-intake' : a.type === 'billing' ? 'billing' : a.type === 'wash' ? 'wash-bays' : a.type === 'garage' ? 'garage' : 'activities',
+                            color: '#3b82f6'
+                        });
+                    });
+                } catch (e) { console.log('Activities fetch error:', e); }
+            }
+
+            // Get low stock items
+            if (svc.inventoryService?.getItems) {
+                try {
+                    const items = await svc.inventoryService.getItems();
+                    items.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).forEach(i => {
+                        allNotifications.push({
+                            id: `lowstock-${i.id}`,
+                            type: 'alert',
+                            icon: '⚠️',
+                            title: `Low Stock: ${i.name}`,
+                            subtitle: `Only ${i.quantity || 0} ${i.unit || 'units'} remaining`,
+                            timestamp: new Date().toISOString(),
+                            module: 'inventory',
+                            color: '#ef4444',
+                            priority: 'high'
+                        });
+                    });
+                } catch (e) { console.log('Inventory fetch error:', e); }
+            }
+
+            // Get pending invoices
+            if (svc.billingService?.getInvoices) {
+                try {
+                    const invoices = await svc.billingService.getInvoices();
+                    const pendingInvoices = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial');
+                    if (pendingInvoices.length > 0) {
+                        const totalPending = pendingInvoices.reduce((sum, i) => sum + (i.totalAmount || i.total || 0), 0);
+                        allNotifications.push({
+                            id: 'pending-invoices',
+                            type: 'payment',
+                            icon: '💰',
+                            title: `${pendingInvoices.length} Pending Payments`,
+                            subtitle: `Total: KSh ${totalPending.toLocaleString()}`,
+                            timestamp: new Date().toISOString(),
+                            module: 'billing',
+                            color: '#f59e0b'
+                        });
+                    }
+                } catch (e) { console.log('Billing fetch error:', e); }
+            }
+
+            // Get equipment in maintenance
+            if (svc.equipmentService?.getEquipment) {
+                try {
+                    const equipment = await svc.equipmentService.getEquipment();
+                    const maintenanceEquip = equipment.filter(e => e.status === 'maintenance' || e.status === 'repair');
+                    maintenanceEquip.forEach(eq => {
+                        allNotifications.push({
+                            id: `equip-${eq.id}`,
+                            type: 'maintenance',
+                            icon: '🔧',
+                            title: `${eq.name} under maintenance`,
+                            subtitle: eq.notes || 'Requires attention',
+                            timestamp: eq.lastMaintenance || new Date().toISOString(),
+                            module: 'equipment',
+                            color: '#8b5cf6'
+                        });
+                    });
+                } catch (e) { console.log('Equipment fetch error:', e); }
+            }
+
+            // Get vehicles in queue (waiting)
+            if (svc.intakeQueueService?.getQueue) {
+                try {
+                    const queue = await svc.intakeQueueService.getQueue();
+                    if (queue.length > 0) {
+                        allNotifications.push({
+                            id: 'queue-alert',
+                            type: 'queue',
+                            icon: '🚗',
+                            title: `${queue.length} vehicles in queue`,
+                            subtitle: 'Waiting for service',
+                            timestamp: new Date().toISOString(),
+                            module: 'vehicle-intake',
+                            color: '#10b981'
+                        });
+                    }
+                } catch (e) { console.log('Queue fetch error:', e); }
+            }
+
+            // Sort by timestamp (newest first)
+            allNotifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            
+            if (!cancelled) {
+                setNotifications(allNotifications);
+                setLoading(false);
+            }
+        };
+
+        loadNotifications();
+        return () => { cancelled = true; };
+    }, [isOpen]);
+
+    const formatTime = (timestamp) => {
+        if (!timestamp) return '';
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diff = now - date;
+        const mins = Math.floor(diff / 60000);
+        const hours = Math.floor(diff / 3600000);
+        const days = Math.floor(diff / 86400000);
+        
+        if (mins < 1) return 'Just now';
+        if (mins < 60) return `${mins}m ago`;
+        if (hours < 24) return `${hours}h ago`;
+        if (days === 1) return 'Yesterday';
+        return date.toLocaleDateString();
+    };
+
+    const handleNotificationClick = (notification) => {
+        // Mark as read
+        if (!readNotifications.includes(notification.id)) {
+            const newRead = [...readNotifications, notification.id];
+            setReadNotifications(newRead);
+            saveReadNotifications(newRead);
+        }
+        if (onModuleClick && notification.module) {
+            onModuleClick(notification.module);
+        }
+        onClose();
+    };
+
+    const markAsRead = (notifId, e) => {
+        e.stopPropagation();
+        if (!readNotifications.includes(notifId)) {
+            const newRead = [...readNotifications, notifId];
+            setReadNotifications(newRead);
+            saveReadNotifications(newRead);
+        }
+    };
+
+    const markAllAsRead = () => {
+        const allIds = notifications.map(n => n.id);
+        setReadNotifications(allIds);
+        saveReadNotifications(allIds);
+    };
+
+    const clearNotification = (notifId, e) => {
+        e.stopPropagation();
+        setNotifications(prev => prev.filter(n => n.id !== notifId));
+        // Also mark as read
+        if (!readNotifications.includes(notifId)) {
+            const newRead = [...readNotifications, notifId];
+            setReadNotifications(newRead);
+            saveReadNotifications(newRead);
+        }
+    };
+
+    const clearAllNotifications = () => {
+        const allIds = notifications.map(n => n.id);
+        setReadNotifications(allIds);
+        saveReadNotifications(allIds);
+        setNotifications([]);
+    };
+
+    const unreadCount = notifications.filter(n => !readNotifications.includes(n.id)).length;
+
     if (!isOpen) return null;
 
     return (
         <>
             <div className="dropdown-overlay" onClick={onClose}></div>
-            <div className="dropdown notification-dropdown">
-                <div className="dropdown-header">
-                    <h3>Notifications</h3>
-                </div>
-                <div className="dropdown-content">
-                    <div className="empty-state">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                        </svg>
-                        <p>No notifications</p>
+            <div className="dropdown notification-dropdown" style={{ 
+                width: '380px', 
+                maxHeight: '500px',
+                borderRadius: '0'
+            }}>
+                <div className="dropdown-header" style={{ 
+                    padding: '14px 20px', 
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>Notifications</h3>
+                        {unreadCount > 0 && (
+                            <span style={{ 
+                                fontSize: '11px', 
+                                padding: '2px 8px', 
+                                background: '#ef4444',
+                                color: 'white',
+                                borderRadius: '10px',
+                                fontWeight: '600'
+                            }}>
+                                {unreadCount} new
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {unreadCount > 0 && (
+                            <button 
+                                onClick={markAllAsRead}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--accent-color)',
+                                    fontSize: '12px',
+                                    cursor: 'pointer',
+                                    padding: '4px 8px',
+                                    fontWeight: '500'
+                                }}
+                                title="Mark all as read"
+                            >
+                                ✓ Mark all read
+                            </button>
+                        )}
+                        {notifications.length > 0 && (
+                            <button 
+                                onClick={clearAllNotifications}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#ef4444',
+                                    fontSize: '12px',
+                                    cursor: 'pointer',
+                                    padding: '4px 8px',
+                                    fontWeight: '500'
+                                }}
+                                title="Clear all notifications"
+                            >
+                                ✕ Clear all
+                            </button>
+                        )}
                     </div>
                 </div>
+                <div className="dropdown-content" style={{ 
+                    maxHeight: '400px', 
+                    overflowY: 'auto',
+                    padding: 0
+                }}>
+                    {loading ? (
+                        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: '24px', marginBottom: '8px', animation: 'spin 1s linear infinite' }}>⏳</div>
+                            <div>Loading notifications...</div>
+                        </div>
+                    ) : notifications.length === 0 ? (
+                        <div className="empty-state" style={{ padding: '40px', textAlign: 'center' }}>
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                            </svg>
+                            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No notifications</p>
+                        </div>
+                    ) : (
+                        notifications.map((notif, idx) => {
+                            const isRead = readNotifications.includes(notif.id);
+                            return (
+                            <div 
+                                key={notif.id} 
+                                onClick={() => handleNotificationClick(notif)}
+                                style={{ 
+                                    padding: '14px 20px',
+                                    display: 'flex',
+                                    gap: '14px',
+                                    cursor: 'pointer',
+                                    borderBottom: idx < notifications.length - 1 ? '1px solid var(--border-color)' : 'none',
+                                    transition: 'background 0.15s',
+                                    background: notif.priority === 'high' ? 'rgba(239, 68, 68, 0.05)' : isRead ? 'transparent' : 'rgba(59, 130, 246, 0.03)',
+                                    opacity: isRead ? 0.7 : 1
+                                }}
+                                className="notification-item"
+                            >
+                                {/* Unread indicator */}
+                                {!isRead && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        left: '8px',
+                                        width: '6px',
+                                        height: '6px',
+                                        borderRadius: '50%',
+                                        background: '#3b82f6',
+                                        alignSelf: 'center'
+                                    }}></div>
+                                )}
+                                <div style={{
+                                    width: '40px',
+                                    height: '40px',
+                                    borderRadius: '0',
+                                    background: `${notif.color}15`,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '18px',
+                                    flexShrink: 0
+                                }}>
+                                    {notif.icon}
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ 
+                                        fontSize: '14px', 
+                                        fontWeight: isRead ? '400' : '600', 
+                                        color: 'var(--text-primary)',
+                                        marginBottom: '4px',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                    }}>
+                                        {notif.title}
+                                    </div>
+                                    <div style={{ 
+                                        fontSize: '12px', 
+                                        color: 'var(--text-secondary)',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center'
+                                    }}>
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{notif.subtitle}</span>
+                                        <span style={{ flexShrink: 0, marginLeft: '8px', fontSize: '11px' }}>{formatTime(notif.timestamp)}</span>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                                    {!isRead && (
+                                        <button
+                                            onClick={(e) => markAsRead(notif.id, e)}
+                                            style={{
+                                                background: 'none',
+                                                border: 'none',
+                                                color: 'var(--text-secondary)',
+                                                cursor: 'pointer',
+                                                padding: '4px',
+                                                fontSize: '14px',
+                                                opacity: 0.6,
+                                                transition: 'opacity 0.15s'
+                                            }}
+                                            title="Mark as read"
+                                            onMouseEnter={(e) => e.target.style.opacity = 1}
+                                            onMouseLeave={(e) => e.target.style.opacity = 0.6}
+                                        >
+                                            ✓
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={(e) => clearNotification(notif.id, e)}
+                                        style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            color: 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            padding: '4px',
+                                            fontSize: '12px',
+                                            opacity: 0.6,
+                                            transition: 'opacity 0.15s'
+                                        }}
+                                        title="Clear notification"
+                                        onMouseEnter={(e) => e.target.style.opacity = 1}
+                                        onMouseLeave={(e) => e.target.style.opacity = 0.6}
+                                    >
+                                        ✕
+                                    </button>
+                                    {notif.priority === 'high' && (
+                                        <div style={{
+                                            width: '8px',
+                                            height: '8px',
+                                            borderRadius: '50%',
+                                            background: '#ef4444'
+                                        }}></div>
+                                    )}
+                                </div>
+                            </div>
+                        )})
+                    )}
+                </div>
+                {notifications.length > 0 && (
+                    <div style={{ 
+                        padding: '12px 20px', 
+                        borderTop: '1px solid var(--border-color)',
+                        textAlign: 'center'
+                    }}>
+                        <button 
+                            onClick={() => { onModuleClick && onModuleClick('activities'); onClose(); }}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--accent-color)',
+                                fontSize: '13px',
+                                fontWeight: '600',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            View All Activities →
+                        </button>
+                    </div>
+                )}
             </div>
         </>
     );
@@ -422,9 +842,60 @@ function ProfileDropdown({ isOpen, onClose }) {
 }
 
 // Top Bar Component
-function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLogout }) {
+function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLogout, onModuleClick }) {
     const [notificationOpen, setNotificationOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
+    const [notificationCount, setNotificationCount] = useState(0);
+
+    // Get notification count on mount
+    useEffect(() => {
+        const loadNotificationCount = async () => {
+            const svc = window.FirebaseServices;
+            if (!svc) return;
+            
+            let count = 0;
+            
+            // Count low stock items
+            if (svc.inventoryService?.getItems) {
+                try {
+                    const items = await svc.inventoryService.getItems();
+                    count += items.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).length;
+                } catch (e) {}
+            }
+            
+            // Count pending invoices
+            if (svc.billingService?.getInvoices) {
+                try {
+                    const invoices = await svc.billingService.getInvoices();
+                    const pending = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial').length;
+                    if (pending > 0) count += 1;
+                } catch (e) {}
+            }
+            
+            // Count equipment in maintenance
+            if (svc.equipmentService?.getEquipment) {
+                try {
+                    const equipment = await svc.equipmentService.getEquipment();
+                    count += equipment.filter(e => e.status === 'maintenance' || e.status === 'repair').length;
+                } catch (e) {}
+            }
+            
+            // Count vehicles in queue
+            if (svc.intakeQueueService?.getQueue) {
+                try {
+                    const queue = await svc.intakeQueueService.getQueue();
+                    if (queue.length > 0) count += 1;
+                } catch (e) {}
+            }
+
+            setNotificationCount(count);
+        };
+
+        loadNotificationCount();
+        // Refresh count every 30 seconds
+        const interval = setInterval(loadNotificationCount, 30000);
+        return () => clearInterval(interval);
+    }, []);
 
     const handleNotificationClick = () => {
         setNotificationOpen(!notificationOpen);
@@ -441,6 +912,13 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
         if (onLogout) onLogout();
     };
 
+    const handleSettingsClick = (tab) => {
+        setProfileOpen(false);
+        if (onModuleClick) {
+            onModuleClick('settings', tab);
+        }
+    };
+
     return (
         <div className="topbar">
             <div className="topbar-left">
@@ -454,14 +932,37 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
             </div>
             <div className="topbar-right">
                 <div className="dropdown-container">
-                    <button className="topbar-button" onClick={handleNotificationClick} title="Notifications">
+                    <button className="topbar-button" onClick={handleNotificationClick} title="Notifications" style={{ position: 'relative' }}>
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                             <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
                         </svg>
-                        <span className="notification-badge"></span>
+                        {notificationCount > 0 && (
+                            <span style={{
+                                position: 'absolute',
+                                top: '2px',
+                                right: '2px',
+                                background: '#ef4444',
+                                color: 'white',
+                                fontSize: '10px',
+                                fontWeight: '700',
+                                minWidth: '16px',
+                                height: '16px',
+                                borderRadius: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '0 4px'
+                            }}>
+                                {notificationCount > 9 ? '9+' : notificationCount}
+                            </span>
+                        )}
                     </button>
-                    <NotificationDropdown isOpen={notificationOpen} onClose={() => setNotificationOpen(false)} />
+                    <NotificationDropdown 
+                        isOpen={notificationOpen} 
+                        onClose={() => setNotificationOpen(false)} 
+                        onModuleClick={onModuleClick}
+                    />
                 </div>
                 <button className="topbar-button" onClick={onToggleTheme} title="Toggle Theme">
                     {isDarkMode ? (
@@ -630,7 +1131,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 <div style={{ padding: '8px 0' }}>
                                     <a 
                                         href="#" 
-                                        onClick={(e) => e.preventDefault()}
+                                        onClick={(e) => { e.preventDefault(); handleSettingsClick('profile'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -652,7 +1153,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                     </a>
                                     <a 
                                         href="#" 
-                                        onClick={(e) => e.preventDefault()}
+                                        onClick={(e) => { e.preventDefault(); handleSettingsClick('account'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -674,7 +1175,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                     </a>
                                     <a 
                                         href="#" 
-                                        onClick={(e) => e.preventDefault()}
+                                        onClick={(e) => { e.preventDefault(); handleSettingsClick('support'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -766,7 +1267,24 @@ const SERVICE_TYPES = [
     { id: 'exterior-only', name: 'Exterior Only', price: 400 }
 ];
 
-// Vehicle types
+// Intake categories and item types
+const INTAKE_CATEGORIES = [
+    { id: 'vehicle', label: 'Vehicle', icon: '🚗' },
+    { id: 'motorbike', label: 'Motorbike', icon: '🏍️' },
+    { id: 'bicycle', label: 'Bicycle', icon: '🚲' },
+    { id: 'carpet', label: 'Carpet', icon: '🧹' },
+    { id: 'other', label: 'Other', icon: '📦' }
+];
+
+const ITEM_TYPES = {
+    vehicle: ['Sedan', 'SUV', 'Truck', 'Van', 'Bus', 'Pickup'],
+    motorbike: ['Sport Bike', 'Cruiser', 'Scooter', 'Off-road', 'Standard'],
+    bicycle: ['Mountain Bike', 'Road Bike', 'BMX', 'Electric Bike', 'Standard'],
+    carpet: ['Small (< 2m)', 'Medium (2-4m)', 'Large (4-6m)', 'Extra Large (> 6m)'],
+    other: ['Boat Cover', 'Car Seat', 'Floor Mats', 'Custom Item']
+};
+
+// Legacy support
 const VEHICLE_TYPES = ['Sedan', 'SUV', 'Truck', 'Van', 'Motorcycle', 'Bus'];
 
 // Default bays (fallback if Firebase not initialized)
@@ -796,7 +1314,8 @@ function VehicleIntake() {
     const [editFormData, setEditFormData] = useState({});
     const [formData, setFormData] = useState({
         plateNumber: '',
-        vehicleType: 'Sedan',
+        category: 'vehicle',
+        itemType: 'Sedan',
         service: '', // Will be set when packages load
         priority: 'normal',
         customerName: '',
@@ -804,6 +1323,28 @@ function VehicleIntake() {
     });
     const [searchQuery, setSearchQuery] = useState('');
     const [dateFilter, setDateFilter] = useState('all');
+
+    // Generate next auto-ID for non-vehicle categories
+    const generateNextId = (category) => {
+        const prefix = {
+            'motorbike': 'MB',
+            'bicycle': 'BC',
+            'carpet': 'CP',
+            'other': 'OT'
+        }[category] || 'ID';
+        
+        // Get all existing IDs with this prefix from queue and vehicles
+        const allItems = [...queue, ...vehicles];
+        const existingIds = allItems
+            .filter(item => item.plateNumber?.startsWith(prefix + '-'))
+            .map(item => {
+                const num = parseInt(item.plateNumber.replace(prefix + '-', ''), 10);
+                return isNaN(num) ? 0 : num;
+            });
+        
+        const nextNum = existingIds.length > 0 ? Math.max(...existingIds) + 1 : 1;
+        return `${prefix}-${String(nextNum).padStart(3, '0')}`;
+    };
 
     // Set default service when packages load
     useEffect(() => {
@@ -1028,9 +1569,17 @@ function VehicleIntake() {
             : 0
     };
 
-    // Add vehicle to queue (saves to Realtime Database)
+    // Add item to queue (saves to Realtime Database)
     const handleAddVehicle = async () => {
-        if (!formData.plateNumber.trim()) return;
+        // For vehicles, plate number is required. For others, auto-generate if empty
+        let plateNumber = formData.plateNumber.trim();
+        if (formData.category === 'vehicle' && !plateNumber) {
+            setError('Plate number is required for vehicles.');
+            return;
+        }
+        if (formData.category !== 'vehicle' && !plateNumber) {
+            plateNumber = generateNextId(formData.category);
+        }
         
         const services = window.FirebaseServices;
         if (!services || !services.intakeQueueService) {
@@ -1043,8 +1592,10 @@ function VehicleIntake() {
             // Find package from dynamic packages list
             const serviceInfo = servicePackages.find(s => s.id === formData.service) || servicePackages[0];
             const vehicleData = {
-                plateNumber: formData.plateNumber.toUpperCase(),
-                vehicleType: formData.vehicleType,
+                plateNumber: plateNumber.toUpperCase(),
+                category: formData.category,
+                itemType: formData.itemType,
+                vehicleType: formData.itemType, // Legacy support
                 service: serviceInfo ? { id: serviceInfo.id, name: serviceInfo.name, price: serviceInfo.price } : null,
                 priority: formData.priority,
                 customerName: formData.customerName || null,
@@ -1054,10 +1605,26 @@ function VehicleIntake() {
             const result = await services.intakeQueueService.addToQueue(vehicleData);
             
             if (result.success) {
-                console.log('✅ Vehicle added to queue:', result.id);
+                console.log('✅ Item added to queue:', result.id);
+                
+                // Log activity with user info
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'intake',
+                        action: 'Item Added to Queue',
+                        details: `${INTAKE_CATEGORIES.find(c => c.id === formData.category)?.label || 'Item'}: ${plateNumber.toUpperCase()} - ${serviceInfo?.name || 'No service'}`,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+                
                 setFormData({
                     plateNumber: '',
-                    vehicleType: 'Sedan',
+                    category: 'vehicle',
+                    itemType: 'Sedan',
                     service: servicePackages.length > 0 ? servicePackages[0].id : '',
                     priority: 'normal',
                     customerName: '',
@@ -1295,7 +1862,8 @@ function VehicleIntake() {
         setSelectedVehicle(vehicle);
         setEditFormData({
             plateNumber: vehicle.plateNumber || '',
-            vehicleType: vehicle.vehicleType || 'Sedan',
+            category: vehicle.category || 'vehicle',
+            itemType: vehicle.itemType || vehicle.vehicleType || 'Sedan',
             service: vehicle.service?.id || 'basic',
             priority: vehicle.priority || 'normal',
             customerName: vehicle.customerName || '',
@@ -1321,7 +1889,9 @@ function VehicleIntake() {
             const serviceInfo = servicePackages.find(s => s.id === editFormData.service) || servicePackages[0];
             const updateData = {
                 plateNumber: editFormData.plateNumber.toUpperCase(),
-                vehicleType: editFormData.vehicleType,
+                category: editFormData.category,
+                itemType: editFormData.itemType,
+                vehicleType: editFormData.itemType, // Legacy support
                 service: serviceInfo ? { id: serviceInfo.id, name: serviceInfo.name, price: serviceInfo.price } : null,
                 priority: editFormData.priority,
                 customerName: editFormData.customerName || null,
@@ -1603,7 +2173,7 @@ function VehicleIntake() {
                 <div className="action-bar-primary">
                     <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
                         {Icons.plus}
-                        <span>Add Vehicle</span>
+                        <span>Add Item</span>
                     </button>
                     <button className="action-btn action-btn-secondary" disabled={queue.length === 0}>
                         {Icons.package}
@@ -1658,21 +2228,23 @@ function VehicleIntake() {
             <div className="intake-section">
                 <div className="intake-section-header">
                     <h3>Queue</h3>
-                    <span className="intake-section-count">{queue.length} vehicles</span>
+                    <span className="intake-section-count">{queue.length} items</span>
                 </div>
                 <div className="intake-queue">
                     {queue.length === 0 ? (
                         <div className="intake-empty">
-                            <p>No vehicles in queue</p>
+                            <p>No items in queue</p>
                             <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
-                                {Icons.plus} Add First Vehicle
+                                {Icons.plus} Add Item
                             </button>
                         </div>
                     ) : (
                         queue.map((vehicle, index) => (
                             <div key={vehicle.id} className="queue-card">
                                 <div className="queue-card-header">
-                                    <span className="queue-card-plate">{vehicle.plateNumber}</span>
+                                    <span className="queue-card-plate">
+                                        {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                    </span>
                                     <span 
                                         className="queue-card-priority" 
                                         style={{ backgroundColor: getPriorityColor(vehicle.priority) }}
@@ -1685,7 +2257,7 @@ function VehicleIntake() {
                                         <span className="queue-card-service">{vehicle.service.name}</span>
                                         <span className="queue-card-time">{Icons.clock} {formatTimeElapsed(vehicle.timeIn)}</span>
                                     </div>
-                                    <span className="queue-card-type">{vehicle.vehicleType}</span>
+                                    <span className="queue-card-type">{vehicle.itemType || vehicle.vehicleType}</span>
                                 </div>
                                 <div className="queue-card-actions">
                                     <button 
@@ -1717,7 +2289,7 @@ function VehicleIntake() {
             <div className="intake-section">
                 <div className="intake-section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <h3 style={{ margin: 0 }}>Vehicle Records</h3>
+                        <h3 style={{ margin: 0 }}>Intake Records</h3>
                         <span className="intake-section-count">{filteredVehicles.length} of {vehicles.length}</span>
                     </div>
                     
@@ -1790,11 +2362,11 @@ function VehicleIntake() {
                     <table className="intake-table">
                         <thead>
                             <tr>
-                                <th>Plate Number</th>
-                                <th>Vehicle Type</th>
+                                <th>ID / Plate</th>
+                                <th>Category</th>
+                                <th>Type</th>
                                 <th>Service</th>
                                 <th>Price</th>
-                                <th>Assigned</th>
                                 <th>Status</th>
                                 <th>Time In</th>
                                 <th>Time Out</th>
@@ -1806,18 +2378,20 @@ function VehicleIntake() {
                                 <tr>
                                     <td colSpan="9" className="intake-table-empty">
                                         {vehicles.length === 0 
-                                            ? 'No vehicle records. Assign vehicles from the queue above.'
+                                            ? 'No intake records. Add items from the queue above.'
                                             : 'No records match your search or filter.'}
                                     </td>
                                 </tr>
                             ) : (
                                 filteredVehicles.map(vehicle => (
                                     <tr key={vehicle.id}>
-                                        <td className="intake-table-plate">{vehicle.plateNumber}</td>
-                                        <td>{vehicle.vehicleType}</td>
+                                        <td className="intake-table-plate">
+                                            {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                        </td>
+                                        <td>{INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.label || 'Vehicle'}</td>
+                                        <td>{vehicle.itemType || vehicle.vehicleType}</td>
                                         <td>{vehicle.service?.name || '-'}</td>
                                         <td style={{ color: '#10b981', fontWeight: '600' }}>KSH {vehicle.service?.price || 0}</td>
-                                        <td>{vehicle.assignedBay || '-'}</td>
                                         <td>
                                             {/* Status Dropdown - Direct Change */}
                                             <select
@@ -1897,35 +2471,90 @@ function VehicleIntake() {
                 </div>
             </div>
 
-            {/* Add Vehicle Modal */}
+            {/* Add Item Modal */}
             {showAddModal && (
                 <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Add Vehicle</h2>
+                            <h2>Add to Queue</h2>
                             <button className="modal-close" onClick={() => setShowAddModal(false)}>
                                 {Icons.x}
                             </button>
                         </div>
                         <div className="modal-body">
                             <div className="form-group">
-                                <label>Plate Number *</label>
-                                <input 
-                                    type="text" 
-                                    value={formData.plateNumber}
-                                    onChange={e => setFormData({...formData, plateNumber: e.target.value})}
-                                    placeholder="e.g., KAA 123A"
-                                    autoFocus
-                                />
+                                <label>Category</label>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                    {INTAKE_CATEGORIES.map(cat => (
+                                        <button
+                                            key={cat.id}
+                                            type="button"
+                                            onClick={() => {
+                                                const newCategory = cat.id;
+                                                const autoId = newCategory !== 'vehicle' ? generateNextId(newCategory) : '';
+                                                setFormData({
+                                                    ...formData, 
+                                                    category: newCategory, 
+                                                    itemType: ITEM_TYPES[newCategory][0],
+                                                    plateNumber: autoId
+                                                });
+                                            }}
+                                            style={{
+                                                padding: '8px 12px',
+                                                border: formData.category === cat.id ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                                                borderRadius: '8px',
+                                                background: formData.category === cat.id ? '#eff6ff' : '#fff',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                fontSize: '13px',
+                                                fontWeight: formData.category === cat.id ? '600' : '400'
+                                            }}
+                                        >
+                                            <span>{cat.icon}</span>
+                                            <span>{cat.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="form-group">
+                                <label>{formData.category === 'vehicle' ? 'Plate Number *' : 'ID (Auto-generated)'}</label>
+                                {formData.category === 'vehicle' ? (
+                                    <input 
+                                        type="text" 
+                                        value={formData.plateNumber}
+                                        onChange={e => setFormData({...formData, plateNumber: e.target.value})}
+                                        placeholder="e.g., KAA 123A"
+                                        autoFocus
+                                    />
+                                ) : (
+                                    <div style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        gap: '10px',
+                                        padding: '10px 14px',
+                                        background: '#f1f5f9',
+                                        borderRadius: '8px',
+                                        border: '1px solid #e2e8f0'
+                                    }}>
+                                        <span style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b' }}>
+                                            {formData.plateNumber || generateNextId(formData.category)}
+                                        </span>
+                                        <span style={{ fontSize: '12px', color: '#64748b' }}>
+                                            (Auto-assigned)
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
-                                    <label>Vehicle Type</label>
+                                    <label>Type</label>
                                     <select 
-                                        value={formData.vehicleType}
-                                        onChange={e => setFormData({...formData, vehicleType: e.target.value})}
+                                        value={formData.itemType}
+                                        onChange={e => setFormData({...formData, itemType: e.target.value})}
                                     >
-                                        {VEHICLE_TYPES.map(type => (
+                                        {(ITEM_TYPES[formData.category] || ITEM_TYPES.vehicle).map(type => (
                                             <option key={type} value={type}>{type}</option>
                                         ))}
                                     </select>
@@ -1989,7 +2618,7 @@ function VehicleIntake() {
                             <button 
                                 className="modal-btn modal-btn-primary" 
                                 onClick={handleAddVehicle}
-                                disabled={!formData.plateNumber.trim()}
+                                disabled={formData.category === 'vehicle' && !formData.plateNumber.trim()}
                             >
                                 Add to Queue
                             </button>
@@ -2033,12 +2662,12 @@ function VehicleIntake() {
                 </div>
             )}
 
-            {/* View Vehicle Modal */}
+            {/* View Details Modal */}
             {showViewModal && selectedVehicle && (
                 <div className="modal-overlay" onClick={() => setShowViewModal(false)}>
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Vehicle Details</h2>
+                            <h2>Item Details</h2>
                             <button className="modal-close" onClick={() => setShowViewModal(false)}>
                                 {Icons.x}
                             </button>
@@ -2046,12 +2675,18 @@ function VehicleIntake() {
                         <div className="modal-body">
                             <div className="vehicle-details">
                                 <div className="detail-row">
-                                    <span className="detail-label">Plate Number</span>
-                                    <span className="detail-value" style={{ fontWeight: 'bold', fontSize: '1.2em' }}>{selectedVehicle.plateNumber}</span>
+                                    <span className="detail-label">ID / Plate Number</span>
+                                    <span className="detail-value" style={{ fontWeight: 'bold', fontSize: '1.2em' }}>
+                                        {INTAKE_CATEGORIES.find(c => c.id === selectedVehicle.category)?.icon || '🚗'} {selectedVehicle.plateNumber}
+                                    </span>
                                 </div>
                                 <div className="detail-row">
-                                    <span className="detail-label">Vehicle Type</span>
-                                    <span className="detail-value">{selectedVehicle.vehicleType}</span>
+                                    <span className="detail-label">Category</span>
+                                    <span className="detail-value">{INTAKE_CATEGORIES.find(c => c.id === selectedVehicle.category)?.label || 'Vehicle'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Type</span>
+                                    <span className="detail-value">{selectedVehicle.itemType || selectedVehicle.vehicleType}</span>
                                 </div>
                                 <div className="detail-row">
                                     <span className="detail-label">Service</span>
@@ -2118,29 +2753,60 @@ function VehicleIntake() {
                 <div className="modal-overlay" onClick={() => setShowEditModal(false)}>
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Edit Vehicle</h2>
+                            <h2>Edit Record</h2>
                             <button className="modal-close" onClick={() => setShowEditModal(false)}>
                                 {Icons.x}
                             </button>
                         </div>
                         <div className="modal-body">
                             <div className="form-group">
-                                <label>Plate Number *</label>
+                                <label>ID / Plate Number *</label>
                                 <input 
                                     type="text" 
                                     value={editFormData.plateNumber}
                                     onChange={e => setEditFormData({...editFormData, plateNumber: e.target.value})}
-                                    placeholder="e.g., KAA 123A"
+                                    placeholder={editFormData.category === 'carpet' ? 'e.g., CARPET-001' : 'e.g., KAA 123A'}
                                 />
+                            </div>
+                            <div className="form-group">
+                                <label>Category</label>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                    {INTAKE_CATEGORIES.map(cat => (
+                                        <button
+                                            key={cat.id}
+                                            type="button"
+                                            onClick={() => setEditFormData({
+                                                ...editFormData, 
+                                                category: cat.id, 
+                                                itemType: ITEM_TYPES[cat.id][0]
+                                            })}
+                                            style={{
+                                                padding: '8px 12px',
+                                                border: editFormData.category === cat.id ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                                                borderRadius: '8px',
+                                                background: editFormData.category === cat.id ? '#eff6ff' : '#fff',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                fontSize: '13px',
+                                                fontWeight: editFormData.category === cat.id ? '600' : '400'
+                                            }}
+                                        >
+                                            <span>{cat.icon}</span>
+                                            <span>{cat.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
-                                    <label>Vehicle Type</label>
+                                    <label>Type</label>
                                     <select 
-                                        value={editFormData.vehicleType}
-                                        onChange={e => setEditFormData({...editFormData, vehicleType: e.target.value})}
+                                        value={editFormData.itemType}
+                                        onChange={e => setEditFormData({...editFormData, itemType: e.target.value})}
                                     >
-                                        {VEHICLE_TYPES.map(type => (
+                                        {(ITEM_TYPES[editFormData.category] || ITEM_TYPES.vehicle).map(type => (
                                             <option key={type} value={type}>{type}</option>
                                         ))}
                                     </select>
@@ -3760,6 +4426,1253 @@ function EquipmentManagement() {
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}`, backgroundColor: theme.bgSecondary }}>
                             <button onClick={() => setShowHistoryModal(false)} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Fleet Accounts Management Component
+function FleetAccounts() {
+    const [accounts, setAccounts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('accounts');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showViewModal, setShowViewModal] = useState(false);
+    const [showVehicleModal, setShowVehicleModal] = useState(false);
+    const [showContactModal, setShowContactModal] = useState(false);
+    const [showTopUpModal, setShowTopUpModal] = useState(false);
+    const [showExpenditureModal, setShowExpenditureModal] = useState(false);
+    const [showReceiptModal, setShowReceiptModal] = useState(false);
+    const [editingExpenditure, setEditingExpenditure] = useState(null);
+    const [selectedAccount, setSelectedAccount] = useState(null);
+    const [actionLoading, setActionLoading] = useState(false);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [error, setError] = useState(null);
+    const [stats, setStats] = useState({ total: 0, active: 0, suspended: 0, totalVehicles: 0, totalBalance: 0, totalSpent: 0, totalServices: 0, totalExpenditures: 0 });
+
+    const [accountForm, setAccountForm] = useState({
+        companyName: '', contactPerson: '', phone: '', email: '', address: '',
+        paymentTerms: 'prepaid', creditLimit: 0, discount: 0, balance: 0, notes: ''
+    });
+    const [vehicleForm, setVehicleForm] = useState({
+        plateNumber: '', make: '', model: '', color: '', vehicleType: 'Sedan', driverName: '', driverPhone: ''
+    });
+    const [contactForm, setContactForm] = useState({
+        name: '', phone: '', email: '', role: 'Driver', canAuthorize: false
+    });
+    const [topUpAmount, setTopUpAmount] = useState('');
+    const [topUpNote, setTopUpNote] = useState('');
+    const [expenditureForm, setExpenditureForm] = useState({
+        description: '', category: 'Fuel', amount: '', date: new Date().toISOString().split('T')[0], note: '', vehicle: ''
+    });
+
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        bgTertiary: isDark ? '#334155' : '#f1f5f9',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        inputBg: isDark ? '#1e293b' : 'white'
+    };
+
+    const formatCurrency = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
+
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    // Load fleet accounts
+    useEffect(() => {
+        let unsub;
+        const init = async () => {
+            let services = window.FirebaseServices;
+            let attempts = 0;
+            while (!services && attempts < 50) {
+                await new Promise(r => setTimeout(r, 100));
+                services = window.FirebaseServices;
+                attempts++;
+            }
+            if (services?.fleetService) {
+                unsub = services.fleetService.subscribeToAccounts((data) => {
+                    setAccounts(data);
+                    setStats(services.fleetService.getStats(data));
+                    setLoading(false);
+                });
+            } else {
+                setLoading(false);
+            }
+        };
+        init();
+        return () => unsub && unsub();
+    }, []);
+
+    const filteredAccounts = accounts.filter(acc => {
+        const matchesSearch = acc.companyName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            acc.accountNumber?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            acc.contactPerson?.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || acc.status === statusFilter;
+        return matchesSearch && matchesStatus;
+    });
+
+    const resetAccountForm = () => setAccountForm({
+        companyName: '', contactPerson: '', phone: '', email: '', address: '',
+        paymentTerms: 'prepaid', creditLimit: 0, discount: 0, balance: 0, notes: ''
+    });
+
+    const handleAddAccount = async () => {
+        if (!accountForm.companyName || !accountForm.phone) {
+            setError('Company name and phone are required');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.addAccount(accountForm);
+        if (result.success) {
+            setSuccessMessage(`Fleet account ${result.accountNumber} created successfully`);
+            setShowAddModal(false);
+            resetAccountForm();
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleEditAccount = async () => {
+        if (!selectedAccount) return;
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.updateAccount(selectedAccount.id, accountForm);
+        if (result.success) {
+            setSuccessMessage('Account updated successfully');
+            setShowEditModal(false);
+            setSelectedAccount(null);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleDeleteAccount = async (account) => {
+        if (!confirm(`Delete fleet account "${account.companyName}"? This cannot be undone.`)) return;
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.deleteAccount(account.id);
+        if (result.success) {
+            setSuccessMessage('Account deleted');
+        } else {
+            setError(result.error);
+        }
+    };
+
+    const handleAddVehicle = async () => {
+        if (!vehicleForm.plateNumber) {
+            setError('Plate number is required');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.addVehicle(selectedAccount.id, vehicleForm);
+        if (result.success) {
+            setSuccessMessage('Vehicle added successfully');
+            setShowVehicleModal(false);
+            setVehicleForm({ plateNumber: '', make: '', model: '', color: '', vehicleType: 'Sedan', driverName: '', driverPhone: '' });
+            // Refresh selected account
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleRemoveVehicle = async (vehicleId) => {
+        if (!confirm('Remove this vehicle from the fleet?')) return;
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.removeVehicle(selectedAccount.id, vehicleId);
+        if (result.success) {
+            setSuccessMessage('Vehicle removed');
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+    };
+
+    const handleAddContact = async () => {
+        if (!contactForm.name || !contactForm.phone) {
+            setError('Name and phone are required');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.addContact(selectedAccount.id, contactForm);
+        if (result.success) {
+            setSuccessMessage('Contact added');
+            setShowContactModal(false);
+            setContactForm({ name: '', phone: '', email: '', role: 'Driver', canAuthorize: false });
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleRemoveContact = async (contactId) => {
+        if (!confirm('Remove this contact?')) return;
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.removeContact(selectedAccount.id, contactId);
+        if (result.success) {
+            setSuccessMessage('Contact removed');
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+    };
+
+    const handleTopUp = async () => {
+        if (!topUpAmount || Number(topUpAmount) <= 0) {
+            setError('Enter a valid amount');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.addBalance(selectedAccount.id, Number(topUpAmount), topUpNote);
+        if (result.success) {
+            setSuccessMessage(`Balance topped up. New balance: ${formatCurrency(result.newBalance)}`);
+            setShowTopUpModal(false);
+            setTopUpAmount('');
+            setTopUpNote('');
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    // Expenditure handlers
+    const resetExpenditureForm = () => setExpenditureForm({
+        description: '', category: 'Fuel', amount: '', date: new Date().toISOString().split('T')[0], note: '', vehicle: ''
+    });
+
+    const handleAddExpenditure = async () => {
+        if (!expenditureForm.description || !expenditureForm.amount) {
+            setError('Description and amount are required');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.addExpenditure(selectedAccount.id, expenditureForm);
+        if (result.success) {
+            setSuccessMessage('Expenditure added successfully');
+            setShowExpenditureModal(false);
+            resetExpenditureForm();
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleUpdateExpenditure = async () => {
+        if (!expenditureForm.description || !expenditureForm.amount) {
+            setError('Description and amount are required');
+            return;
+        }
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.updateExpenditure(selectedAccount.id, editingExpenditure.id, expenditureForm);
+        if (result.success) {
+            setSuccessMessage('Expenditure updated');
+            setShowExpenditureModal(false);
+            setEditingExpenditure(null);
+            resetExpenditureForm();
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+        setActionLoading(false);
+    };
+
+    const handleDeleteExpenditure = async (expId) => {
+        if (!confirm('Delete this expenditure?')) return;
+        const services = window.FirebaseServices;
+        const result = await services.fleetService.deleteExpenditure(selectedAccount.id, expId);
+        if (result.success) {
+            setSuccessMessage('Expenditure deleted');
+            const accResult = await services.fleetService.getAccount(selectedAccount.id);
+            if (accResult.success) setSelectedAccount(accResult.data);
+        } else {
+            setError(result.error);
+        }
+    };
+
+    const openEditExpenditure = (exp) => {
+        setEditingExpenditure(exp);
+        setExpenditureForm({
+            description: exp.description || '',
+            category: exp.category || 'Fuel',
+            amount: exp.amount || '',
+            date: exp.date || new Date().toISOString().split('T')[0],
+            note: exp.note || '',
+            vehicle: exp.vehicle || ''
+        });
+        setShowExpenditureModal(true);
+    };
+
+    // Print receipt/invoice function
+    const printReceipt = (account, period = 'all') => {
+        const now = new Date();
+        let filteredTransactions = account.transactions || [];
+        let filteredExpenditures = account.expenditures || [];
+        let periodLabel = 'All Time';
+
+        if (period === 'month') {
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+            filteredTransactions = filteredTransactions.filter(t => new Date(t.date) >= monthStart);
+            filteredExpenditures = filteredExpenditures.filter(e => new Date(e.date) >= monthStart);
+            periodLabel = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        } else if (period === 'week') {
+            const weekStart = new Date(now);
+            weekStart.setDate(now.getDate() - 7);
+            filteredTransactions = filteredTransactions.filter(t => new Date(t.date) >= weekStart);
+            filteredExpenditures = filteredExpenditures.filter(e => new Date(e.date) >= weekStart);
+            periodLabel = 'Last 7 Days';
+        }
+
+        const totalCredits = filteredTransactions.filter(t => t.type === 'credit').reduce((s, t) => s + (t.amount || 0), 0);
+        const totalDebits = filteredTransactions.filter(t => t.type === 'debit').reduce((s, t) => s + (t.amount || 0), 0);
+        const totalExp = filteredExpenditures.reduce((s, e) => s + (e.amount || 0), 0);
+
+        const printContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fleet Account Statement - ${account.companyName}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1e293b; line-height: 1.5; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; }
+        .logo { font-size: 24px; font-weight: 800; color: #10b981; }
+        .logo span { color: #1e293b; }
+        .doc-info { text-align: right; }
+        .doc-title { font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+        .account-section { display: flex; justify-content: space-between; margin-bottom: 24px; }
+        .account-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; width: 48%; }
+        .account-box h4 { font-size: 10px; text-transform: uppercase; color: #64748b; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.5px; }
+        .account-box p { margin-bottom: 4px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+        .summary-card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 14px; text-align: center; }
+        .summary-card .value { font-size: 20px; font-weight: 800; }
+        .summary-card .label { font-size: 9px; text-transform: uppercase; color: #64748b; margin-top: 4px; }
+        .green { color: #10b981; }
+        .red { color: #ef4444; }
+        .blue { color: #3b82f6; }
+        .purple { color: #8b5cf6; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th { background: #1e293b; color: white; padding: 10px 12px; text-align: left; font-size: 10px; text-transform: uppercase; font-weight: 700; }
+        td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .section-title { font-size: 14px; font-weight: 700; margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 2px solid #1e293b; text-align: center; font-size: 11px; color: #64748b; }
+        .totals-box { background: #1e293b; color: white; padding: 16px; margin-top: 20px; display: flex; justify-content: space-between; }
+        .totals-box .item { text-align: center; }
+        .totals-box .val { font-size: 18px; font-weight: 700; }
+        .totals-box .lbl { font-size: 9px; text-transform: uppercase; opacity: 0.8; }
+        @media print { body { padding: 0; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <div class="logo">Eco<span>Spark</span></div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Professional Car Wash Services</div>
+        </div>
+        <div class="doc-info">
+            <div class="doc-title">Fleet Account Statement</div>
+            <div style="margin-top: 8px;">Date: ${now.toLocaleDateString()}</div>
+            <div>Period: ${periodLabel}</div>
+            <div style="font-family: monospace; margin-top: 4px;">${account.accountNumber}</div>
+        </div>
+    </div>
+
+    <div class="account-section">
+        <div class="account-box">
+            <h4>Account Details</h4>
+            <p><strong>${account.companyName}</strong></p>
+            <p>${account.contactPerson || ''}</p>
+            <p>${account.phone}</p>
+            <p>${account.email || ''}</p>
+            <p>${account.address || ''}</p>
+        </div>
+        <div class="account-box">
+            <h4>Account Summary</h4>
+            <p>Payment Terms: <strong>${(account.paymentTerms || 'prepaid').toUpperCase()}</strong></p>
+            <p>Credit Limit: <strong>KSH ${(account.creditLimit || 0).toLocaleString()}</strong></p>
+            <p>Discount Rate: <strong>${account.discount || 0}%</strong></p>
+            <p>Status: <strong style="color: ${account.status === 'active' ? '#10b981' : '#ef4444'}">${(account.status || 'active').toUpperCase()}</strong></p>
+            <p>Total Vehicles: <strong>${account.vehicles?.length || 0}</strong></p>
+        </div>
+    </div>
+
+    <div class="summary-grid">
+        <div class="summary-card">
+            <div class="value green">KSH ${(account.balance || 0).toLocaleString()}</div>
+            <div class="label">Current Balance</div>
+        </div>
+        <div class="summary-card">
+            <div class="value blue">KSH ${totalCredits.toLocaleString()}</div>
+            <div class="label">Total Top-ups</div>
+        </div>
+        <div class="summary-card">
+            <div class="value purple">KSH ${totalDebits.toLocaleString()}</div>
+            <div class="label">Services Used</div>
+        </div>
+        <div class="summary-card">
+            <div class="value red">KSH ${totalExp.toLocaleString()}</div>
+            <div class="label">Expenditures</div>
+        </div>
+    </div>
+
+    ${account.vehicles?.length > 0 ? `
+    <div class="section-title">Fleet Vehicles</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Plate Number</th>
+                <th>Vehicle</th>
+                <th>Driver</th>
+                <th class="text-center">Services</th>
+                <th class="text-right">Total Spent</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${account.vehicles.map(v => `
+                <tr>
+                    <td><strong>${v.plateNumber}</strong></td>
+                    <td>${v.make || ''} ${v.model || ''} ${v.color ? '(' + v.color + ')' : ''}</td>
+                    <td>${v.driverName || '-'}</td>
+                    <td class="text-center">${v.totalServices || 0}</td>
+                    <td class="text-right"><strong>KSH ${(v.totalSpent || 0).toLocaleString()}</strong></td>
+                </tr>
+            `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${filteredExpenditures.length > 0 ? `
+    <div class="section-title">Expenditures</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th>Vehicle</th>
+                <th class="text-right">Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${filteredExpenditures.map(e => `
+                <tr>
+                    <td>${new Date(e.date).toLocaleDateString()}</td>
+                    <td>${e.description}</td>
+                    <td>${e.category}</td>
+                    <td>${e.vehicle || '-'}</td>
+                    <td class="text-right red"><strong>KSH ${(e.amount || 0).toLocaleString()}</strong></td>
+                </tr>
+            `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${filteredTransactions.length > 0 ? `
+    <div class="section-title">Transactions (${periodLabel})</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Type</th>
+                <th class="text-right">Amount</th>
+                <th class="text-right">Balance</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${filteredTransactions.slice(0, 50).map(t => `
+                <tr>
+                    <td>${new Date(t.date).toLocaleDateString()}</td>
+                    <td>${t.note || t.serviceDetails?.service || (t.type === 'credit' ? 'Top-up' : 'Service Charge')}</td>
+                    <td>${t.type === 'credit' ? 'CREDIT' : 'DEBIT'}</td>
+                    <td class="text-right ${t.type === 'credit' ? 'green' : 'red'}">
+                        <strong>${t.type === 'credit' ? '+' : '-'}KSH ${(t.amount || 0).toLocaleString()}</strong>
+                    </td>
+                    <td class="text-right">KSH ${(t.balanceAfter || 0).toLocaleString()}</td>
+                </tr>
+            `).join('')}
+        </tbody>
+    </table>
+    ` : '<p style="text-align: center; color: #64748b; padding: 20px;">No transactions in this period.</p>'}
+
+    <div class="totals-box">
+        <div class="item">
+            <div class="val">KSH ${totalCredits.toLocaleString()}</div>
+            <div class="lbl">Total Credits</div>
+        </div>
+        <div class="item">
+            <div class="val">KSH ${totalDebits.toLocaleString()}</div>
+            <div class="lbl">Total Debits</div>
+        </div>
+        <div class="item">
+            <div class="val">KSH ${totalExp.toLocaleString()}</div>
+            <div class="lbl">Total Expenditures</div>
+        </div>
+        <div class="item">
+            <div class="val" style="color: ${account.balance >= 0 ? '#10b981' : '#ef4444'}">KSH ${(account.balance || 0).toLocaleString()}</div>
+            <div class="lbl">Current Balance</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>Thank you for your business with EcoSpark Car Wash</p>
+        <p style="margin-top: 8px;">This is a computer-generated document. No signature required.</p>
+        <p style="margin-top: 4px;">Generated on ${now.toLocaleString()}</p>
+    </div>
+</body>
+</html>`;
+
+        const printWindow = window.open('', '_blank', 'width=800,height=600');
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        printWindow.onload = () => {
+            printWindow.print();
+        };
+    };
+
+    const openViewModal = (account) => {
+        setSelectedAccount(account);
+        setShowViewModal(true);
+    };
+
+    const openEditModal = (account) => {
+        setSelectedAccount(account);
+        setAccountForm({
+            companyName: account.companyName || '',
+            contactPerson: account.contactPerson || '',
+            phone: account.phone || '',
+            email: account.email || '',
+            address: account.address || '',
+            paymentTerms: account.paymentTerms || 'prepaid',
+            creditLimit: account.creditLimit || 0,
+            discount: account.discount || 0,
+            balance: account.balance || 0,
+            notes: account.notes || ''
+        });
+        setShowEditModal(true);
+    };
+
+    const btnPrimary = { padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px' };
+    const btnSecondary = { padding: '10px 20px', background: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontWeight: '600', fontSize: '13px' };
+    const btnSuccess = { padding: '10px 20px', background: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px' };
+    const btnDanger = { padding: '8px 12px', background: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' };
+    const inputStyle = { width: '100%', padding: '10px 14px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '14px', outline: 'none' };
+    const labelStyle = { display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' };
+    const statCardStyle = { background: theme.bg, border: `1px solid ${theme.border}`, padding: '20px 24px', display: 'flex', alignItems: 'center', gap: '16px' };
+
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', color: theme.textSecondary }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '12px' }}>🚛</div>
+                    <div>Loading fleet accounts...</div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '0', width: '100%' }}>
+            {/* Toast Messages */}
+            {successMessage && (
+                <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, background: '#10b981', color: 'white', padding: '14px 24px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', fontWeight: '600' }}>
+                    ✓ {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, background: '#ef4444', color: 'white', padding: '14px 24px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', cursor: 'pointer', fontWeight: '600' }} onClick={() => setError(null)}>
+                    ✕ {error}
+                </div>
+            )}
+
+            {/* Stats Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>🏢</div>
+                    <div>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{stats.total}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Accounts</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>✓</div>
+                    <div>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981' }}>{stats.active}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Active</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>🚗</div>
+                    <div>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#3b82f6' }}>{stats.totalVehicles}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Vehicles</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>💰</div>
+                    <div>
+                        <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(stats.totalBalance)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Balance</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>📊</div>
+                    <div>
+                        <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(stats.totalSpent)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Spent</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle }}>
+                    <div style={{ fontSize: '24px' }}>🧾</div>
+                    <div>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{stats.totalServices}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Services</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Toolbar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: theme.bgSecondary, borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input
+                        type="text"
+                        placeholder="Search accounts..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        style={{ ...inputStyle, width: '280px' }}
+                    />
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: '140px' }}>
+                        <option value="all">All Status</option>
+                        <option value="active">Active</option>
+                        <option value="suspended">Suspended</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <button onClick={() => { resetAccountForm(); setShowAddModal(true); }} style={btnSuccess}>
+                    + New Fleet Account
+                </button>
+            </div>
+
+            {/* Accounts Table */}
+            <div style={{ overflowX: 'auto', background: theme.bg }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ background: theme.bgTertiary, borderBottom: `2px solid ${theme.border}` }}>
+                            <th style={{ padding: '14px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Account #</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Company</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Contact</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Vehicles</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'right', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Balance</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Discount</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
+                            <th style={{ padding: '14px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filteredAccounts.length === 0 ? (
+                            <tr>
+                                <td colSpan="8" style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>🚛</div>
+                                    <div style={{ fontSize: '14px', fontWeight: '600' }}>No fleet accounts found</div>
+                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>Create your first fleet account to get started</div>
+                                </td>
+                            </tr>
+                        ) : (
+                            filteredAccounts.map((acc, idx) => (
+                                <tr key={acc.id} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? theme.bg : theme.bgSecondary }}>
+                                    <td style={{ padding: '16px 20px' }}>
+                                        <span style={{ fontWeight: '700', color: '#3b82f6', cursor: 'pointer', fontFamily: 'monospace' }} onClick={() => openViewModal(acc)}>
+                                            {acc.accountNumber}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '16px 20px' }}>
+                                        <div style={{ fontWeight: '600', color: theme.text }}>{acc.companyName}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>{acc.email}</div>
+                                    </td>
+                                    <td style={{ padding: '16px 20px' }}>
+                                        <div style={{ color: theme.text }}>{acc.contactPerson || '-'}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>{acc.phone}</div>
+                                    </td>
+                                    <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                        <span style={{ background: theme.bgTertiary, padding: '4px 12px', fontWeight: '700', fontSize: '13px', color: theme.text }}>
+                                            {acc.vehicles?.length || 0}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '16px 20px', textAlign: 'right' }}>
+                                        <div style={{ fontWeight: '700', color: acc.balance >= 0 ? '#10b981' : '#ef4444', fontSize: '15px' }}>
+                                            {formatCurrency(acc.balance)}
+                                        </div>
+                                        {acc.creditLimit > 0 && (
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary }}>Credit: {formatCurrency(acc.creditLimit)}</div>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                        {acc.discount > 0 ? (
+                                            <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '4px 10px', fontWeight: '700', fontSize: '12px' }}>
+                                                {acc.discount}% OFF
+                                            </span>
+                                        ) : '-'}
+                                    </td>
+                                    <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                        <span style={{
+                                            padding: '4px 12px',
+                                            fontSize: '11px',
+                                            fontWeight: '700',
+                                            textTransform: 'uppercase',
+                                            background: acc.status === 'active' ? '#dcfce7' : acc.status === 'suspended' ? '#fef3c7' : '#fee2e2',
+                                            color: acc.status === 'active' ? '#166534' : acc.status === 'suspended' ? '#92400e' : '#dc2626'
+                                        }}>
+                                            {acc.status}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                            <button onClick={() => openViewModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="View">View</button>
+                                            <button onClick={() => openEditModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="Edit">Edit</button>
+                                            <button onClick={() => { setSelectedAccount(acc); setShowTopUpModal(true); }} style={{ padding: '8px 12px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Top Up">Top Up</button>
+                                            <button onClick={() => handleDeleteAccount(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid #ef4444`, cursor: 'pointer', fontSize: '12px', color: '#ef4444' }} title="Delete">Delete</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Add/Edit Account Modal */}
+            {(showAddModal || showEditModal) && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowAddModal(false); setShowEditModal(false); }}>
+                    <div style={{ background: theme.bg, width: '600px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h3 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>{showAddModal ? 'New Fleet Account' : 'Edit Fleet Account'}</h3>
+                            <button onClick={() => { setShowAddModal(false); setShowEditModal(false); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                    <label style={labelStyle}>Company Name *</label>
+                                    <input type="text" value={accountForm.companyName} onChange={(e) => setAccountForm({ ...accountForm, companyName: e.target.value })} style={inputStyle} placeholder="e.g. ABC Logistics Ltd" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Contact Person</label>
+                                    <input type="text" value={accountForm.contactPerson} onChange={(e) => setAccountForm({ ...accountForm, contactPerson: e.target.value })} style={inputStyle} placeholder="Primary contact name" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Phone *</label>
+                                    <input type="text" value={accountForm.phone} onChange={(e) => setAccountForm({ ...accountForm, phone: e.target.value })} style={inputStyle} placeholder="0712345678" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Email</label>
+                                    <input type="email" value={accountForm.email} onChange={(e) => setAccountForm({ ...accountForm, email: e.target.value })} style={inputStyle} placeholder="accounts@company.com" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Payment Terms</label>
+                                    <select value={accountForm.paymentTerms} onChange={(e) => setAccountForm({ ...accountForm, paymentTerms: e.target.value })} style={inputStyle}>
+                                        <option value="prepaid">Prepaid (Balance)</option>
+                                        <option value="postpaid">Postpaid (Invoice)</option>
+                                        <option value="credit">Credit Line</option>
+                                    </select>
+                                </div>
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                    <label style={labelStyle}>Address</label>
+                                    <input type="text" value={accountForm.address} onChange={(e) => setAccountForm({ ...accountForm, address: e.target.value })} style={inputStyle} placeholder="Business address" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Credit Limit (KSH)</label>
+                                    <input type="number" value={accountForm.creditLimit} onChange={(e) => setAccountForm({ ...accountForm, creditLimit: Number(e.target.value) })} style={inputStyle} placeholder="0" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Discount %</label>
+                                    <input type="number" min="0" max="100" value={accountForm.discount} onChange={(e) => setAccountForm({ ...accountForm, discount: Number(e.target.value) })} style={inputStyle} placeholder="0" />
+                                </div>
+                                {showAddModal && (
+                                    <div>
+                                        <label style={labelStyle}>Initial Balance (KSH)</label>
+                                        <input type="number" value={accountForm.balance} onChange={(e) => setAccountForm({ ...accountForm, balance: Number(e.target.value) })} style={inputStyle} placeholder="0" />
+                                    </div>
+                                )}
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                    <label style={labelStyle}>Notes</label>
+                                    <textarea value={accountForm.notes} onChange={(e) => setAccountForm({ ...accountForm, notes: e.target.value })} style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }} placeholder="Special instructions or notes..." />
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', padding: '20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => { setShowAddModal(false); setShowEditModal(false); }} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '13px', color: theme.text, fontWeight: '600' }}>Cancel</button>
+                            <button onClick={showAddModal ? handleAddAccount : handleEditAccount} disabled={actionLoading} style={{ padding: '10px 20px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '13px', color: 'white', fontWeight: '600' }}>
+                                {actionLoading ? 'Saving...' : (showAddModal ? 'Create Account' : 'Save Changes')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* View Account Modal (Detail View) */}
+            {showViewModal && selectedAccount && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowViewModal(false)}>
+                    <div style={{ background: theme.bg, width: '900px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', borderBottom: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                            <div>
+                                <h3 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>{selectedAccount.companyName}</h3>
+                                <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px', fontFamily: 'monospace' }}>{selectedAccount.accountNumber}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <span style={{
+                                    padding: '6px 14px',
+                                    fontSize: '12px',
+                                    fontWeight: '700',
+                                    textTransform: 'uppercase',
+                                    background: selectedAccount.status === 'active' ? '#dcfce7' : '#fef3c7',
+                                    color: selectedAccount.status === 'active' ? '#166534' : '#92400e'
+                                }}>
+                                    {selectedAccount.status}
+                                </span>
+                                <button onClick={() => setShowViewModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                            </div>
+                        </div>
+
+                        {/* Account Summary Cards */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Balance</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: selectedAccount.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(selectedAccount.balance)}</div>
+                            </div>
+                            <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Credit Limit</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: theme.text }}>{formatCurrency(selectedAccount.creditLimit)}</div>
+                            </div>
+                            <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Spent</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(selectedAccount.totalSpent)}</div>
+                            </div>
+                            <div style={{ padding: '16px 20px' }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Discount</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: '#3b82f6' }}>{selectedAccount.discount || 0}%</div>
+                            </div>
+                        </div>
+
+                        {/* Contact Info */}
+                        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+                            <div>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600', marginBottom: '4px' }}>Contact Person</div>
+                                <div style={{ color: theme.text, fontWeight: '500' }}>{selectedAccount.contactPerson || '-'}</div>
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600', marginBottom: '4px' }}>Phone</div>
+                                <div style={{ color: theme.text, fontWeight: '500' }}>{selectedAccount.phone}</div>
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600', marginBottom: '4px' }}>Email</div>
+                                <div style={{ color: theme.text, fontWeight: '500' }}>{selectedAccount.email || '-'}</div>
+                            </div>
+                        </div>
+
+                        {/* Vehicles Section */}
+                        <div style={{ padding: '20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Fleet Vehicles ({selectedAccount.vehicles?.length || 0})</h4>
+                                <button onClick={() => setShowVehicleModal(true)} style={{ padding: '8px 16px', background: '#3b82f6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }}>+ Add Vehicle</button>
+                            </div>
+                            {selectedAccount.vehicles?.length > 0 ? (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                                    {selectedAccount.vehicles.map(v => (
+                                        <div key={v.id} style={{ background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '14px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                <div>
+                                                    <div style={{ fontWeight: '700', color: theme.text, fontSize: '15px', fontFamily: 'monospace' }}>{v.plateNumber}</div>
+                                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>{v.make} {v.model} • {v.color}</div>
+                                                    {v.driverName && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>Driver: {v.driverName}</div>}
+                                                </div>
+                                                <button onClick={() => handleRemoveVehicle(v.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '16px', marginTop: '10px', fontSize: '11px' }}>
+                                                <span style={{ color: theme.textSecondary }}>Services: <strong style={{ color: theme.text }}>{v.totalServices || 0}</strong></span>
+                                                <span style={{ color: theme.textSecondary }}>Spent: <strong style={{ color: '#10b981' }}>{formatCurrency(v.totalSpent)}</strong></span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ padding: '30px', textAlign: 'center', color: theme.textSecondary, background: theme.bgSecondary }}>
+                                    No vehicles registered. Add vehicles to this fleet account.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Authorized Contacts Section */}
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Authorized Contacts ({selectedAccount.authorizedContacts?.length || 0})</h4>
+                                <button onClick={() => setShowContactModal(true)} style={{ padding: '8px 16px', background: '#3b82f6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }}>+ Add Contact</button>
+                            </div>
+                            {selectedAccount.authorizedContacts?.length > 0 ? (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' }}>
+                                    {selectedAccount.authorizedContacts.map(c => (
+                                        <div key={c.id} style={{ background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <div style={{ fontWeight: '600', color: theme.text }}>{c.name}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{c.phone} • {c.role}</div>
+                                            </div>
+                                            <button onClick={() => handleRemoveContact(c.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ padding: '20px', textAlign: 'center', color: theme.textSecondary, background: theme.bgSecondary }}>
+                                    No authorized contacts. Add people who can bring vehicles for service.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Expenditures Section */}
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Fleet Expenditures ({selectedAccount.expenditures?.length || 0})</h4>
+                                <button onClick={() => { resetExpenditureForm(); setEditingExpenditure(null); setShowExpenditureModal(true); }} style={{ padding: '8px 16px', background: '#8b5cf6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }}>+ Add Expenditure</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', marginBottom: '12px' }}>
+                                <div style={{ background: theme.bgSecondary, padding: '12px 16px', border: `1px solid ${theme.border}`, flex: 1 }}>
+                                    <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Expenditures</div>
+                                    <div style={{ fontSize: '20px', fontWeight: '800', color: '#ef4444' }}>{formatCurrency(selectedAccount.totalExpenditures)}</div>
+                                </div>
+                                <div style={{ background: theme.bgSecondary, padding: '12px 16px', border: `1px solid ${theme.border}`, flex: 1 }}>
+                                    <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Net Position (Spent - Exp)</div>
+                                    <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency((selectedAccount.totalSpent || 0) - (selectedAccount.totalExpenditures || 0))}</div>
+                                </div>
+                            </div>
+                            {selectedAccount.expenditures?.length > 0 ? (
+                                <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                                    {selectedAccount.expenditures.slice(0, 15).map(exp => (
+                                        <div key={exp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderBottom: `1px solid ${theme.border}`, background: theme.bgSecondary, marginBottom: '4px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                    <span style={{ fontSize: '13px', fontWeight: '600', color: theme.text }}>{exp.description}</span>
+                                                    <span style={{ fontSize: '10px', padding: '2px 6px', background: theme.bgTertiary, color: theme.textSecondary }}>{exp.category}</span>
+                                                </div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+                                                    {new Date(exp.date).toLocaleDateString()} {exp.vehicle && `• ${exp.vehicle}`}
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <span style={{ fontWeight: '700', color: '#ef4444' }}>{formatCurrency(exp.amount)}</span>
+                                                <div style={{ display: 'flex', gap: '4px' }}>
+                                                    <button onClick={() => openEditExpenditure(exp)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '10px', color: theme.text }}>Edit</button>
+                                                    <button onClick={() => handleDeleteExpenditure(exp.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid #ef4444`, cursor: 'pointer', fontSize: '10px', color: '#ef4444' }}>Delete</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ padding: '20px', textAlign: 'center', color: theme.textSecondary, background: theme.bgSecondary }}>
+                                    No expenditures recorded. Track fuel, maintenance, and other fleet costs here.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Recent Transactions */}
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: '0 0 12px 0', color: theme.text, fontWeight: '700' }}>📜 Recent Transactions</h4>
+                            {selectedAccount.transactions?.length > 0 ? (
+                                <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                                    {selectedAccount.transactions.slice(0, 10).map(txn => (
+                                        <div key={txn.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{new Date(txn.date).toLocaleString()}</div>
+                                                <div style={{ fontSize: '13px', color: theme.text }}>{txn.note || txn.serviceDetails?.service || (txn.type === 'credit' ? 'Top-up' : 'Service Charge')}</div>
+                                            </div>
+                                            <div style={{ fontWeight: '700', color: txn.type === 'credit' ? '#10b981' : '#ef4444' }}>
+                                                {txn.type === 'credit' ? '+' : '-'}{formatCurrency(txn.amount)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ padding: '20px', textAlign: 'center', color: theme.textSecondary, background: theme.bgSecondary }}>
+                                    No transactions yet.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', padding: '20px', borderTop: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={() => setShowReceiptModal(true)} style={{ padding: '10px 20px', background: '#1e293b', border: 'none', cursor: 'pointer', fontSize: '13px', color: 'white', fontWeight: '600' }}>Print Statement</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={() => setShowViewModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '13px', color: theme.text, fontWeight: '600' }}>Close</button>
+                                <button onClick={() => { setShowViewModal(false); openEditModal(selectedAccount); }} style={{ padding: '10px 20px', background: 'none', border: `1px solid #3b82f6`, cursor: 'pointer', fontSize: '13px', color: '#3b82f6', fontWeight: '600' }}>Edit Account</button>
+                                <button onClick={() => { setShowTopUpModal(true); }} style={{ padding: '10px 20px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '13px', color: 'white', fontWeight: '600' }}>Top Up Balance</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Print Receipt Modal */}
+            {showReceiptModal && selectedAccount && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002 }} onClick={() => setShowReceiptModal(false)}>
+                    <div style={{ background: theme.bg, width: '400px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: 0, color: theme.text }}>Print Account Statement</h4>
+                            <button onClick={() => setShowReceiptModal(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            <div style={{ marginBottom: '16px', padding: '16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>Account</div>
+                                <div style={{ fontWeight: '700', color: theme.text }}>{selectedAccount.companyName}</div>
+                                <div style={{ fontSize: '12px', color: theme.textSecondary, fontFamily: 'monospace' }}>{selectedAccount.accountNumber}</div>
+                            </div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>Select the period for your statement:</div>
+                            <div style={{ display: 'grid', gap: '10px' }}>
+                                <button onClick={() => { printReceipt(selectedAccount, 'week'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left' }}>
+                                    Last 7 Days
+                                </button>
+                                <button onClick={() => { printReceipt(selectedAccount, 'month'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left' }}>
+                                    This Month
+                                </button>
+                                <button onClick={() => { printReceipt(selectedAccount, 'all'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: '#1e293b', border: 'none', cursor: 'pointer', fontSize: '14px', color: 'white', fontWeight: '600', textAlign: 'left' }}>
+                                    Full Statement (All Time)
+                                </button>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => setShowReceiptModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Expenditure Modal */}
+            {showExpenditureModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002 }} onClick={() => { setShowExpenditureModal(false); setEditingExpenditure(null); }}>
+                    <div style={{ background: theme.bg, width: '450px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: 0, color: theme.text }}>{editingExpenditure ? 'Edit Expenditure' : 'Add Expenditure'}</h4>
+                            <button onClick={() => { setShowExpenditureModal(false); setEditingExpenditure(null); }} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px', display: 'grid', gap: '12px' }}>
+                            <div>
+                                <label style={labelStyle}>Description *</label>
+                                <input type="text" value={expenditureForm.description} onChange={(e) => setExpenditureForm({ ...expenditureForm, description: e.target.value })} style={inputStyle} placeholder="e.g. Fuel refill, Tire change" />
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={labelStyle}>Category</label>
+                                    <select value={expenditureForm.category} onChange={(e) => setExpenditureForm({ ...expenditureForm, category: e.target.value })} style={inputStyle}>
+                                        <option value="Fuel">Fuel</option>
+                                        <option value="Maintenance">Maintenance</option>
+                                        <option value="Repairs">Repairs</option>
+                                        <option value="Tires">Tires</option>
+                                        <option value="Insurance">Insurance</option>
+                                        <option value="Parking">Parking</option>
+                                        <option value="Toll">Toll</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Amount (KSH) *</label>
+                                    <input type="number" value={expenditureForm.amount} onChange={(e) => setExpenditureForm({ ...expenditureForm, amount: e.target.value })} style={inputStyle} placeholder="0" />
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={labelStyle}>Date</label>
+                                    <input type="date" value={expenditureForm.date} onChange={(e) => setExpenditureForm({ ...expenditureForm, date: e.target.value })} style={inputStyle} />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Vehicle (Optional)</label>
+                                    <select value={expenditureForm.vehicle} onChange={(e) => setExpenditureForm({ ...expenditureForm, vehicle: e.target.value })} style={inputStyle}>
+                                        <option value="">-- Select Vehicle --</option>
+                                        {selectedAccount?.vehicles?.map(v => (
+                                            <option key={v.id} value={v.plateNumber}>{v.plateNumber}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Note</label>
+                                <input type="text" value={expenditureForm.note} onChange={(e) => setExpenditureForm({ ...expenditureForm, note: e.target.value })} style={inputStyle} placeholder="Additional details..." />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => { setShowExpenditureModal(false); setEditingExpenditure(null); }} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={editingExpenditure ? handleUpdateExpenditure : handleAddExpenditure} disabled={actionLoading} style={{ padding: '10px 20px', background: '#8b5cf6', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer', opacity: actionLoading ? 0.7 : 1 }}>{actionLoading ? 'Saving...' : (editingExpenditure ? 'Update' : 'Add Expenditure')}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Vehicle Modal */}
+            {showVehicleModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }} onClick={() => setShowVehicleModal(false)}>
+                    <div style={{ background: theme.bg, width: '450px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: 0, color: theme.text }}>Add Vehicle</h4>
+                            <button onClick={() => setShowVehicleModal(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px', display: 'grid', gap: '12px' }}>
+                            <div>
+                                <label style={labelStyle}>Plate Number *</label>
+                                <input type="text" value={vehicleForm.plateNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, plateNumber: e.target.value.toUpperCase() })} style={inputStyle} placeholder="KAA 123X" />
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={labelStyle}>Make</label>
+                                    <input type="text" value={vehicleForm.make} onChange={(e) => setVehicleForm({ ...vehicleForm, make: e.target.value })} style={inputStyle} placeholder="Toyota" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Model</label>
+                                    <input type="text" value={vehicleForm.model} onChange={(e) => setVehicleForm({ ...vehicleForm, model: e.target.value })} style={inputStyle} placeholder="Hiace" />
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={labelStyle}>Color</label>
+                                    <input type="text" value={vehicleForm.color} onChange={(e) => setVehicleForm({ ...vehicleForm, color: e.target.value })} style={inputStyle} placeholder="White" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Vehicle Type</label>
+                                    <select value={vehicleForm.vehicleType} onChange={(e) => setVehicleForm({ ...vehicleForm, vehicleType: e.target.value })} style={inputStyle}>
+                                        <option value="Sedan">Sedan</option>
+                                        <option value="SUV">SUV</option>
+                                        <option value="Van">Van</option>
+                                        <option value="Truck">Truck</option>
+                                        <option value="Bus">Bus</option>
+                                        <option value="Motorcycle">Motorcycle</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={labelStyle}>Driver Name</label>
+                                    <input type="text" value={vehicleForm.driverName} onChange={(e) => setVehicleForm({ ...vehicleForm, driverName: e.target.value })} style={inputStyle} placeholder="Optional" />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Driver Phone</label>
+                                    <input type="text" value={vehicleForm.driverPhone} onChange={(e) => setVehicleForm({ ...vehicleForm, driverPhone: e.target.value })} style={inputStyle} placeholder="Optional" />
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => setShowVehicleModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={handleAddVehicle} disabled={actionLoading} style={{ padding: '10px 20px', background: '#10b981', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer', opacity: actionLoading ? 0.7 : 1 }}>{actionLoading ? 'Adding...' : 'Add Vehicle'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Contact Modal */}
+            {showContactModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }} onClick={() => setShowContactModal(false)}>
+                    <div style={{ background: theme.bg, width: '400px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: 0, color: theme.text }}>Add Authorized Contact</h4>
+                            <button onClick={() => setShowContactModal(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px', display: 'grid', gap: '12px' }}>
+                            <div>
+                                <label style={labelStyle}>Name *</label>
+                                <input type="text" value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} style={inputStyle} placeholder="Full name" />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Phone *</label>
+                                <input type="text" value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} style={inputStyle} placeholder="0712345678" />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Email</label>
+                                <input type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} style={inputStyle} placeholder="Optional" />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Role</label>
+                                <select value={contactForm.role} onChange={(e) => setContactForm({ ...contactForm, role: e.target.value })} style={inputStyle}>
+                                    <option value="Driver">Driver</option>
+                                    <option value="Fleet Manager">Fleet Manager</option>
+                                    <option value="Accounts">Accounts</option>
+                                    <option value="Supervisor">Supervisor</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => setShowContactModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={handleAddContact} disabled={actionLoading} style={{ padding: '10px 20px', background: '#10b981', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer', opacity: actionLoading ? 0.7 : 1 }}>{actionLoading ? 'Adding...' : 'Add Contact'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Top Up Modal */}
+            {showTopUpModal && selectedAccount && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }} onClick={() => setShowTopUpModal(false)}>
+                    <div style={{ background: theme.bg, width: '400px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <h4 style={{ margin: 0, color: theme.text }}>Top Up Balance</h4>
+                            <button onClick={() => setShowTopUpModal(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', marginBottom: '16px', borderLeft: '4px solid #10b981' }}>
+                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>Current Balance</div>
+                                <div style={{ fontSize: '24px', fontWeight: '800', color: selectedAccount.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(selectedAccount.balance)}</div>
+                            </div>
+                            <div style={{ marginBottom: '12px' }}>
+                                <label style={labelStyle}>Amount (KSH) *</label>
+                                <input type="number" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} style={inputStyle} placeholder="Enter amount" />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Note / Reference</label>
+                                <input type="text" value={topUpNote} onChange={(e) => setTopUpNote(e.target.value)} style={inputStyle} placeholder="e.g. Cash deposit, M-Pesa ref" />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                            <button onClick={() => setShowTopUpModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={handleTopUp} disabled={actionLoading} style={{ padding: '10px 20px', background: '#10b981', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer', opacity: actionLoading ? 0.7 : 1 }}>{actionLoading ? 'Processing...' : 'Add Balance'}</button>
                         </div>
                     </div>
                 </div>
@@ -7030,11 +8943,48 @@ function GarageManagement() {
 }
 
 // ==================== WASH BAYS MODULE ====================
-function WashBays() {
+
+// Error Boundary for WashBays
+class WashBaysErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+    
+    static getDerivedStateFromError(error) {
+        return { hasError: true, error: error.message };
+    }
+    
+    componentDidCatch(error, errorInfo) {
+        console.error('WashBays Error:', error, errorInfo);
+    }
+    
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{ padding: '40px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+                    <h3 style={{ color: '#dc2626', marginBottom: '8px' }}>Something went wrong in Wash Bays</h3>
+                    <p style={{ color: '#64748b', marginBottom: '16px' }}>{this.state.error}</p>
+                    <button 
+                        onClick={() => window.location.reload()}
+                        style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        Reload Page
+                    </button>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+function WashBaysContent() {
     const [bays, setBays] = useState([]);
     const [history, setHistory] = useState([]);
     const [intakeQueue, setIntakeQueue] = useState([]);
     const [staffList, setStaffList] = useState([]);
+    const [servicePackages, setServicePackages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [showAssignModal, setShowAssignModal] = useState(false);
@@ -7051,6 +9001,15 @@ function WashBays() {
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
     const [assignMode, setAssignMode] = useState('select'); // 'select' or 'new'
     const [selectedVehicleId, setSelectedVehicleId] = useState('');
+    const [renderError, setRenderError] = useState(null);
+    const [componentMounted, setComponentMounted] = useState(false);
+    
+    // Debug logging on mount
+    useEffect(() => {
+        console.log('WashBaysContent: Component mounting...');
+        setComponentMounted(true);
+        return () => console.log('WashBaysContent: Component unmounted');
+    }, []);
 
     // Form states
     const [bayForm, setBayForm] = useState({ name: '', type: 'standard' });
@@ -7058,7 +9017,7 @@ function WashBays() {
         plateNumber: '', 
         customerName: '', 
         vehicleType: 'sedan', 
-        service: 'Basic Wash',
+        service: '',
         assignedTo: ''
     });
 
@@ -7100,7 +9059,6 @@ function WashBays() {
     ];
 
     const VEHICLE_TYPES = ['Sedan', 'SUV', 'Truck', 'Van', 'Motorcycle', 'Bus'];
-    const SERVICES = ['Basic Wash', 'Full Service', 'Premium Detail', 'Express Wash', 'Interior Only', 'Exterior Only'];
 
     const STATUS_CONFIG = {
         available: { label: 'Available', color: '#10b981', bg: '#d1fae5' },
@@ -7112,53 +9070,107 @@ function WashBays() {
     useEffect(() => {
         const services = window.FirebaseServices;
         if (!services?.washBayService) {
+            console.error('WashBayService not available');
             setLoading(false);
+            setError('Wash bay service not available. Please refresh the page.');
             return;
         }
 
-        // Initialize bays if needed
-        services.washBayService.initializeBays();
+        let unsubBays, unsubHistory, unsubQueue, unsubStaff, unsubPackages;
 
-        // Subscribe to bays
-        const unsubBays = services.washBayService.subscribeToBays((data) => {
-            setBays(data);
-            setLoading(false);
-        });
+        const initializeData = async () => {
+            try {
+                // Initialize bays if needed
+                await services.washBayService.initializeBays();
 
-        // Subscribe to history
-        const unsubHistory = services.washBayService.subscribeToHistory((data) => {
-            setHistory(data);
-        });
+                // Subscribe to bays
+                unsubBays = services.washBayService.subscribeToBays((data) => {
+                    try {
+                        const baysData = Array.isArray(data)
+                            ? data
+                            : data && typeof data === 'object'
+                                ? Object.values(data)
+                                : [];
+                        console.log('WashBays: Received bays data', baysData.length);
+                        setBays(baysData);
+                        setLoading(false);
+                    } catch (cbErr) {
+                        console.error('WashBays: Error handling bays data', cbErr);
+                        setError('Failed to load wash bays data.');
+                        setLoading(false);
+                    }
+                });
 
-        // Subscribe to intake queue (vehicles waiting)
-        let unsubQueue = null;
-        if (services.intakeQueueService) {
-            unsubQueue = services.intakeQueueService.subscribeToQueue((data) => {
-                // Filter only waiting vehicles
-                setIntakeQueue(data.filter(v => v.status === 'waiting'));
-            });
-        }
+                // Subscribe to history
+                unsubHistory = services.washBayService.subscribeToHistory((data) => {
+                    setHistory(data);
+                });
 
-        // Subscribe to staff list
-        let unsubStaff = null;
-        if (services.staffService) {
-            unsubStaff = services.staffService.subscribeToStaff((data) => {
-                setStaffList(data);
-            });
-        }
+                // Subscribe to intake queue (vehicles waiting)
+                if (services.intakeQueueService) {
+                    unsubQueue = services.intakeQueueService.subscribeToQueue((data) => {
+                        // Filter only waiting vehicles
+                        setIntakeQueue(data.filter(v => v.status === 'waiting'));
+                    });
+                }
 
-        // Get today's stats
-        services.washBayService.getTodayStats().then(result => {
-            if (result.success) setTodayStats(result.data);
-        });
+                // Subscribe to staff list
+                if (services.staffService) {
+                    unsubStaff = services.staffService.subscribeToStaff((data) => {
+                        setStaffList(data);
+                    });
+                }
+
+                // Subscribe to service packages
+                if (services.packagesService) {
+                    unsubPackages = services.packagesService.subscribeToPackages((data) => {
+                        const activePackages = data.filter(p => p.isActive !== false);
+                        setServicePackages(activePackages);
+                    });
+                }
+
+                // Get today's stats
+                const result = await services.washBayService.getTodayStats();
+                if (result.success) setTodayStats(result.data);
+            } catch (err) {
+                console.error('WashBays initialization error:', err);
+                setError('Failed to load wash bays. Please refresh.');
+                setLoading(false);
+            } finally {
+                // In case none of the subscriptions fired yet
+                setLoading((prev) => {
+                    if (prev) {
+                        console.warn('WashBays: Forcing loading false after init');
+                        return false;
+                    }
+                    return prev;
+                });
+            }
+        };
+
+        initializeData();
 
         return () => {
             if (unsubBays) unsubBays();
             if (unsubHistory) unsubHistory();
             if (unsubQueue) unsubQueue();
             if (unsubStaff) unsubStaff();
+            if (unsubPackages) unsubPackages();
         };
     }, []);
+
+    // Timeout to prevent infinite loading
+    useEffect(() => {
+        if (loading) {
+            const timeout = setTimeout(() => {
+                if (loading) {
+                    console.warn('WashBays: Loading timeout - forcing render');
+                    setLoading(false);
+                }
+            }, 5000); // 5 second timeout
+            return () => clearTimeout(timeout);
+        }
+    }, [loading]);
 
     // Calculate elapsed time for occupied bays
     const getElapsedTime = (startTime) => {
@@ -7211,6 +9223,18 @@ function WashBays() {
             return;
         }
         
+        // Validate service selection
+        if (!assignForm.service) {
+            setError('Please select a service');
+            return;
+        }
+        
+        // Get selected service package info
+        const selectedPackage = servicePackages.find(p => p.id === assignForm.service);
+        const serviceInfo = selectedPackage 
+            ? { id: selectedPackage.id, name: selectedPackage.name, price: selectedPackage.price }
+            : { name: assignForm.service, price: 0 };
+        
         setActionLoading(true);
         setError(null);
 
@@ -7231,7 +9255,7 @@ function WashBays() {
                     plateNumber: queueVehicle.plateNumber,
                     customerName: queueVehicle.customerName || queueVehicle.ownerName || '',
                     vehicleType: queueVehicle.vehicleType || 'sedan',
-                    service: assignForm.service,
+                    service: serviceInfo,
                     assignedBy: assignForm.assignedTo,
                     queueId: queueVehicle.id
                 };
@@ -7246,7 +9270,7 @@ function WashBays() {
                     plateNumber: assignForm.plateNumber.toUpperCase(),
                     customerName: assignForm.customerName,
                     vehicleType: assignForm.vehicleType,
-                    service: assignForm.service,
+                    service: serviceInfo,
                     assignedBy: assignForm.assignedTo
                 };
             }
@@ -7258,7 +9282,7 @@ function WashBays() {
                     plateNumber: vehicleData.plateNumber,
                     customerName: vehicleData.customerName,
                     vehicleType: vehicleData.vehicleType,
-                    service: { name: vehicleData.service },
+                    service: vehicleData.service,
                     status: 'in-progress',
                     assignedBay: selectedBay.name,
                     assignedBayId: selectedBay.id,
@@ -7284,7 +9308,7 @@ function WashBays() {
                     plateNumber: vehicleData.plateNumber,
                     customerName: vehicleData.customerName,
                     vehicleType: vehicleData.vehicleType,
-                    selectedServices: [vehicleData.service],
+                    service: vehicleData.service,
                     status: 'in-progress',
                     assignedBay: selectedBay.name,
                     assignedBayId: selectedBay.id,
@@ -7304,7 +9328,7 @@ function WashBays() {
                 setSelectedBay(null);
                 setSelectedVehicleId('');
                 setAssignMode('select');
-                setAssignForm({ plateNumber: '', customerName: '', vehicleType: 'sedan', service: 'Basic Wash', assignedTo: '' });
+                setAssignForm({ plateNumber: '', customerName: '', vehicleType: 'sedan', service: '', assignedTo: '' });
             } else {
                 setError(result.error);
             }
@@ -7363,6 +9387,9 @@ function WashBays() {
 
             // 4. Create invoice for the completed wash
             const washPrice = currentVehicle?.servicePrice || 500; // Default price if not set
+            const serviceName = typeof currentVehicle?.service === 'object' 
+                ? currentVehicle?.service?.name 
+                : currentVehicle?.service || 'Car Wash';
             if (services.billingService) {
                 await services.billingService.createInvoice({
                     source: 'wash',
@@ -7372,7 +9399,7 @@ function WashBays() {
                     vehicleType: currentVehicle?.vehicleType || 'Vehicle',
                     customerName: currentVehicle?.customerName || 'Walk-in',
                     customerPhone: currentVehicle?.customerPhone || '',
-                    services: [{ name: currentVehicle?.service || 'Car Wash', price: washPrice }],
+                    services: [{ name: serviceName, price: washPrice }],
                     totalAmount: washPrice,
                     assignedTo: currentVehicle?.assignedTo || '',
                     startTime: currentVehicle?.startTime || bay.startTime
@@ -7383,6 +9410,20 @@ function WashBays() {
             // Refresh stats
             const result = await services.washBayService.getTodayStats();
             if (result.success) setTodayStats(result.data);
+            
+            // Log activity
+            if (services.activityService) {
+                const currentUser = window.currentUserProfile;
+                services.activityService.logActivity({
+                    type: 'wash',
+                    action: 'Wash Completed',
+                    details: `${currentVehicle?.plateNumber} - ${bay.name} - KSH ${washPrice}`,
+                    status: 'success',
+                    loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                    loggedByEmail: currentUser?.email || null,
+                    loggedByRole: currentUser?.role || null
+                });
+            }
             
             setSuccessMessage(`${currentVehicle?.plateNumber} wash completed!`);
         } catch (err) {
@@ -7490,39 +9531,67 @@ function WashBays() {
         setConfirmAction(null);
     };
 
+    // Safe access helpers
+    const safeBays = Array.isArray(bays) ? bays.filter(b => b && typeof b === 'object') : [];
+    const safeQueue = Array.isArray(intakeQueue) ? intakeQueue : [];
+    const safeStats = todayStats || { completed: 0, avgTime: 0 };
+
     // Stats cards
     const statsCards = [
         { 
             label: 'In Queue', 
-            value: intakeQueue.length, 
+            value: safeQueue.length, 
             icon: '⏳',
             color: '#6366f1'
         },
         { 
             label: 'Available Bays', 
-            value: bays.filter(b => b.status === 'available').length, 
+            value: safeBays.filter(b => b.status === 'available').length, 
             icon: '✅',
             color: '#10b981'
         },
         { 
             label: 'In Progress', 
-            value: bays.filter(b => b.status === 'occupied').length, 
+            value: safeBays.filter(b => b.status === 'occupied').length, 
             icon: '🚗',
             color: '#f59e0b'
         },
         { 
             label: 'Completed Today', 
-            value: todayStats.completed, 
+            value: safeStats.completed || 0, 
             icon: '🏁',
             color: '#8b5cf6'
         }
     ];
+
+    // Debug: Log render state
+    console.log('WashBays render - loading:', loading, 'bays:', safeBays.length, 'error:', error);
+
+    // Show render error if caught
+    if (renderError) {
+        return (
+            <div style={{ padding: '24px', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+                <h3 style={{ color: '#dc2626', marginBottom: '8px' }}>Render Error</h3>
+                <p style={{ color: '#64748b', marginBottom: '16px' }}>{renderError}</p>
+                <button 
+                    onClick={() => { setRenderError(null); window.location.reload(); }}
+                    style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                    Reload Page
+                </button>
+            </div>
+        );
+    }
+
     if (loading) {
         return (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', backgroundColor: '#f8fafc' }}>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                 <div style={{ textAlign: 'center' }}>
                     <div style={{ width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
-                    <p style={{ color: theme.textSecondary }}>Loading wash bays...</p>
+                    <p style={{ color: '#64748b' }}>Loading wash bays...</p>
+                    <p style={{ color: '#94a3b8', fontSize: '12px', marginTop: '8px' }}>Please wait while we fetch data...</p>
                 </div>
             </div>
         );
@@ -7639,7 +9708,7 @@ function WashBays() {
                     gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', 
                     gap: '20px' 
                 }}>
-                    {bays.length === 0 ? (
+                    {safeBays.length === 0 ? (
                         <div style={{ 
                             gridColumn: '1/-1', 
                             textAlign: 'center', 
@@ -7653,7 +9722,8 @@ function WashBays() {
                             <p style={{ color: theme.textSecondary }}>Click "Add Bay" to create your first wash bay</p>
                         </div>
                     ) : (
-                        bays.map(bay => {
+                        safeBays.map(bay => {
+                            if (!bay) return null;
                             const statusConfig = STATUS_CONFIG[bay.status] || STATUS_CONFIG.available;
                             const bayType = BAY_TYPES.find(t => t.id === bay.type) || BAY_TYPES[0];
 
@@ -7761,7 +9831,7 @@ function WashBays() {
                                                         borderRadius: '2px'
                                                     }}>
                                                         <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Service</div>
-                                                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text }}>{bay.currentVehicle.service}</div>
+                                                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text }}>{typeof bay.currentVehicle.service === 'object' ? bay.currentVehicle.service?.name : bay.currentVehicle.service || '-'}</div>
                                                     </div>
                                                     <div style={{
                                                         padding: '10px',
@@ -7931,7 +10001,7 @@ function WashBays() {
                                                 <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                                {record.vehicle?.service || '-'}
+                                                {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                                 {record.vehicle?.assignedBy || '-'}
@@ -7972,7 +10042,7 @@ function WashBays() {
                                             <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                            {record.vehicle?.service || '-'}
+                                            {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                             {record.vehicle?.assignedBy || record.completedBy || '-'}
@@ -8350,8 +10420,9 @@ function WashBays() {
                                         fontSize: '14px'
                                     }}
                                 >
-                                    {SERVICES.map(s => (
-                                        <option key={s} value={s}>{s}</option>
+                                    <option value="">Select a service...</option>
+                                    {servicePackages.map(pkg => (
+                                        <option key={pkg.id} value={pkg.id}>{pkg.name} - KES {pkg.price?.toLocaleString()}</option>
                                     ))}
                                 </select>
                             </div>
@@ -8688,13 +10759,44 @@ function WashBays() {
     );
 }
 
+// Wrapper component with Error Boundary
+function WashBays() {
+    try {
+        return (
+            <WashBaysErrorBoundary>
+                <WashBaysContent />
+            </WashBaysErrorBoundary>
+        );
+    } catch (err) {
+        console.error('WashBays wrapper error:', err);
+        return (
+            <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#fee2e2' }}>
+                <h3 style={{ color: '#dc2626' }}>Failed to load Wash Bays</h3>
+                <p style={{ color: '#64748b' }}>{err.message}</p>
+                <button onClick={() => window.location.reload()} style={{ marginTop: '16px', padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reload</button>
+            </div>
+        );
+    }
+}
+
 // Dashboard Component - Real-time Firebase Integration
 function Dashboard({ onModuleClick }) {
     const [searchQuery, setSearchQuery] = useState('');
+    const [showSearchResults, setShowSearchResults] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0);
     const [vehicles, setVehicles] = useState([]);
     const [queue, setQueue] = useState([]);
     const [bays, setBays] = useState([]);
     const [garageJobs, setGarageJobs] = useState([]);
+    const [invoices, setInvoices] = useState([]);
+    const [customers, setCustomers] = useState([]);
+    const [inventory, setInventory] = useState([]);
+    const [fleet, setFleet] = useState([]);
+    const [expenses, setExpenses] = useState([]);
+    const [equipment, setEquipment] = useState([]);
+    const [staff, setStaff] = useState([]);
+    const [washHistory, setWashHistory] = useState([]);
+    const [activities, setActivities] = useState([]);
     const [loading, setLoading] = useState(true);
 
     // Subscribe to Firebase data for real-time stats
@@ -8720,7 +10822,7 @@ function Dashboard({ onModuleClick }) {
         
         function initializeSubscriptions() {
             const svc = window.FirebaseServices;
-            let unsubRecords, unsubQueue, unsubBays, unsubGarage;
+            let unsubRecords, unsubQueue, unsubBays, unsubGarage, unsubInvoices, unsubCustomers, unsubInventory, unsubFleet, unsubExpenses, unsubEquipment, unsubStaff;
             
             // Subscribe to vehicle records (Firestore)
             if (svc.intakeRecordsService) {
@@ -8745,14 +10847,24 @@ function Dashboard({ onModuleClick }) {
                 );
             }
             
-            // Subscribe to bays (Realtime DB)
-            if (svc.intakeBaysService) {
-                unsubBays = svc.intakeBaysService.subscribeToBays(
+            // Subscribe to bays (Realtime DB - from Wash Bay module)
+            if (svc.washBayService?.subscribeToBays) {
+                unsubBays = svc.washBayService.subscribeToBays(
                     (baysData) => {
-                        console.log('Dashboard: Bays updated', baysData.length);
+                        console.log('Dashboard: Wash Bays updated', baysData.length);
                         setBays(baysData);
-                    },
-                    (err) => console.error('Dashboard bays error:', err)
+                    }
+                );
+            }
+
+            // Subscribe to wash history
+            let unsubWashHistory = null;
+            if (svc.washBayService?.subscribeToHistory) {
+                unsubWashHistory = svc.washBayService.subscribeToHistory(
+                    (historyData) => {
+                        console.log('Dashboard: Wash History updated', historyData.length);
+                        setWashHistory(historyData);
+                    }
                 );
             }
             
@@ -8766,15 +10878,92 @@ function Dashboard({ onModuleClick }) {
                     (err) => console.error('Dashboard garage error:', err)
                 );
             }
+
+            // Subscribe to billing/invoices for revenue
+            if (svc.billingService?.subscribeToInvoices) {
+                unsubInvoices = svc.billingService.subscribeToInvoices((invoiceData) => {
+                    console.log('Dashboard: Invoices updated', invoiceData.length);
+                    setInvoices(invoiceData);
+                });
+            }
+
+            // Subscribe to customers
+            if (svc.customerService?.subscribeToCustomers) {
+                unsubCustomers = svc.customerService.subscribeToCustomers((customerData) => {
+                    console.log('Dashboard: Customers updated', customerData.length);
+                    setCustomers(customerData);
+                });
+            }
+
+            // Subscribe to inventory
+            if (svc.inventoryService?.subscribeToItems) {
+                unsubInventory = svc.inventoryService.subscribeToItems((items) => {
+                    console.log('Dashboard: Inventory updated', items.length);
+                    setInventory(items);
+                });
+            }
+
+            // Subscribe to fleet
+            if (svc.fleetService?.subscribeToAccounts) {
+                unsubFleet = svc.fleetService.subscribeToAccounts((accounts) => {
+                    console.log('Dashboard: Fleet updated', accounts.length);
+                    setFleet(accounts);
+                });
+            }
+
+            // Subscribe to expenses
+            if (svc.expensesService?.subscribeToExpenses) {
+                unsubExpenses = svc.expensesService.subscribeToExpenses((expenseData) => {
+                    console.log('Dashboard: Expenses updated', expenseData.length);
+                    setExpenses(expenseData);
+                });
+            }
+
+            // Subscribe to equipment
+            if (svc.equipmentService?.subscribeToEquipment) {
+                unsubEquipment = svc.equipmentService.subscribeToEquipment((equipmentData) => {
+                    console.log('Dashboard: Equipment updated', equipmentData.length);
+                    setEquipment(equipmentData);
+                });
+            }
+
+            // Subscribe to staff
+            if (svc.staffService?.subscribeToStaff) {
+                unsubStaff = svc.staffService.subscribeToStaff((staffData) => {
+                    console.log('Dashboard: Staff updated', staffData.length);
+                    setStaff(staffData);
+                });
+            }
+
+            // Subscribe to activities for recent activity feed
+            let unsubActivities = null;
+            if (svc.activityService?.subscribeToActivities) {
+                unsubActivities = svc.activityService.subscribeToActivities(
+                    (activityData) => {
+                        console.log('Dashboard: Activities updated', activityData.length);
+                        setActivities(activityData);
+                    },
+                    50 // Get more activities to filter for today
+                );
+            }
             
             return () => {
                 if (unsubRecords) unsubRecords();
                 if (unsubQueue) unsubQueue();
                 if (unsubBays) unsubBays();
                 if (unsubGarage) unsubGarage();
+                if (unsubInvoices) unsubInvoices();
+                if (unsubCustomers) unsubCustomers();
+                if (unsubInventory) unsubInventory();
+                if (unsubFleet) unsubFleet();
+                if (unsubExpenses) unsubExpenses();
+                if (unsubEquipment) unsubEquipment();
+                if (unsubStaff) unsubStaff();
+                if (unsubWashHistory) unsubWashHistory();
+                if (unsubActivities) unsubActivities();
             };
         }
-    }, []);
+    }, [refreshKey]);
 
     // Calculate real-time stats
     const today = new Date();
@@ -8788,36 +10977,127 @@ function Dashboard({ onModuleClick }) {
     
     const completedToday = todayVehicles.filter(v => v.status === 'completed');
     
-    // Calculate wash revenue (from completed wash vehicles)
-    const washRevenueToday = completedToday.reduce((sum, v) => sum + (v.service?.price || 0), 0);
-    
-    // Calculate garage revenue (from completed garage jobs today)
-    const garageJobsToday = garageJobs.filter(job => {
-        if (job.status !== 'completed' || !job.completedAt) return false;
-        const jobDate = new Date(job.completedAt);
-        jobDate.setHours(0, 0, 0, 0);
-        return jobDate.getTime() === today.getTime();
+    // Calculate revenue from BILLING MODULE only
+    const todayInvoices = invoices.filter(inv => {
+        const invDate = new Date(inv.createdAt || inv.date);
+        invDate.setHours(0, 0, 0, 0);
+        return invDate.getTime() === today.getTime();
     });
-    const garageRevenueToday = garageJobsToday.reduce((sum, job) => sum + (job.totalCost || 0), 0);
     
-    // Total revenue
-    const totalRevenueToday = washRevenueToday + garageRevenueToday;
+    const totalRevenueToday = todayInvoices.reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
+    const paidRevenueToday = todayInvoices.filter(inv => inv.paymentStatus === 'paid').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
+    const pendingRevenueToday = totalRevenueToday - paidRevenueToday;
+    
+    // Separate wash and garage revenue
+    const washRevenueToday = todayInvoices.filter(inv => inv.source === 'wash').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
+    const garageRevenueToday = todayInvoices.filter(inv => inv.source === 'garage').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
     
     const inProgressCount = vehicles.filter(v => v.status === 'in-progress').length;
+    
+    // Real-time wash bays stats
+    const totalBays = bays.length;
     const occupiedBays = bays.filter(b => b.status === 'occupied').length;
     const availableBays = bays.filter(b => b.status === 'available').length;
-    const uniqueCustomers = [...new Set(vehicles.filter(v => v.customerPhone).map(v => v.customerPhone))].length;
+    const maintenanceBays = bays.filter(b => b.status === 'maintenance').length;
+    
+    // Wash history stats - count completed washes today
+    const todayStr = today.toISOString().split('T')[0];
+    const completedWashesToday = washHistory.filter(h => {
+        if (h.action !== 'completed') return false;
+        const hDate = h.timestamp ? new Date(h.timestamp).toISOString().split('T')[0] : null;
+        return hDate === todayStr;
+    }).length;
+    const totalWashHistory = washHistory.filter(h => h.action === 'completed').length;
+    
+    // Real-time inventory stats
+    const lowStockItems = inventory.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).length;
+    const inventoryValue = inventory.reduce((s, i) => s + ((i.quantity || 0) * (i.unitCost || i.cost || 0)), 0);
+    
+    // Real-time fleet stats
+    const totalFleetBalance = fleet.reduce((s, f) => s + (f.balance || 0), 0);
+    const fleetVehicles = fleet.reduce((s, f) => s + (f.vehicles?.length || 0), 0);
+    
+    // Garage jobs stats - detailed breakdown
+    const garageJobsQueue = garageJobs.filter(j => j.status === 'pending' || j.status === 'queued').length;
+    const garageJobsInProgress = garageJobs.filter(j => j.status === 'in-progress').length;
+    const garageJobsCompleted = garageJobs.filter(j => j.status === 'completed').length;
+    const activeGarageJobs = garageJobsQueue + garageJobsInProgress;
+
+    // Real-time expenses stats
+    const expensesToday = expenses.filter(e => e.date === todayStr).reduce((sum, e) => sum + (e.amount || 0), 0);
+    const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    // Real-time equipment stats
+    const totalEquipment = equipment.length;
+    const operationalEquipment = equipment.filter(e => e.status === 'operational').length;
+    const maintenanceEquipment = equipment.filter(e => e.status === 'maintenance' || e.status === 'repair').length;
+
+    // Real-time staff stats
+    const totalStaff = staff.length;
+    const activeStaff = staff.filter(s => s.status === 'active' || s.isActive === true || !s.status).length;
     
     const handleRefresh = () => {
-        console.log('Refreshing dashboard...');
+        console.log('Refreshing dashboard data...');
         setLoading(true);
-        setTimeout(() => setLoading(false), 100);
+        setRefreshKey(prev => prev + 1); // Trigger re-subscription
     };
     
     const handleSearch = (e) => {
-        setSearchQuery(e.target.value);
-        console.log('Searching for:', e.target.value);
+        const query = e.target.value;
+        setSearchQuery(query);
+        setShowSearchResults(query.trim().length > 0);
     };
+
+    // Global search function
+    const getSearchResults = () => {
+        if (!searchQuery.trim()) return { vehicles: [], customers: [], invoices: [], staff: [], activities: [] };
+        const q = searchQuery.toLowerCase();
+        
+        const matchedVehicles = vehicles.filter(v => 
+            (v.plateNumber || v.registrationNumber || '').toLowerCase().includes(q) ||
+            (v.ownerName || v.customerName || '').toLowerCase().includes(q) ||
+            (v.vehicleType || v.type || '').toLowerCase().includes(q) ||
+            (v.itemType || '').toLowerCase().includes(q) ||
+            (v.category || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+        
+        const matchedCustomers = customers.filter(c => 
+            (c.name || '').toLowerCase().includes(q) ||
+            (c.phone || '').toLowerCase().includes(q) ||
+            (c.email || '').toLowerCase().includes(q) ||
+            (c.company || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+        
+        const matchedInvoices = invoices.filter(i => 
+            (i.invoiceNumber || i.id || '').toLowerCase().includes(q) ||
+            (i.customerName || '').toLowerCase().includes(q) ||
+            (i.plateNumber || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+
+        const matchedStaff = staff.filter(s => 
+            (s.name || '').toLowerCase().includes(q) ||
+            (s.role || '').toLowerCase().includes(q) ||
+            (s.phone || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+
+        const matchedActivities = activities.filter(a => 
+            (a.description || '').toLowerCase().includes(q) ||
+            (a.type || '').toLowerCase().includes(q) ||
+            (a.user || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+        
+        return { 
+            vehicles: matchedVehicles, 
+            customers: matchedCustomers, 
+            invoices: matchedInvoices,
+            staff: matchedStaff,
+            activities: matchedActivities
+        };
+    };
+
+    const searchResults = getSearchResults();
+    const hasResults = Object.values(searchResults).some(arr => arr.length > 0);
+    const totalResults = Object.values(searchResults).reduce((sum, arr) => sum + arr.length, 0);
     
     const stats = [
         {
@@ -8827,21 +11107,35 @@ function Dashboard({ onModuleClick }) {
             color: '#3b82f6'
         },
         {
-            title: 'Active Bays',
-            value: `${occupiedBays}/${bays.length || 4}`,
+            title: 'Total Vehicles',
+            value: vehicles.length.toString(),
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
+            color: '#6366f1'
+        },
+        {
+            title: 'Wash Bays',
+            value: totalBays.toString(),
+            subValues: [
+                { label: 'In Use', value: occupiedBays, color: '#3b82f6' },
+                { label: 'Active', value: availableBays, color: '#10b981' },
+                { label: 'Maintenance', value: maintenanceBays, color: '#f59e0b' },
+                { label: 'Completed Today', value: completedWashesToday, color: '#6366f1' }
+            ],
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>,
             color: '#10b981'
         },
         {
-            title: 'In Progress',
-            value: inProgressCount.toString(),
-            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>,
+            title: 'In Queue',
+            value: queue.length.toString(),
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
             color: '#f59e0b'
         },
         {
             title: 'Revenue Today',
             value: `KSh ${totalRevenueToday.toLocaleString()}`,
             subValues: [
+                { label: 'Paid', value: paidRevenueToday, color: '#10b981' },
+                { label: 'Pending', value: pendingRevenueToday, color: '#f59e0b' },
                 { label: 'Wash', value: washRevenueToday, color: '#3b82f6' },
                 { label: 'Garage', value: garageRevenueToday, color: '#8b5cf6' }
             ],
@@ -8849,28 +11143,51 @@ function Dashboard({ onModuleClick }) {
             color: '#10b981'
         },
         {
-            title: 'In Queue',
-            value: queue.length.toString(),
+            title: 'Expenses Today',
+            value: `KSh ${expensesToday.toLocaleString()}`,
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+            color: '#ef4444'
+        },
+        {
+            title: 'Customers',
+            value: customers.length.toString(),
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
             color: '#8b5cf6'
         },
         {
-            title: 'Completed Today',
-            value: completedToday.length.toString(),
-            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
-            color: '#10b981'
+            title: 'Garage Jobs',
+            value: garageJobs.length.toString(),
+            subValues: [
+                { label: 'Queue', value: garageJobsQueue, color: '#f59e0b' },
+                { label: 'In Progress', value: garageJobsInProgress, color: '#3b82f6' },
+                { label: 'Completed', value: garageJobsCompleted, color: '#10b981' }
+            ],
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>,
+            color: '#f97316'
         },
         {
-            title: 'Available Bays',
-            value: availableBays.toString(),
-            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>,
+            title: 'Equipment',
+            value: `${operationalEquipment}/${totalEquipment}`,
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+            color: '#0ea5e9'
+        },
+        {
+            title: 'Active Staff',
+            value: `${activeStaff}/${totalStaff}`,
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+            color: '#14b8a6'
+        },
+        {
+            title: 'Low Stock',
+            value: lowStockItems.toString(),
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={lowStockItems > 0 ? "#ef4444" : "#10b981"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>,
+            color: lowStockItems > 0 ? '#ef4444' : '#10b981'
+        },
+        {
+            title: 'Fleet Balance',
+            value: `KSh ${totalFleetBalance.toLocaleString()}`,
+            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>,
             color: '#06b6d4'
-        },
-        {
-            title: 'Total Records',
-            value: vehicles.length.toString(),
-            icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
-            color: '#6366f1'
         }
     ];
 
@@ -8916,7 +11233,7 @@ function Dashboard({ onModuleClick }) {
     return (
         <div className="dashboard">
             <div className="dashboard-toolbar">
-                <div className="search-bar-container">
+                <div className="search-bar-container" style={{ position: 'relative' }}>
                     <svg className="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="11" cy="11" r="8"/>
                         <path d="m21 21-4.35-4.35"/>
@@ -8924,21 +11241,223 @@ function Dashboard({ onModuleClick }) {
                     <input 
                         type="text" 
                         className="search-bar" 
-                        placeholder="Search vehicles, customers, invoices..."
+                        placeholder="Search vehicles, customers, invoices, staff..."
                         value={searchQuery}
                         onChange={handleSearch}
+                        onFocus={() => searchQuery && setShowSearchResults(true)}
                     />
                     {searchQuery && (
-                        <button className="search-clear" onClick={() => setSearchQuery('')}>
+                        <button className="search-clear" onClick={() => { setSearchQuery(''); setShowSearchResults(false); }}>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <line x1="18" y1="6" x2="6" y2="18"/>
                                 <line x1="6" y1="6" x2="18" y2="18"/>
                             </svg>
                         </button>
                     )}
+                    
+                    {/* Global Search Results Dropdown */}
+                    {showSearchResults && searchQuery && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: 0,
+                            right: 0,
+                            marginTop: '8px',
+                            background: 'var(--bg-primary, #fff)',
+                            border: '1px solid var(--border-color, #e2e8f0)',
+                            borderRadius: '0',
+                            boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                            zIndex: 1000,
+                            maxHeight: '450px',
+                            overflowY: 'auto'
+                        }}>
+                            {/* Header */}
+                            <div style={{ 
+                                padding: '12px 16px', 
+                                borderBottom: '1px solid var(--border-color, #e2e8f0)',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                background: 'var(--bg-secondary, #f8fafc)'
+                            }}>
+                                <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                                    {hasResults ? `${totalResults} results found` : 'No results'}
+                                </span>
+                                <button 
+                                    onClick={() => setShowSearchResults(false)}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--text-secondary)' }}
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            
+                            {!hasResults ? (
+                                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                    <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔍</div>
+                                    <div>No matches found for "{searchQuery}"</div>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Vehicles */}
+                                    {searchResults.vehicles.length > 0 && (
+                                        <div style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)' }}>
+                                            <div style={{ padding: '10px 16px', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'var(--bg-secondary, #f8fafc)' }}>
+                                                🚗 Vehicles ({searchResults.vehicles.length})
+                                            </div>
+                                            {searchResults.vehicles.map((v, i) => (
+                                                <div key={i} onClick={() => { onModuleClick('vehicle-intake'); setShowSearchResults(false); }} style={{ 
+                                                    padding: '12px 16px', 
+                                                    cursor: 'pointer',
+                                                    borderBottom: i < searchResults.vehicles.length - 1 ? '1px solid var(--border-color, #e2e8f0)' : 'none',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }} className="search-result-item">
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{v.plateNumber || v.registrationNumber || v.itemType || 'N/A'}</div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{v.ownerName || v.customerName || 'Unknown'} • {v.category || v.vehicleType || 'Vehicle'}</div>
+                                                    </div>
+                                                    <span style={{ 
+                                                        padding: '4px 8px', 
+                                                        fontSize: '11px', 
+                                                        borderRadius: '0', 
+                                                        background: v.status === 'completed' ? '#d1fae5' : v.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
+                                                        color: v.status === 'completed' ? '#065f46' : v.status === 'in-progress' ? '#1e40af' : '#92400e'
+                                                    }}>
+                                                        {v.status || 'queued'}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Customers */}
+                                    {searchResults.customers.length > 0 && (
+                                        <div style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)' }}>
+                                            <div style={{ padding: '10px 16px', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'var(--bg-secondary, #f8fafc)' }}>
+                                                👤 Customers ({searchResults.customers.length})
+                                            </div>
+                                            {searchResults.customers.map((c, i) => (
+                                                <div key={i} onClick={() => { onModuleClick('customers'); setShowSearchResults(false); }} style={{ 
+                                                    padding: '12px 16px', 
+                                                    cursor: 'pointer',
+                                                    borderBottom: i < searchResults.customers.length - 1 ? '1px solid var(--border-color, #e2e8f0)' : 'none',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }} className="search-result-item">
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{c.name}</div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{c.phone || c.email || 'No contact'}</div>
+                                                    </div>
+                                                    {c.company && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{c.company}</span>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Invoices */}
+                                    {searchResults.invoices.length > 0 && (
+                                        <div style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)' }}>
+                                            <div style={{ padding: '10px 16px', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'var(--bg-secondary, #f8fafc)' }}>
+                                                💳 Invoices ({searchResults.invoices.length})
+                                            </div>
+                                            {searchResults.invoices.map((inv, i) => (
+                                                <div key={i} onClick={() => { onModuleClick('billing'); setShowSearchResults(false); }} style={{ 
+                                                    padding: '12px 16px', 
+                                                    cursor: 'pointer',
+                                                    borderBottom: i < searchResults.invoices.length - 1 ? '1px solid var(--border-color, #e2e8f0)' : 'none',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }} className="search-result-item">
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{inv.invoiceNumber || inv.id}</div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{inv.customerName || inv.plateNumber || 'N/A'}</div>
+                                                    </div>
+                                                    <div style={{ textAlign: 'right' }}>
+                                                        <div style={{ fontWeight: '600', color: '#10b981' }}>KSh {(inv.totalAmount || inv.total || 0).toLocaleString()}</div>
+                                                        <span style={{ 
+                                                            padding: '2px 6px', 
+                                                            fontSize: '10px', 
+                                                            borderRadius: '0', 
+                                                            background: inv.paymentStatus === 'paid' ? '#d1fae5' : '#fef3c7',
+                                                            color: inv.paymentStatus === 'paid' ? '#065f46' : '#92400e'
+                                                        }}>
+                                                            {inv.paymentStatus || 'pending'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Staff */}
+                                    {searchResults.staff.length > 0 && (
+                                        <div style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)' }}>
+                                            <div style={{ padding: '10px 16px', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'var(--bg-secondary, #f8fafc)' }}>
+                                                👥 Staff ({searchResults.staff.length})
+                                            </div>
+                                            {searchResults.staff.map((s, i) => (
+                                                <div key={i} onClick={() => { onModuleClick('staff'); setShowSearchResults(false); }} style={{ 
+                                                    padding: '12px 16px', 
+                                                    cursor: 'pointer',
+                                                    borderBottom: i < searchResults.staff.length - 1 ? '1px solid var(--border-color, #e2e8f0)' : 'none',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }} className="search-result-item">
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{s.name}</div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{s.role || 'Staff'} • {s.phone || 'No phone'}</div>
+                                                    </div>
+                                                    <span style={{ 
+                                                        padding: '4px 8px', 
+                                                        fontSize: '11px', 
+                                                        borderRadius: '0', 
+                                                        background: s.status === 'active' || !s.status ? '#d1fae5' : '#fee2e2',
+                                                        color: s.status === 'active' || !s.status ? '#065f46' : '#991b1b'
+                                                    }}>
+                                                        {s.status || 'active'}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Activities */}
+                                    {searchResults.activities.length > 0 && (
+                                        <div>
+                                            <div style={{ padding: '10px 16px', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'var(--bg-secondary, #f8fafc)' }}>
+                                                📋 Activities ({searchResults.activities.length})
+                                            </div>
+                                            {searchResults.activities.map((a, i) => (
+                                                <div key={i} onClick={() => { onModuleClick('activities'); setShowSearchResults(false); }} style={{ 
+                                                    padding: '12px 16px', 
+                                                    cursor: 'pointer',
+                                                    borderBottom: i < searchResults.activities.length - 1 ? '1px solid var(--border-color, #e2e8f0)' : 'none',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }} className="search-result-item">
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{a.description}</div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{a.type} • {a.user || 'System'}</div>
+                                                    </div>
+                                                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                                        {new Date(a.timestamp).toLocaleDateString()}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
-                <button className="refresh-button" onClick={handleRefresh} title="Refresh Dashboard">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <button className="refresh-button" onClick={handleRefresh} title="Refresh Dashboard" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }}>
                         <path d="M21 2v6h-6"/>
                         <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
                         <path d="M3 22v-6h6"/>
@@ -8959,28 +11478,31 @@ function Dashboard({ onModuleClick }) {
                         <div className="stat-card-body">
                             <div className="stat-card-value">{stat.value}</div>
                             <div className="stat-card-title">{stat.title}</div>
-                            {/* Revenue breakdown for Revenue Today card */}
+                            {/* Revenue breakdown */}
                             {stat.subValues && (
                                 <div style={{ 
-                                    display: 'flex', 
-                                    gap: '12px', 
-                                    marginTop: '8px', 
-                                    paddingTop: '8px', 
-                                    borderTop: '1px solid #e2e8f0',
-                                    fontSize: '12px'
+                                    display: 'grid', 
+                                    gridTemplateColumns: 'repeat(2, 1fr)',
+                                    gap: '6px', 
+                                    marginTop: '10px'
                                 }}>
                                     {stat.subValues.map((sub, idx) => (
-                                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <div key={idx} style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            fontSize: '11px'
+                                        }}>
                                             <span style={{ 
-                                                width: '8px', 
-                                                height: '8px', 
-                                                borderRadius: '50%', 
-                                                backgroundColor: sub.color,
-                                                display: 'inline-block'
+                                                width: '6px', 
+                                                height: '6px', 
+                                                borderRadius: '50%',
+                                                background: sub.color,
+                                                flexShrink: 0
                                             }}></span>
-                                            <span style={{ color: '#64748b' }}>{sub.label}:</span>
-                                            <span style={{ fontWeight: '600', color: sub.color }}>
-                                                KSh {sub.value.toLocaleString()}
+                                            <span style={{ color: 'var(--text-secondary, #64748b)' }}>{sub.label}:</span>
+                                            <span style={{ fontWeight: '600', color: 'var(--text-primary, #1e293b)' }}>
+                                                {sub.value.toLocaleString()}
                                             </span>
                                         </div>
                                     ))}
@@ -9010,16 +11532,15 @@ function Dashboard({ onModuleClick }) {
             
             <div className="recent-activities-section">
                 <div className="section-header">
-                    <h2 className="section-title">Recent Activities</h2>
+                    <h2 className="section-title">Today's Activities</h2>
                     <div className="section-actions">
-                        <button className="icon-button" title="Refresh">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 2v6h-6"/>
-                                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-                                <path d="M3 22v-6h6"/>
-                                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-                            </svg>
-                        </button>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginRight: '8px' }}>
+                            {activities.filter(a => {
+                                const aDate = new Date(a.timestamp);
+                                aDate.setHours(0, 0, 0, 0);
+                                return aDate.getTime() === today.getTime();
+                            }).length} today
+                        </span>
                         <button className="view-all-btn" onClick={() => onModuleClick('activities')}>View All</button>
                     </div>
                 </div>
@@ -9029,14 +11550,115 @@ function Dashboard({ onModuleClick }) {
                             <tr>
                                 <th>Time</th>
                                 <th>Activity</th>
-                                <th>User</th>
+                                <th>Details</th>
+                                <th>Logged By</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr>
-                                <td colSpan="4" className="empty-table">No recent activities</td>
-                            </tr>
+                            {(() => {
+                                const todayActivities = activities.filter(a => {
+                                    const aDate = new Date(a.timestamp);
+                                    aDate.setHours(0, 0, 0, 0);
+                                    return aDate.getTime() === today.getTime();
+                                }).slice(0, 10);
+                                
+                                if (todayActivities.length === 0) {
+                                    return (
+                                        <tr>
+                                            <td colSpan="5" className="empty-table">No activities today</td>
+                                        </tr>
+                                    );
+                                }
+                                
+                                return todayActivities.map((activity, idx) => (
+                                    <tr key={activity.id || idx}>
+                                        <td style={{ whiteSpace: 'nowrap', fontSize: '13px' }}>
+                                            {new Date(activity.timestamp).toLocaleTimeString('en-US', { 
+                                                hour: '2-digit', 
+                                                minute: '2-digit'
+                                            })}
+                                        </td>
+                                        <td>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ 
+                                                    fontSize: '16px',
+                                                    width: '28px',
+                                                    height: '28px',
+                                                    borderRadius: '6px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    background: activity.type === 'intake' ? '#dbeafe' :
+                                                               activity.type === 'billing' ? '#d1fae5' :
+                                                               activity.type === 'wash' ? '#e0e7ff' :
+                                                               activity.type === 'garage' ? '#fef3c7' :
+                                                               '#f1f5f9'
+                                                }}>
+                                                    {activity.type === 'intake' ? '🚗' :
+                                                     activity.type === 'billing' ? '💳' :
+                                                     activity.type === 'wash' ? '🚿' :
+                                                     activity.type === 'garage' ? '🔧' :
+                                                     activity.type === 'inventory' ? '📦' :
+                                                     activity.type === 'staff' ? '👤' :
+                                                     '📋'}
+                                                </span>
+                                                <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>
+                                                    {activity.action || activity.description || 'Activity'}
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                                            {activity.details || activity.user || '-'}
+                                        </td>
+                                        <td>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <span style={{
+                                                    width: '22px',
+                                                    height: '22px',
+                                                    borderRadius: '0',
+                                                    background: '#3b82f6',
+                                                    color: 'white',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    fontSize: '10px',
+                                                    fontWeight: '600'
+                                                }}>
+                                                    {(activity.loggedBy || 'S').charAt(0).toUpperCase()}
+                                                </span>
+                                                <div style={{ fontSize: '12px' }}>
+                                                    <div style={{ fontWeight: '500', color: 'var(--text-primary)' }}>{activity.loggedBy || 'System'}</div>
+                                                    {activity.loggedByRole && (
+                                                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
+                                                            {activity.loggedByRole}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span style={{
+                                                padding: '4px 10px',
+                                                borderRadius: '12px',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
+                                                textTransform: 'uppercase',
+                                                background: activity.status === 'success' ? '#d1fae5' :
+                                                           activity.status === 'pending' ? '#fef3c7' :
+                                                           activity.status === 'error' ? '#fee2e2' :
+                                                           '#f1f5f9',
+                                                color: activity.status === 'success' ? '#059669' :
+                                                       activity.status === 'pending' ? '#d97706' :
+                                                       activity.status === 'error' ? '#dc2626' :
+                                                       '#64748b'
+                                            }}>
+                                                {activity.status || 'done'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ));
+                            })()}
                         </tbody>
                     </table>
                 </div>
@@ -9100,6 +11722,13 @@ function BillingModule() {
     
     // Revenue tracking
     const [revenueToday, setRevenueToday] = useState({ total: 0, wash: 0, garage: 0, other: 0 });
+    
+    // Expenses integration
+    const [expenses, setExpenses] = useState([]);
+    const [expensesSummary, setExpensesSummary] = useState({ total: 0, today: 0, thisWeek: 0, thisMonth: 0, count: 0 });
+    
+    // Export state
+    const [showExportMenu, setShowExportMenu] = useState(false);
 
     // Theme detection
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
@@ -9141,7 +11770,7 @@ function BillingModule() {
 
     // Initialize Firebase subscriptions
     useEffect(() => {
-        let unsubInvoices, unsubPending;
+        let unsubInvoices, unsubPending, unsubExpenses;
         
         const initializeData = async () => {
             let services = window.FirebaseServices;
@@ -9193,6 +11822,15 @@ function BillingModule() {
                 } catch (pendingErr) {
                     console.warn('Could not subscribe to pending invoices:', pendingErr);
                 }
+                
+                // Subscribe to expenses for integration
+                if (services.expensesService) {
+                    unsubExpenses = services.expensesService.subscribeToExpenses((data) => {
+                        setExpenses(data);
+                        const summary = services.expensesService.getSummary(data);
+                        setExpensesSummary(summary);
+                    });
+                }
 
                 // Get billing stats
                 const statsResult = await services.billingService.getBillingStats();
@@ -9219,6 +11857,7 @@ function BillingModule() {
         return () => {
             if (unsubInvoices) unsubInvoices();
             if (unsubPending) unsubPending();
+            if (unsubExpenses) unsubExpenses();
         };
     }, []);
 
@@ -9303,6 +11942,85 @@ function BillingModule() {
 
         return filtered;
     };
+    
+    // Export functions
+    const exportCSV = () => {
+        const dataToExport = activeTab === 'expenses' ? expenses : getFilteredInvoices();
+        if (activeTab === 'expenses') {
+            let csv = 'Date,Category,Description,Vendor,Amount,Payment Method\n';
+            dataToExport.forEach(exp => {
+                csv += `"${exp.date || ''}","${exp.category || ''}","${(exp.description || '').replace(/"/g, '""')}","${exp.vendor || ''}",${exp.amount || 0},"${exp.paymentMethod || 'Cash'}"\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `expenses_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+        } else {
+            let csv = 'Invoice #,Customer,Phone,Vehicle,Source,Amount,Status,Payment Method,M-Pesa Code,Date\n';
+            dataToExport.forEach(inv => {
+                csv += `"${inv.invoiceNumber || inv.id?.slice(0,8) || ''}","${inv.customerName || 'Walk-in'}","${inv.customerPhone || ''}","${inv.plateNumber || ''}","${inv.source || ''}",${inv.totalAmount || 0},"${inv.paymentStatus || 'unpaid'}","${inv.paymentMethod || ''}","${inv.mpesaCode || ''}","${inv.createdAt?.split('T')[0] || ''}"\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `billing_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+        }
+        setShowExportMenu(false);
+    };
+    
+    const exportPDF = () => {
+        const printWindow = window.open('', '_blank');
+        const dataToExport = activeTab === 'expenses' ? expenses : getFilteredInvoices();
+        
+        let html = `<!DOCTYPE html><html><head><title>Billing Report</title><style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { color: #1f2937; margin-bottom: 10px; }
+            h2 { color: #374151; font-size: 16px; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+            th { background: #f3f4f6; font-weight: 600; }
+            .amount { text-align: right; font-weight: 600; }
+            .paid { color: #166534; background: #dcfce7; }
+            .unpaid { color: #dc2626; background: #fee2e2; }
+            .expense { color: #dc2626; }
+            .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+            .stat-box { padding: 12px 20px; border: 1px solid #e5e7eb; background: #f9fafb; }
+            .total-row { font-weight: bold; background: #f3f4f6; }
+        </style></head><body>`;
+        
+        if (activeTab === 'expenses') {
+            const total = dataToExport.reduce((sum, e) => sum + (e.amount || 0), 0);
+            html += `<h1>📋 Expenses Report</h1><p>Generated: ${new Date().toLocaleString()}</p>`;
+            html += `<div class="stats"><div class="stat-box"><strong>Total Expenses:</strong> ${dataToExport.length}</div><div class="stat-box"><strong>Total Amount:</strong> KSH ${total.toLocaleString()}</div></div>`;
+            html += '<table><tr><th>Date</th><th>Category</th><th>Description</th><th>Vendor</th><th class="amount">Amount</th><th>Payment</th></tr>';
+            dataToExport.forEach(exp => {
+                html += `<tr><td>${exp.date || ''}</td><td>${exp.category || ''}</td><td>${exp.description || ''}</td><td>${exp.vendor || '-'}</td><td class="amount expense">-KSH ${(exp.amount || 0).toLocaleString()}</td><td>${exp.paymentMethod || 'Cash'}</td></tr>`;
+            });
+            html += `<tr class="total-row"><td colspan="4" style="text-align:right;">Grand Total:</td><td class="amount">KSH ${total.toLocaleString()}</td><td></td></tr>`;
+        } else {
+            const tabLabel = activeTab === 'paid' ? 'Paid Invoices' : activeTab === 'pending' ? 'Pending Invoices' : 'All Invoices';
+            const totalAmount = dataToExport.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+            const paidCount = dataToExport.filter(inv => inv.paymentStatus === 'paid').length;
+            html += `<h1>💳 Billing Report - ${tabLabel}</h1><p>Generated: ${new Date().toLocaleString()}</p>`;
+            html += `<div class="stats"><div class="stat-box"><strong>Total Invoices:</strong> ${dataToExport.length}</div><div class="stat-box"><strong>Paid:</strong> ${paidCount}</div><div class="stat-box"><strong>Pending:</strong> ${dataToExport.length - paidCount}</div><div class="stat-box"><strong>Total Amount:</strong> KSH ${totalAmount.toLocaleString()}</div></div>`;
+            html += '<table><tr><th>Invoice #</th><th>Customer</th><th>Phone</th><th>Vehicle</th><th>Source</th><th class="amount">Amount</th><th>Status</th><th>Payment</th><th>M-Pesa</th><th>Date</th></tr>';
+            dataToExport.forEach(inv => {
+                const statusClass = inv.paymentStatus === 'paid' ? 'paid' : 'unpaid';
+                html += `<tr><td>${inv.invoiceNumber || inv.id?.slice(0,8)?.toUpperCase() || ''}</td><td>${inv.customerName || 'Walk-in'}</td><td>${inv.customerPhone || '-'}</td><td>${inv.plateNumber || '-'}</td><td>${inv.source || '-'}</td><td class="amount">KSH ${(inv.totalAmount || 0).toLocaleString()}</td><td class="${statusClass}">${inv.paymentStatus || 'Unpaid'}</td><td>${inv.paymentMethod || '-'}</td><td>${inv.mpesaCode || '-'}</td><td>${inv.createdAt?.split('T')[0] || ''}</td></tr>`;
+            });
+            html += `<tr class="total-row"><td colspan="5" style="text-align:right;">Grand Total:</td><td class="amount">KSH ${totalAmount.toLocaleString()}</td><td colspan="4"></td></tr>`;
+        }
+        
+        html += '</table></body></html>';
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.onload = () => { printWindow.print(); };
+        setShowExportMenu(false);
+    };
 
     // Handle cash payment
     const handleCashPayment = async () => {
@@ -9317,6 +12035,20 @@ function BillingModule() {
             });
             
             if (result.success) {
+                // Log activity
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'billing',
+                        action: 'Payment Received',
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (Cash)`,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+                
                 // Award loyalty points if customer has phone number
                 if (selectedInvoice.customerPhone) {
                     try {
@@ -9640,6 +12372,20 @@ function BillingModule() {
             });
 
             if (result.success) {
+                // Log activity
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'billing',
+                        action: 'Invoice Created',
+                        details: `${manualBillingData.plateNumber.toUpperCase()} - KSH ${totalAmount.toLocaleString()} - ${manualBillingData.paymentStatus === 'paid' ? 'Paid' : 'Pending'}`,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+                
                 // Award loyalty points if invoice is paid and has customer phone
                 if (manualBillingData.paymentStatus === 'paid' && manualBillingData.customerPhone) {
                     try {
@@ -9771,9 +12517,7 @@ function BillingModule() {
         padding: '20px 24px',
         display: 'flex',
         alignItems: 'center',
-        gap: '20px',
-        boxShadow: theme.cardShadow,
-        borderLeft: '4px solid #3b82f6'
+        gap: '20px'
     };
 
     const buttonStyle = {
@@ -9855,29 +12599,29 @@ function BillingModule() {
 
             {/* Stats Cards - Full Width Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', marginBottom: '0', borderBottom: `1px solid ${theme.border}` }}>
-                <div style={{ ...statCardStyle, borderLeft: '4px solid #3b82f6', borderRight: `1px solid ${theme.border}` }}>
-                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#3b82f615', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>📋</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>📋</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '28px', fontWeight: '800', color: theme.text, letterSpacing: '-1px' }}>{billingStats.todayInvoiceCount}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Today's Invoices</div>
                     </div>
                 </div>
-                <div style={{ ...statCardStyle, borderLeft: '4px solid #ef4444', borderRight: `1px solid ${theme.border}` }}>
-                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#ef444415', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>⏳</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>⏳</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '28px', fontWeight: '800', color: '#ef4444', letterSpacing: '-1px' }}>{billingStats.pendingPayments}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Pending</div>
                     </div>
                 </div>
-                <div style={{ ...statCardStyle, borderLeft: '4px solid #10b981', borderRight: `1px solid ${theme.border}` }}>
-                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#10b98115', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>💰</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>💰</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981', letterSpacing: '-0.5px' }}>{formatCurrency(billingStats.paidToday)}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Collected Today</div>
                     </div>
                 </div>
-                <div style={{ ...statCardStyle, borderLeft: '4px solid #f59e0b' }}>
-                    <div style={{ width: '52px', height: '52px', borderRadius: '0', background: '#f59e0b15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>📊</div>
+                <div style={{ ...statCardStyle }}>
+                    <div style={{ fontSize: '28px' }}>📊</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: '#f59e0b', letterSpacing: '-0.5px' }}>{formatCurrency(billingStats.totalPending)}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Outstanding</div>
@@ -9887,26 +12631,25 @@ function BillingModule() {
 
             {/* Revenue Today & Payment Methods Stats Row */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
-                {/* Revenue Today Card - Prominent */}
-                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'flex-start', gap: '16px', background: isDark ? '#1a2e4a' : '#f0f9ff', borderRight: `1px solid ${theme.border}`, borderLeft: '4px solid #10b981' }}>
-                    <div style={{ fontSize: '32px' }}>💳</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>💳</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '28px', fontWeight: '800', color: '#10b981', letterSpacing: '-0.5px' }}>{formatCurrency(revenueToday.total)}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600', marginBottom: '8px' }}>Revenue Today</div>
                         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6' }}></span>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#3b82f6' }}></span>
                                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>Wash:</span>
                                 <span style={{ fontSize: '12px', fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(revenueToday.wash)}</span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#8b5cf6' }}></span>
                                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>Garage:</span>
                                 <span style={{ fontSize: '12px', fontWeight: '700', color: '#8b5cf6' }}>{formatCurrency(revenueToday.garage)}</span>
                             </div>
                             {revenueToday.other > 0 && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#6b7280' }}></span>
+                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#6b7280' }}></span>
                                     <span style={{ fontSize: '11px', color: theme.textSecondary }}>Other:</span>
                                     <span style={{ fontSize: '12px', fontWeight: '700', color: '#6b7280' }}>{formatCurrency(revenueToday.other)}</span>
                                 </div>
@@ -9914,25 +12657,61 @@ function BillingModule() {
                         </div>
                     </div>
                 </div>
-                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: isDark ? '#1e3a5f' : '#eff6ff', borderRight: `1px solid ${theme.border}` }}>
-                    <div style={{ fontSize: '32px' }}>📱</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>📱</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: '#3b82f6' }}>{billingStats.mpesaPayments}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>M-Pesa Payments</div>
                     </div>
                 </div>
-                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: isDark ? '#1a3f2f' : '#f0fdf4', borderRight: `1px solid ${theme.border}` }}>
-                    <div style={{ fontSize: '32px' }}>💵</div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>💵</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981' }}>{billingStats.cashPayments}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Cash Payments</div>
                     </div>
                 </div>
-                <div style={{ padding: '20px 28px', display: 'flex', alignItems: 'center', gap: '16px', background: theme.bg }}>
-                    <div style={{ fontSize: '32px' }}>🏦</div>
+                <div style={{ ...statCardStyle }}>
+                    <div style={{ fontSize: '28px' }}>🏦</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{formatCurrency(billingStats.totalCollected)}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Total Collected</div>
+                    </div>
+                </div>
+            </div>
+            
+            {/* Expenses & Profit Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>📉</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#ef4444', letterSpacing: '-0.5px' }}>{formatCurrency(expensesSummary.today)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Expenses Today</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>📋</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: '#f59e0b' }}>{formatCurrency(expensesSummary.thisMonth)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Expenses This Month</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '28px' }}>{(revenueToday.total - expensesSummary.today) >= 0 ? '📈' : '📉'}</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '28px', fontWeight: '800', color: (revenueToday.total - expensesSummary.today) >= 0 ? '#10b981' : '#ef4444', letterSpacing: '-0.5px' }}>{formatCurrency(revenueToday.total - expensesSummary.today)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Net Profit Today</div>
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                            <span style={{ fontSize: '10px', color: '#10b981' }}>+{formatCurrency(revenueToday.total)}</span>
+                            <span style={{ fontSize: '10px', color: '#ef4444' }}>-{formatCurrency(expensesSummary.today)}</span>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle }}>
+                    <div style={{ fontSize: '28px' }}>🧾</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{expensesSummary.count}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Total Expenses</div>
                     </div>
                 </div>
             </div>
@@ -9948,6 +12727,9 @@ function BillingModule() {
                     </button>
                     <button style={tabStyle(activeTab === 'all')} onClick={() => setActiveTab('all')}>
                         All Invoices
+                    </button>
+                    <button style={tabStyle(activeTab === 'expenses')} onClick={() => setActiveTab('expenses')}>
+                        Expenses ({expenses.length})
                     </button>
                     <button
                         onClick={() => setShowManualBillingModal(true)}
@@ -10014,10 +12796,57 @@ function BillingModule() {
                             />
                         </>
                     )}
+                    {/* Export Button */}
+                    <div style={{ position: 'relative', marginLeft: '8px' }}>
+                        <button
+                            onClick={() => setShowExportMenu(!showExportMenu)}
+                            style={{
+                                ...buttonStyle,
+                                background: theme.bgTertiary,
+                                color: theme.text,
+                                padding: '10px 16px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                            }}
+                        >
+                            📥 Export ▾
+                        </button>
+                        {showExportMenu && (
+                            <div style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: 0,
+                                background: 'white',
+                                border: '1px solid #e5e7eb',
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                zIndex: 100,
+                                minWidth: '160px'
+                            }}>
+                                <button
+                                    onClick={exportCSV}
+                                    style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }}
+                                    onMouseOver={(e) => e.target.style.background='#f3f4f6'}
+                                    onMouseOut={(e) => e.target.style.background='none'}
+                                >
+                                    📊 Export CSV
+                                </button>
+                                <button
+                                    onClick={exportPDF}
+                                    style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }}
+                                    onMouseOver={(e) => e.target.style.background='#f3f4f6'}
+                                    onMouseOut={(e) => e.target.style.background='none'}
+                                >
+                                    📄 Export PDF
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
-            {/* Invoices Table */}
+            {/* Invoices Table - Only show when not on expenses tab */}
+            {activeTab !== 'expenses' ? (
             <div style={{ overflowX: 'auto', background: theme.bg }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
@@ -10156,6 +12985,96 @@ function BillingModule() {
                     </tbody>
                 </table>
             </div>
+            ) : (
+            /* Expenses Table - Show when on expenses tab */
+            <div style={{ overflowX: 'auto', background: theme.bg }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ background: theme.bgTertiary, borderBottom: `2px solid ${theme.border}` }}>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Date</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Category</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Description</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vendor</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'right', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount</th>
+                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment Method</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {expenses.length === 0 ? (
+                            <tr>
+                                <td colSpan="6" style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>📋</div>
+                                    <div style={{ fontSize: '14px', fontWeight: '600' }}>No expenses recorded</div>
+                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>Add expenses from the Expenses module</div>
+                                </td>
+                            </tr>
+                        ) : (
+                            expenses.slice(0, 20).map((expense, idx) => {
+                                const categoryColors = {
+                                    'Utilities': '#3b82f6',
+                                    'Supplies': '#10b981',
+                                    'Salaries': '#8b5cf6',
+                                    'Maintenance': '#f59e0b',
+                                    'Rent': '#ef4444',
+                                    'Marketing': '#ec4899',
+                                    'Insurance': '#6366f1',
+                                    'Taxes': '#f97316',
+                                    'Other': '#6b7280'
+                                };
+                                return (
+                                    <tr key={expense.id} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? theme.bg : theme.bgSecondary }}>
+                                        <td style={{ padding: '16px 20px', color: theme.text, fontSize: '13px' }}>
+                                            {expense.date}
+                                        </td>
+                                        <td style={{ padding: '16px 20px' }}>
+                                            <span style={{ 
+                                                background: `${categoryColors[expense.category] || '#6b7280'}20`,
+                                                color: categoryColors[expense.category] || '#6b7280',
+                                                padding: '4px 12px',
+                                                fontSize: '11px',
+                                                fontWeight: '700',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.3px'
+                                            }}>
+                                                {expense.category}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '16px 20px', color: theme.text, fontWeight: '500' }}>
+                                            {expense.description}
+                                        </td>
+                                        <td style={{ padding: '16px 20px', color: theme.textSecondary, fontSize: '13px' }}>
+                                            {expense.vendor || '-'}
+                                        </td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'right', fontWeight: '800', color: '#ef4444', fontSize: '15px' }}>
+                                            -{formatCurrency(expense.amount)}
+                                        </td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center' }}>
+                                            <span style={{ 
+                                                background: expense.paymentMethod === 'mpesa' ? '#d1fae5' : (expense.paymentMethod === 'bank' ? '#dbeafe' : theme.bgTertiary),
+                                                color: expense.paymentMethod === 'mpesa' ? '#047857' : (expense.paymentMethod === 'bank' ? '#1d4ed8' : theme.text),
+                                                padding: '4px 10px',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
+                                                textTransform: 'uppercase'
+                                            }}>
+                                                {expense.paymentMethod || 'Cash'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                );
+                            })
+                        )}
+                    </tbody>
+                </table>
+                {expenses.length > 20 && (
+                    <div style={{ padding: '16px', textAlign: 'center', background: theme.bgSecondary, borderTop: `1px solid ${theme.border}` }}>
+                        <span style={{ color: theme.textSecondary, fontSize: '13px' }}>
+                            Showing 20 of {expenses.length} expenses. Go to Expenses module to see all.
+                        </span>
+                    </div>
+                )}
+            </div>
+            )}
 
             {/* Payment Method Modal */}
             {showPaymentModal && selectedInvoice && (
@@ -10693,9 +13612,9 @@ function StaffManagement() {
         { id: 'equipment', label: 'Equipment Management', icon: '🔧', category: 'Operations' },
         { id: 'customers', label: 'Customer Management', icon: '👥', category: 'Customer Relations' },
         { id: 'fleet', label: 'Fleet Accounts', icon: '🚛', category: 'Customer Relations' },
-        { id: 'staff', label: 'Staff Management', icon: '👷', category: 'Staff & Scheduling' },
-        { id: 'scheduling', label: 'Shift Scheduling', icon: '📅', category: 'Staff & Scheduling' },
+        { id: 'staff', label: 'Staff Management', icon: '👷', category: 'Staff' },
         { id: 'billing', label: 'Billing & Payments', icon: '💳', category: 'Financial' },
+        { id: 'expenses', label: 'Expenses', icon: '📉', category: 'Financial' },
         { id: 'inventory', label: 'Inventory Management', icon: '📋', category: 'Financial' },
         { id: 'reports', label: 'Reports & Analytics', icon: '📈', category: 'Analytics & Marketing' },
         { id: 'marketing', label: 'Marketing & CRM', icon: '📣', category: 'Analytics & Marketing' },
@@ -11261,8 +14180,2989 @@ function StaffManagement() {
     );
 }
 
+// ==================== INVENTORY MODULE ====================
+function InventoryModule() {
+    const [items, setItems] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [search, setSearch] = useState('');
+    const [filter, setFilter] = useState('all');
+    const [showModal, setShowModal] = useState(false);
+    const [editItem, setEditItem] = useState(null);
+    const [viewItem, setViewItem] = useState(null);
+    const [deleteConfirm, setDeleteConfirm] = useState(null);
+    const [usageModal, setUsageModal] = useState(null);
+    const [usageAmount, setUsageAmount] = useState('');
+    const [usageNotes, setUsageNotes] = useState('');
+    const [message, setMessage] = useState({ type: '', text: '' });
+    const [formData, setFormData] = useState({ name: '', category: '', quantity: '', minStock: '', unit: '', cost: '', usageAlertDays: '7' });
+
+    const { inventoryService } = window.FirebaseServices;
+
+    // Load items
+    useEffect(() => {
+        loadItems();
+    }, []);
+
+    const loadItems = async () => {
+        setLoading(true);
+        const result = await inventoryService.getAll();
+        if (result.success) setItems(result.data);
+        setLoading(false);
+    };
+
+    // Filter & search
+    const filteredItems = items.filter(item => {
+        const status = inventoryService.getStockStatus(item.quantity, item.minStock);
+        const matchFilter = filter === 'all' || status === filter;
+        const matchSearch = item.name?.toLowerCase().includes(search.toLowerCase()) || 
+                           item.category?.toLowerCase().includes(search.toLowerCase());
+        return matchFilter && matchSearch;
+    });
+
+    // Stats
+    const stats = {
+        total: items.length,
+        inStock: items.filter(i => inventoryService.getStockStatus(i.quantity, i.minStock) === 'in-stock').length,
+        lowStock: items.filter(i => inventoryService.getStockStatus(i.quantity, i.minStock) === 'low-stock').length,
+        outOfStock: items.filter(i => inventoryService.getStockStatus(i.quantity, i.minStock) === 'out-of-stock').length
+    };
+
+    const showMessage = (type, text) => {
+        setMessage({ type, text });
+        setTimeout(() => setMessage({ type: '', text: '' }), 3000);
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const data = { 
+            ...formData, 
+            quantity: Number(formData.quantity), 
+            minStock: Number(formData.minStock), 
+            cost: Number(formData.cost) || 0,
+            usageAlertDays: Number(formData.usageAlertDays) || 7
+        };
+        
+        let result;
+        if (editItem) {
+            result = await inventoryService.update(editItem.id, data);
+        } else {
+            result = await inventoryService.add(data);
+        }
+
+        if (result.success) {
+            showMessage('success', editItem ? 'Item updated!' : 'Item added!');
+            loadItems();
+            closeModal();
+        } else {
+            showMessage('error', result.error);
+        }
+    };
+
+    const handleDelete = async (id) => {
+        const result = await inventoryService.delete(id);
+        if (result.success) {
+            showMessage('success', 'Item deleted');
+            loadItems();
+        }
+        setDeleteConfirm(null);
+    };
+
+    const handleEdit = (item) => {
+        setEditItem(item);
+        setFormData({ 
+            name: item.name, 
+            category: item.category, 
+            quantity: item.quantity, 
+            minStock: item.minStock, 
+            unit: item.unit || '', 
+            cost: item.cost || '', 
+            usageAlertDays: item.usageAlertDays || '7' 
+        });
+        setShowModal(true);
+    };
+
+    const closeModal = () => {
+        setShowModal(false);
+        setEditItem(null);
+        setFormData({ name: '', category: '', quantity: '', minStock: '', unit: '', cost: '', usageAlertDays: '7' });
+    };
+
+    const handleRecordUsage = async () => {
+        if (!usageAmount || Number(usageAmount) <= 0) {
+            showMessage('error', 'Please enter a valid usage amount');
+            return;
+        }
+        const result = await inventoryService.recordUsage(usageModal.id, Number(usageAmount), usageNotes);
+        if (result.success) {
+            showMessage('success', `Recorded usage of ${usageAmount} ${usageModal.unit || 'units'}`);
+            loadItems();
+            setUsageModal(null);
+            setUsageAmount('');
+            setUsageNotes('');
+        } else {
+            showMessage('error', result.error);
+        }
+    };
+
+    const getUsageAlertStyle = (alert) => {
+        if (!alert) return null;
+        const styles = {
+            'critical': { bg: '#fee2e2', color: '#dc2626', icon: '🔴' },
+            'warning': { bg: '#fef3c7', color: '#92400e', icon: '🟡' },
+            'ok': { bg: '#dcfce7', color: '#166534', icon: '🟢' }
+        };
+        return styles[alert.level];
+    };
+
+    const [showExportMenu, setShowExportMenu] = useState(false);
+
+    const exportExcel = () => {
+        let html = '<html><head><meta charset="UTF-8"></head><body>';
+        html += '<table border="1"><tr><th>Item Name</th><th>Category</th><th>Quantity</th><th>Min Stock</th><th>Unit</th><th>Cost (KSH)</th><th>Total Value</th><th>Usage/Day</th><th>Days Left</th><th>Status</th></tr>';
+        filteredItems.forEach(item => {
+            const status = inventoryService.getStockStatus(item.quantity, item.minStock);
+            const cost = item.cost || 0;
+            const totalValue = cost * item.quantity;
+            const usageRate = item.dailyUsageRate || 0;
+            const daysLeft = usageRate > 0 ? Math.floor(item.quantity / usageRate) : '-';
+            html += `<tr><td>${item.name}</td><td>${item.category}</td><td>${item.quantity}</td><td>${item.minStock}</td><td>${item.unit || ''}</td><td>${cost.toLocaleString()}</td><td>${totalValue.toLocaleString()}</td><td>${usageRate || '-'}</td><td>${daysLeft}</td><td>${status}</td></tr>`;
+        });
+        html += '</table></body></html>';
+        const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'inventory.xls';
+        a.click();
+        setShowExportMenu(false);
+    };
+
+    const exportPDF = () => {
+        const printWindow = window.open('', '_blank');
+        const totalInventoryValue = filteredItems.reduce((sum, item) => sum + ((item.cost || 0) * item.quantity), 0);
+        let html = `<!DOCTYPE html><html><head><title>Inventory Report</title><style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { color: #1f2937; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+            th { background: #f3f4f6; font-weight: 600; }
+            .in-stock { color: #166534; background: #dcfce7; }
+            .low-stock { color: #92400e; background: #fef3c7; }
+            .out-of-stock { color: #dc2626; background: #fee2e2; }
+            .critical { color: #dc2626; font-weight: bold; }
+            .warning { color: #f59e0b; }
+            .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+            .stat-box { padding: 15px; border: 1px solid #e5e7eb; }
+            .cost-col { text-align: right; }
+            .center { text-align: center; }
+            .total-row { font-weight: bold; background: #f9fafb; }
+        </style></head><body>`;
+        html += `<h1>Inventory Report</h1><p>Generated: ${new Date().toLocaleDateString()}</p>`;
+        html += `<div class="stats"><div class="stat-box"><strong>Total Items:</strong> ${stats.total}</div><div class="stat-box"><strong>In Stock:</strong> ${stats.inStock}</div><div class="stat-box"><strong>Low Stock:</strong> ${stats.lowStock}</div><div class="stat-box"><strong>Out of Stock:</strong> ${stats.outOfStock}</div><div class="stat-box"><strong>Total Value:</strong> KSH ${totalInventoryValue.toLocaleString()}</div></div>`;
+        html += '<table><tr><th>Item Name</th><th>Category</th><th class="center">Qty</th><th class="center">Min</th><th>Unit</th><th class="cost-col">Cost</th><th class="cost-col">Value</th><th class="center">Usage/Day</th><th class="center">Days Left</th><th>Status</th></tr>';
+        filteredItems.forEach(item => {
+            const status = inventoryService.getStockStatus(item.quantity, item.minStock);
+            const cost = item.cost || 0;
+            const totalValue = cost * item.quantity;
+            const usageRate = item.dailyUsageRate || 0;
+            const daysLeft = usageRate > 0 ? Math.floor(item.quantity / usageRate) : '-';
+            const daysClass = daysLeft !== '-' && daysLeft <= 3 ? 'critical' : (daysLeft !== '-' && daysLeft <= 7 ? 'warning' : '');
+            html += `<tr><td>${item.name}</td><td>${item.category}</td><td class="center">${item.quantity}</td><td class="center">${item.minStock}</td><td>${item.unit || ''}</td><td class="cost-col">${cost.toLocaleString()}</td><td class="cost-col">${totalValue.toLocaleString()}</td><td class="center">${usageRate || '-'}</td><td class="center ${daysClass}">${daysLeft}</td><td class="${status}">${status.replace('-', ' ')}</td></tr>`;
+        });
+        html += `<tr class="total-row"><td colspan="6" style="text-align: right;">Grand Total:</td><td class="cost-col">KSH ${totalInventoryValue.toLocaleString()}</td><td colspan="3"></td></tr>`;
+        html += '</table></body></html>';
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.onload = () => { printWindow.print(); };
+        setShowExportMenu(false);
+    };
+
+    const getStatusStyle = (status) => {
+        const styles = {
+            'in-stock': { bg: '#dcfce7', color: '#166534', label: 'In Stock' },
+            'low-stock': { bg: '#fef3c7', color: '#92400e', label: 'Low Stock' },
+            'out-of-stock': { bg: '#fee2e2', color: '#dc2626', label: 'Out of Stock' }
+        };
+        return styles[status] || styles['in-stock'];
+    };
+
+    const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '0', fontSize: '14px', outline: 'none' };
+    const btnPrimary = { padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
+    const btnSecondary = { padding: '10px 20px', background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
+
+    return (
+        <div style={{ padding: '0' }}>
+            {/* Success/Error Toast Popup */}
+            {message.text && (
+                <div style={{ 
+                    position: 'fixed', 
+                    top: '24px', 
+                    right: '24px', 
+                    zIndex: 9999,
+                    padding: '16px 24px', 
+                    background: '#fff',
+                    borderLeft: `4px solid ${message.type === 'success' ? '#22c55e' : '#ef4444'}`,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '12px',
+                    minWidth: '280px',
+                    animation: 'slideIn 0.3s ease'
+                }}>
+                    <div style={{ 
+                        width: '32px', 
+                        height: '32px', 
+                        borderRadius: '50%', 
+                        background: message.type === 'success' ? '#dcfce7' : '#fee2e2',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '16px'
+                    }}>
+                        {message.type === 'success' ? '✓' : '✕'}
+                    </div>
+                    <div>
+                        <div style={{ fontWeight: '600', fontSize: '14px', color: '#1f2937' }}>
+                            {message.type === 'success' ? 'Success' : 'Error'}
+                        </div>
+                        <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>{message.text}</div>
+                    </div>
+                    <button 
+                        onClick={() => setMessage({ type: '', text: '' })} 
+                        style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px', padding: '0' }}
+                    >×</button>
+                </div>
+            )}
+
+            {/* Stats Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                {[
+                    { label: 'Total Items', value: stats.total, icon: '📦', color: '#3b82f6' },
+                    { label: 'In Stock', value: stats.inStock, icon: '✓', color: '#22c55e' },
+                    { label: 'Low Stock', value: stats.lowStock, icon: '⚠', color: '#f59e0b' },
+                    { label: 'Out of Stock', value: stats.outOfStock, icon: '✕', color: '#ef4444' }
+                ].map((stat, i) => (
+                    <div key={i} style={{ background: '#fff', padding: '20px', border: '1px solid #e5e7eb', borderRadius: '0' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <p style={{ margin: '0 0 4px', color: '#6b7280', fontSize: '13px' }}>{stat.label}</p>
+                                <p style={{ margin: '0', fontSize: '28px', fontWeight: '700', color: stat.color }}>{stat.value}</p>
+                            </div>
+                            <span style={{ fontSize: '24px', opacity: 0.8 }}>{stat.icon}</span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Toolbar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '16px' }}>
+                <div style={{ display: 'flex', gap: '12px', flex: 1 }}>
+                    <input
+                        type="text"
+                        placeholder="Search items..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        style={{ ...inputStyle, maxWidth: '280px' }}
+                    />
+                    <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...inputStyle, maxWidth: '160px' }}>
+                        <option value="all">All Status</option>
+                        <option value="in-stock">In Stock</option>
+                        <option value="low-stock">Low Stock</option>
+                        <option value="out-of-stock">Out of Stock</option>
+                    </select>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ position: 'relative' }}>
+                        <button onClick={() => setShowExportMenu(!showExportMenu)} style={btnSecondary}>📥 Export ▾</button>
+                        {showExportMenu && (
+                            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, minWidth: '140px' }}>
+                                <button onClick={exportExcel} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }} onMouseOver={(e) => e.target.style.background='#f3f4f6'} onMouseOut={(e) => e.target.style.background='none'}>📊 Export Excel</button>
+                                <button onClick={exportPDF} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }} onMouseOver={(e) => e.target.style.background='#f3f4f6'} onMouseOut={(e) => e.target.style.background='none'}>📄 Export PDF</button>
+                            </div>
+                        )}
+                    </div>
+                    <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Item</button>
+                </div>
+            </div>
+
+            {/* Table */}
+            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ background: '#f9fafb' }}>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Item Name</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Category</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Quantity</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Usage/Day</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Cost</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Status</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</td></tr>
+                        ) : filteredItems.length === 0 ? (
+                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>No items found</td></tr>
+                        ) : (
+                            filteredItems.map(item => {
+                                const status = inventoryService.getStockStatus(item.quantity, item.minStock);
+                                const statusStyle = getStatusStyle(status);
+                                const usageAlert = inventoryService.getUsageAlert(item);
+                                const alertStyle = getUsageAlertStyle(usageAlert);
+                                return (
+                                    <tr key={item.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', fontWeight: '500' }}>
+                                            {item.name}
+                                            {usageAlert && usageAlert.level !== 'ok' && (
+                                                <span style={{ marginLeft: '8px', padding: '2px 6px', background: alertStyle.bg, color: alertStyle.color, fontSize: '10px', fontWeight: '600' }}>
+                                                    {usageAlert.days}d left
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{item.category}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'center', fontWeight: '600' }}>{item.quantity} {item.unit}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'center' }}>
+                                            {item.dailyUsageRate ? (
+                                                <span style={{ padding: '4px 8px', background: alertStyle?.bg || '#f3f4f6', color: alertStyle?.color || '#6b7280', fontSize: '12px', fontWeight: '500' }}>
+                                                    {item.dailyUsageRate} {item.unit || 'units'}
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: '#9ca3af', fontSize: '12px' }}>No data</span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>KSH {(item.cost || 0).toLocaleString()}</td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            <span style={{ padding: '4px 12px', background: statusStyle.bg, color: statusStyle.color, fontSize: '12px', fontWeight: '600', borderRadius: '0' }}>
+                                                {statusStyle.label}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                <button onClick={() => setUsageModal(item)} style={{ padding: '6px 10px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>Use</button>
+                                                <button onClick={() => setViewItem(item)} style={{ padding: '6px 10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#2563eb' }}>View</button>
+                                                <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '11px' }}>Edit</button>
+                                                <button onClick={() => setDeleteConfirm(item)} style={{ padding: '6px 10px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '11px' }}>Del</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Modal */}
+            {showModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>{editItem ? 'Edit Item' : 'Add New Item'}</h3>
+                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                        </div>
+                        <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Item Name *</label>
+                                    <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} style={inputStyle} required />
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Category *</label>
+                                    <select value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} style={inputStyle} required>
+                                        <option value="">Select category</option>
+                                        <option value="Cleaning Supplies">Cleaning Supplies</option>
+                                        <option value="Chemicals">Chemicals</option>
+                                        <option value="Tools">Tools</option>
+                                        <option value="Equipment">Equipment</option>
+                                        <option value="Consumables">Consumables</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Quantity *</label>
+                                        <input type="number" min="0" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: e.target.value })} style={inputStyle} required />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Min Stock *</label>
+                                        <input type="number" min="0" value={formData.minStock} onChange={(e) => setFormData({ ...formData, minStock: e.target.value })} style={inputStyle} required />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Unit (optional)</label>
+                                        <input type="text" placeholder="e.g., pcs, liters, kg" value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} style={inputStyle} />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Cost per Unit (KSH)</label>
+                                        <input type="number" min="0" step="0.01" placeholder="0.00" value={formData.cost} onChange={(e) => setFormData({ ...formData, cost: e.target.value })} style={inputStyle} />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Usage Alert (days)</label>
+                                    <input type="number" min="1" placeholder="Alert when supply drops below X days" value={formData.usageAlertDays} onChange={(e) => setFormData({ ...formData, usageAlertDays: e.target.value })} style={inputStyle} />
+                                    <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#9ca3af' }}>Alert when remaining supply falls below this many days</p>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                                <button type="button" onClick={closeModal} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
+                                <button type="submit" style={{ ...btnPrimary, flex: 1 }}>{editItem ? 'Update' : 'Add Item'}</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* View Item Modal */}
+            {viewItem && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '400px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Item Details</h3>
+                            <button onClick={() => setViewItem(null)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Item Name</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.name}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Category</span>
+                                    <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.category}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Quantity</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.quantity} {viewItem.unit}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Min Stock Level</span>
+                                    <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.minStock}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Cost per Unit</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px', color: '#059669' }}>KSH {(viewItem.cost || 0).toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Total Value</span>
+                                    <span style={{ fontWeight: '700', fontSize: '14px', color: '#059669' }}>KSH {((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
+                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Status</span>
+                                    <span style={{ padding: '4px 12px', background: getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).bg, color: getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).color, fontSize: '12px', fontWeight: '600', borderRadius: '0' }}>
+                                        {getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).label}
+                                    </span>
+                                </div>
+                                {viewItem.dailyUsageRate > 0 && (
+                                    <>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
+                                            <span style={{ color: '#6b7280', fontSize: '14px' }}>Daily Usage Rate</span>
+                                            <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.dailyUsageRate} {viewItem.unit}/day</span>
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
+                                            <span style={{ color: '#6b7280', fontSize: '14px' }}>Days of Supply Left</span>
+                                            <span style={{ fontWeight: '600', fontSize: '14px', color: inventoryService.getUsageAlert(viewItem)?.level === 'critical' ? '#dc2626' : inventoryService.getUsageAlert(viewItem)?.level === 'warning' ? '#f59e0b' : '#22c55e' }}>
+                                                {Math.floor(viewItem.quantity / viewItem.dailyUsageRate)} days
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
+                                {viewItem.lastUsage && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
+                                        <span style={{ color: '#6b7280', fontSize: '14px' }}>Last Usage</span>
+                                        <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.lastUsage.amount} {viewItem.unit} - {new Date(viewItem.lastUsage.date).toLocaleDateString()}</span>
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+                                <button onClick={() => setViewItem(null)} style={{ ...btnSecondary, flex: 1 }}>Close</button>
+                                <button onClick={() => {
+                                    const status = inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock);
+                                    const usageAlert = inventoryService.getUsageAlert(viewItem);
+                                    const daysLeft = viewItem.dailyUsageRate > 0 ? Math.floor(viewItem.quantity / viewItem.dailyUsageRate) : null;
+                                    const printWindow = window.open('', '_blank');
+                                    let html = `<!DOCTYPE html><html><head><title>Item Receipt - ${viewItem.name}</title><style>
+                                        body { font-family: Arial, sans-serif; padding: 30px; max-width: 400px; margin: 0 auto; }
+                                        .header { text-align: center; border-bottom: 2px solid #1f2937; padding-bottom: 15px; margin-bottom: 20px; }
+                                        .header h2 { margin: 0 0 5px; color: #1f2937; }
+                                        .header p { margin: 0; color: #6b7280; font-size: 12px; }
+                                        .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed #e5e7eb; }
+                                        .label { color: #6b7280; }
+                                        .value { font-weight: 600; text-align: right; }
+                                        .status { padding: 4px 12px; font-size: 12px; font-weight: 600; }
+                                        .in-stock { background: #dcfce7; color: #166534; }
+                                        .low-stock { background: #fef3c7; color: #92400e; }
+                                        .out-of-stock { background: #fee2e2; color: #dc2626; }
+                                        .footer { text-align: center; margin-top: 25px; padding-top: 15px; border-top: 2px solid #1f2937; font-size: 11px; color: #9ca3af; }
+                                        .total { font-size: 18px; color: #059669; }
+                                    </style></head><body>
+                                    <div class="header">
+                                        <h2>🚗 Ecospark</h2>
+                                        <p>Inventory Item Receipt</p>
+                                    </div>
+                                    <div class="row"><span class="label">Item Name</span><span class="value">${viewItem.name}</span></div>
+                                    <div class="row"><span class="label">Category</span><span class="value">${viewItem.category}</span></div>
+                                    <div class="row"><span class="label">Quantity</span><span class="value">${viewItem.quantity} ${viewItem.unit || ''}</span></div>
+                                    <div class="row"><span class="label">Min Stock Level</span><span class="value">${viewItem.minStock}</span></div>
+                                    <div class="row"><span class="label">Cost per Unit</span><span class="value">KSH ${(viewItem.cost || 0).toLocaleString()}</span></div>
+                                    <div class="row"><span class="label">Total Value</span><span class="value total">KSH ${((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span></div>
+                                    <div class="row"><span class="label">Status</span><span class="value"><span class="status ${status}">${status.replace('-', ' ')}</span></span></div>
+                                    ${viewItem.dailyUsageRate ? `<div class="row"><span class="label">Daily Usage Rate</span><span class="value">${viewItem.dailyUsageRate} ${viewItem.unit || 'units'}/day</span></div>` : ''}
+                                    ${daysLeft !== null ? `<div class="row"><span class="label">Days of Supply</span><span class="value" style="color: ${daysLeft <= 3 ? '#dc2626' : daysLeft <= 7 ? '#f59e0b' : '#22c55e'}">${daysLeft} days</span></div>` : ''}
+                                    ${viewItem.lastUsage ? `<div class="row"><span class="label">Last Usage</span><span class="value">${viewItem.lastUsage.amount} ${viewItem.unit || ''} on ${new Date(viewItem.lastUsage.date).toLocaleDateString()}</span></div>` : ''}
+                                    <div class="footer">
+                                        <p>Generated: ${new Date().toLocaleString()}</p>
+                                        <p>Ecospark Car Wash Management System</p>
+                                    </div>
+                                    </body></html>`;
+                                    printWindow.document.write(html);
+                                    printWindow.document.close();
+                                    printWindow.onload = () => { printWindow.print(); };
+                                }} style={{ ...btnPrimary, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                                    🖨️ Print
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Record Usage Modal */}
+            {usageModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Record Usage</h3>
+                            <button onClick={() => { setUsageModal(null); setUsageAmount(''); setUsageNotes(''); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            <div style={{ background: '#f9fafb', padding: '16px', marginBottom: '20px' }}>
+                                <p style={{ margin: '0 0 4px', fontWeight: '600', fontSize: '15px' }}>{usageModal.name}</p>
+                                <p style={{ margin: 0, color: '#6b7280', fontSize: '13px' }}>Available: <strong>{usageModal.quantity} {usageModal.unit}</strong></p>
+                            </div>
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount Used *</label>
+                                <input 
+                                    type="number" 
+                                    min="1" 
+                                    max={usageModal.quantity}
+                                    value={usageAmount} 
+                                    onChange={(e) => setUsageAmount(e.target.value)} 
+                                    placeholder={`Max: ${usageModal.quantity}`}
+                                    style={inputStyle} 
+                                />
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Notes (optional)</label>
+                                <input 
+                                    type="text" 
+                                    value={usageNotes} 
+                                    onChange={(e) => setUsageNotes(e.target.value)} 
+                                    placeholder="e.g., Used for vehicle wash"
+                                    style={inputStyle} 
+                                />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => { setUsageModal(null); setUsageAmount(''); setUsageNotes(''); }} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
+                                <button onClick={handleRecordUsage} style={{ flex: 1, padding: '10px 20px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Record Usage</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deleteConfirm && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '24px', textAlign: 'center' }}>
+                            <div style={{ width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>🗑️</div>
+                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>Delete Item</h3>
+                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Are you sure you want to delete <strong>"{deleteConfirm.name}"</strong>? This action cannot be undone.</p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => setDeleteConfirm(null)} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
+                                <button onClick={() => handleDelete(deleteConfirm.id)} style={{ flex: 1, padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ==================== EXPENSES MODULE ====================
+function ExpensesModule() {
+    const [expenses, setExpenses] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [search, setSearch] = useState('');
+    const [categoryFilter, setCategoryFilter] = useState('all');
+    const [dateFilter, setDateFilter] = useState('all');
+    const [showModal, setShowModal] = useState(false);
+    const [editItem, setEditItem] = useState(null);
+    const [deleteConfirm, setDeleteConfirm] = useState(null);
+    const [message, setMessage] = useState({ type: '', text: '' });
+    const [formData, setFormData] = useState({ 
+        title: '', 
+        category: '', 
+        amount: '', 
+        date: new Date().toISOString().split('T')[0], 
+        description: '',
+        paymentMethod: 'cash'
+    });
+
+    const { expensesService } = window.FirebaseServices;
+
+    const categories = ['Utilities', 'Supplies', 'Maintenance', 'Salaries', 'Transport', 'Marketing', 'Equipment', 'Other'];
+
+    // Realtime subscription
+    useEffect(() => {
+        const unsubscribe = expensesService.subscribeToExpenses((data) => {
+            setExpenses(data);
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    // Filter expenses
+    const filteredExpenses = expenses.filter(expense => {
+        const matchSearch = expense.title?.toLowerCase().includes(search.toLowerCase()) || 
+                           expense.description?.toLowerCase().includes(search.toLowerCase());
+        const matchCategory = categoryFilter === 'all' || expense.category === categoryFilter;
+        
+        let matchDate = true;
+        if (dateFilter === 'today') {
+            matchDate = expense.date === new Date().toISOString().split('T')[0];
+        } else if (dateFilter === 'week') {
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            matchDate = new Date(expense.date) >= weekAgo;
+        } else if (dateFilter === 'month') {
+            const thisMonth = new Date().toISOString().slice(0, 7);
+            matchDate = expense.date?.startsWith(thisMonth);
+        }
+        
+        return matchSearch && matchCategory && matchDate;
+    });
+
+    const stats = expensesService.getSummary(expenses);
+
+    const showMessage = (type, text) => {
+        setMessage({ type, text });
+        setTimeout(() => setMessage({ type: '', text: '' }), 3000);
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        let result;
+        if (editItem) {
+            result = await expensesService.update(editItem.id, formData);
+        } else {
+            result = await expensesService.add(formData);
+        }
+        if (result.success) {
+            showMessage('success', editItem ? 'Expense updated!' : 'Expense added!');
+            closeModal();
+        } else {
+            showMessage('error', result.error);
+        }
+    };
+
+    const handleDelete = async (id) => {
+        const result = await expensesService.delete(id);
+        if (result.success) {
+            showMessage('success', 'Expense deleted');
+        }
+        setDeleteConfirm(null);
+    };
+
+    const handleEdit = (expense) => {
+        setEditItem(expense);
+        setFormData({
+            title: expense.title,
+            category: expense.category,
+            amount: expense.amount,
+            date: expense.date,
+            description: expense.description || '',
+            paymentMethod: expense.paymentMethod || 'cash'
+        });
+        setShowModal(true);
+    };
+
+    const closeModal = () => {
+        setShowModal(false);
+        setEditItem(null);
+        setFormData({ title: '', category: '', amount: '', date: new Date().toISOString().split('T')[0], description: '', paymentMethod: 'cash' });
+    };
+
+    const exportExpenses = () => {
+        const printWindow = window.open('', '_blank');
+        let html = `<!DOCTYPE html><html><head><title>Expenses Report</title><style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { color: #1f2937; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; font-size: 13px; }
+            th { background: #f3f4f6; }
+            .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+            .stat-box { padding: 15px 20px; border: 1px solid #e5e7eb; }
+            .amount { text-align: right; font-weight: 600; }
+            .total { font-weight: bold; background: #f9fafb; }
+        </style></head><body>`;
+        html += `<h1>Expenses Report</h1><p>Generated: ${new Date().toLocaleDateString()}</p>`;
+        html += `<div class="stats"><div class="stat-box"><strong>Total:</strong> KSH ${stats.total.toLocaleString()}</div><div class="stat-box"><strong>This Month:</strong> KSH ${stats.thisMonth.toLocaleString()}</div><div class="stat-box"><strong>This Week:</strong> KSH ${stats.thisWeek.toLocaleString()}</div><div class="stat-box"><strong>Today:</strong> KSH ${stats.today.toLocaleString()}</div></div>`;
+        html += '<table><tr><th>Date</th><th>Title</th><th>Category</th><th>Payment</th><th class="amount">Amount (KSH)</th></tr>';
+        const total = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        filteredExpenses.forEach(e => {
+            html += `<tr><td>${e.date}</td><td>${e.title}</td><td>${e.category}</td><td>${e.paymentMethod || '-'}</td><td class="amount">${(e.amount || 0).toLocaleString()}</td></tr>`;
+        });
+        html += `<tr class="total"><td colspan="4" style="text-align:right;">Total:</td><td class="amount">KSH ${total.toLocaleString()}</td></tr>`;
+        html += '</table></body></html>';
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.onload = () => printWindow.print();
+    };
+
+    const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '0', fontSize: '14px', outline: 'none' };
+    const btnPrimary = { padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
+    const btnSecondary = { padding: '10px 20px', background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
+
+    return (
+        <div style={{ padding: '0' }}>
+            {/* Toast */}
+            {message.text && (
+                <div style={{ position: 'fixed', top: '24px', right: '24px', zIndex: 9999, padding: '16px 24px', background: '#fff', borderLeft: `4px solid ${message.type === 'success' ? '#22c55e' : '#ef4444'}`, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '12px', minWidth: '280px' }}>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: message.type === 'success' ? '#dcfce7' : '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}>
+                        {message.type === 'success' ? '✓' : '✕'}
+                    </div>
+                    <div>
+                        <div style={{ fontWeight: '600', fontSize: '14px', color: '#1f2937' }}>{message.type === 'success' ? 'Success' : 'Error'}</div>
+                        <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>{message.text}</div>
+                    </div>
+                    <button onClick={() => setMessage({ type: '', text: '' })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px' }}>×</button>
+                </div>
+            )}
+
+            {/* Stats Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                {[
+                    { label: 'Total Expenses', value: `KSH ${stats.total.toLocaleString()}`, icon: '💰', color: '#3b82f6' },
+                    { label: 'This Month', value: `KSH ${stats.thisMonth.toLocaleString()}`, icon: '📅', color: '#8b5cf6' },
+                    { label: 'This Week', value: `KSH ${stats.thisWeek.toLocaleString()}`, icon: '📊', color: '#f59e0b' },
+                    { label: 'Today', value: `KSH ${stats.today.toLocaleString()}`, icon: '📌', color: '#22c55e' }
+                ].map((stat, i) => (
+                    <div key={i} style={{ background: '#fff', padding: '20px', border: '1px solid #e5e7eb', borderRadius: '0' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <p style={{ margin: '0 0 4px', color: '#6b7280', fontSize: '13px' }}>{stat.label}</p>
+                                <p style={{ margin: '0', fontSize: '22px', fontWeight: '700', color: stat.color }}>{stat.value}</p>
+                            </div>
+                            <span style={{ fontSize: '24px', opacity: 0.8 }}>{stat.icon}</span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Toolbar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '12px', flex: 1, flexWrap: 'wrap' }}>
+                    <input type="text" placeholder="Search expenses..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...inputStyle, maxWidth: '220px' }} />
+                    <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} style={{ ...inputStyle, maxWidth: '150px' }}>
+                        <option value="all">All Categories</option>
+                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, maxWidth: '130px' }}>
+                        <option value="all">All Time</option>
+                        <option value="today">Today</option>
+                        <option value="week">This Week</option>
+                        <option value="month">This Month</option>
+                    </select>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={exportExpenses} style={btnSecondary}>📄 Export</button>
+                    <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Expense</button>
+                </div>
+            </div>
+
+            {/* Table */}
+            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ background: '#f9fafb' }}>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Date</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Title</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Category</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Payment</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Amount</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</td></tr>
+                        ) : filteredExpenses.length === 0 ? (
+                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>No expenses found</td></tr>
+                        ) : (
+                            filteredExpenses.map(expense => (
+                                <tr key={expense.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                    <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{expense.date}</td>
+                                    <td style={{ padding: '14px 16px' }}>
+                                        <div style={{ fontWeight: '500', fontSize: '14px' }}>{expense.title}</div>
+                                        {expense.description && <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{expense.description}</div>}
+                                    </td>
+                                    <td style={{ padding: '14px 16px' }}>
+                                        <span style={{ padding: '4px 10px', background: '#f3f4f6', fontSize: '12px', fontWeight: '500' }}>{expense.category}</span>
+                                    </td>
+                                    <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: '#6b7280', textTransform: 'capitalize' }}>{expense.paymentMethod || '-'}</td>
+                                    <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '14px', color: '#dc2626' }}>KSH {(expense.amount || 0).toLocaleString()}</td>
+                                    <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                            <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '12px' }}>Edit</button>
+                                            <button onClick={() => setDeleteConfirm(expense)} style={{ padding: '6px 12px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '12px' }}>Delete</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Add/Edit Modal */}
+            {showModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>{editItem ? 'Edit Expense' : 'Add Expense'}</h3>
+                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                        </div>
+                        <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Title *</label>
+                                    <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} placeholder="e.g., Electricity Bill" style={inputStyle} required />
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Category *</label>
+                                        <select value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} style={inputStyle} required>
+                                            <option value="">Select</option>
+                                            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount (KSH) *</label>
+                                        <input type="number" min="0" step="0.01" value={formData.amount} onChange={(e) => setFormData({ ...formData, amount: e.target.value })} placeholder="0.00" style={inputStyle} required />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Date *</label>
+                                        <input type="date" value={formData.date} onChange={(e) => setFormData({ ...formData, date: e.target.value })} style={inputStyle} required />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Payment Method</label>
+                                        <select value={formData.paymentMethod} onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })} style={inputStyle}>
+                                            <option value="cash">Cash</option>
+                                            <option value="mpesa">M-Pesa</option>
+                                            <option value="bank">Bank Transfer</option>
+                                            <option value="card">Card</option>
+                                            <option value="cheque">Cheque</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Description (optional)</label>
+                                    <input type="text" value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder="Additional notes..." style={inputStyle} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                                <button type="button" onClick={closeModal} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
+                                <button type="submit" style={{ ...btnPrimary, flex: 1 }}>{editItem ? 'Update' : 'Add Expense'}</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation */}
+            {deleteConfirm && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '24px', textAlign: 'center' }}>
+                            <div style={{ width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>🗑️</div>
+                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>Delete Expense</h3>
+                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Delete <strong>"{deleteConfirm.title}"</strong> (KSH {(deleteConfirm.amount || 0).toLocaleString()})?</p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => setDeleteConfirm(null)} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
+                                <button onClick={() => handleDelete(deleteConfirm.id)} style={{ flex: 1, padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ==================== SYSTEM SETTINGS MODULE ====================
+function SystemSettings({ initialTab = 'profile' }) {
+    const [activeTab, setActiveTab] = useState(initialTab);
+    const [loading, setLoading] = useState(false);
+    const [successMessage, setSuccessMessage] = useState('');
+    const [error, setError] = useState('');
+    const { currentUser, userProfile } = useContext(AuthContext);
+    
+    // Profile form state
+    const [profileData, setProfileData] = useState({
+        displayName: userProfile?.displayName || '',
+        phone: userProfile?.phone || '',
+        address: userProfile?.address || ''
+    });
+    
+    // Password change state
+    const [passwordData, setPasswordData] = useState({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: ''
+    });
+    
+    // Profile image state
+    const [profileImage, setProfileImage] = useState(userProfile?.photoURL || null);
+    const [uploadingImage, setUploadingImage] = useState(false);
+    const fileInputRef = React.useRef(null);
+    
+    // Theme detection
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    // Toggle theme function
+    const toggleTheme = () => {
+        const newTheme = isDark ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        setIsDark(!isDark);
+    };
+    
+    // Handle image upload
+    const handleImageUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        
+        // Validate file type
+        if (!file.type.startsWith('image/')) {
+            setError('Please select an image file');
+            return;
+        }
+        
+        // Validate file size (max 2MB)
+        if (file.size > 2 * 1024 * 1024) {
+            setError('Image size should be less than 2MB');
+            return;
+        }
+        
+        setUploadingImage(true);
+        try {
+            const services = window.FirebaseServices;
+            if (services?.storageService && currentUser) {
+                const result = await services.storageService.uploadProfileImage(currentUser.uid, file);
+                if (result.success) {
+                    setProfileImage(result.url);
+                    await services.userService.updateUserProfile(currentUser.uid, { photoURL: result.url });
+                    setSuccessMessage('Profile image updated!');
+                } else {
+                    setError(result.error || 'Failed to upload image');
+                }
+            } else {
+                // Fallback: create local preview
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    setProfileImage(reader.result);
+                    setSuccessMessage('Image preview set (save to upload)');
+                };
+                reader.readAsDataURL(file);
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to upload image');
+        } finally {
+            setUploadingImage(false);
+        }
+    };
+
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        bgTertiary: isDark ? '#334155' : '#f1f5f9',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        inputBg: isDark ? '#1e293b' : 'white',
+        cardShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
+    };
+
+    // Auto-hide messages
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => setError(''), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [error]);
+
+    // Update profile data when userProfile changes
+    useEffect(() => {
+        if (userProfile) {
+            setProfileData({
+                displayName: userProfile.displayName || '',
+                phone: userProfile.phone || '',
+                address: userProfile.address || ''
+            });
+        }
+    }, [userProfile]);
+
+    const handleProfileUpdate = async () => {
+        if (!profileData.displayName.trim()) {
+            setError('Display name is required');
+            return;
+        }
+        
+        setLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (services?.userService && currentUser) {
+                const result = await services.userService.updateUserProfile(currentUser.uid, {
+                    displayName: profileData.displayName.trim(),
+                    phone: profileData.phone.trim(),
+                    address: profileData.address.trim()
+                });
+                
+                if (result.success) {
+                    setSuccessMessage('Profile updated successfully!');
+                } else {
+                    setError(result.error || 'Failed to update profile');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to update profile');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handlePasswordChange = async () => {
+        if (!passwordData.newPassword || !passwordData.confirmPassword) {
+            setError('Please fill in all password fields');
+            return;
+        }
+        if (passwordData.newPassword !== passwordData.confirmPassword) {
+            setError('New passwords do not match');
+            return;
+        }
+        if (passwordData.newPassword.length < 6) {
+            setError('Password must be at least 6 characters');
+            return;
+        }
+        
+        setLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (services?.authService) {
+                const result = await services.authService.updatePassword(passwordData.newPassword);
+                if (result.success) {
+                    setSuccessMessage('Password changed successfully!');
+                    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                } else {
+                    setError(result.error || 'Failed to change password');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to change password');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const tabs = [
+        { id: 'profile', label: 'My Profile', icon: '👤' },
+        { id: 'account', label: 'Account Settings', icon: '⚙️' },
+        { id: 'support', label: 'Help & Support', icon: '❓' }
+    ];
+
+    const inputStyle = {
+        width: '100%',
+        padding: '12px 14px',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '0',
+        fontSize: '14px',
+        backgroundColor: theme.inputBg,
+        color: theme.text,
+        outline: 'none',
+        transition: 'border-color 0.2s',
+        boxSizing: 'border-box'
+    };
+
+    const labelStyle = {
+        display: 'block',
+        marginBottom: '8px',
+        fontSize: '13px',
+        fontWeight: '600',
+        color: theme.text,
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px'
+    };
+
+    const cardStyle = {
+        background: theme.bg,
+        border: `1px solid ${theme.border}`,
+        borderRadius: '0',
+        padding: '28px',
+        marginBottom: '24px',
+        boxShadow: theme.cardShadow
+    };
+
+    return (
+        <div style={{ padding: '0', maxWidth: '100%' }}>
+            {/* Messages */}
+            {successMessage && (
+                <div style={{ 
+                    padding: '14px 20px', 
+                    background: '#dcfce7', 
+                    border: '1px solid #86efac', 
+                    borderRadius: '0', 
+                    color: '#166534', 
+                    marginBottom: '24px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontWeight: '500'
+                }}>
+                    <span>✓</span> {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ 
+                    padding: '14px 20px', 
+                    background: '#fef2f2', 
+                    border: '1px solid #fecaca', 
+                    borderRadius: '0', 
+                    color: '#dc2626', 
+                    marginBottom: '24px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontWeight: '500'
+                }}>
+                    <span>✕</span> {error}
+                </div>
+            )}
+
+            {/* Tabs */}
+            <div style={{ 
+                display: 'flex', 
+                gap: '0', 
+                marginBottom: '32px',
+                background: 'transparent',
+                borderBottom: `2px solid ${theme.border}`
+            }}>
+                {tabs.map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        style={{
+                            padding: '14px 28px',
+                            border: 'none',
+                            borderBottom: activeTab === tab.id ? '2px solid #3b82f6' : '2px solid transparent',
+                            marginBottom: '-2px',
+                            borderRadius: '0',
+                            background: 'transparent',
+                            color: activeTab === tab.id ? '#3b82f6' : theme.textSecondary,
+                            fontWeight: activeTab === tab.id ? '600' : '500',
+                            fontSize: '14px',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px'
+                        }}
+                    >
+                        <span style={{ fontSize: '16px' }}>{tab.icon}</span>
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
+
+            {/* Profile Tab */}
+            {activeTab === 'profile' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                    {/* Left Column - Profile Card */}
+                    <div style={cardStyle}>
+                        <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                            Profile Information
+                        </h3>
+                        
+                        {/* Profile Header */}
+                        <div style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '24px', 
+                            marginBottom: '28px',
+                            padding: '24px',
+                            background: theme.bgSecondary,
+                            border: `1px solid ${theme.border}`
+                        }}>
+                            <div style={{ position: 'relative' }}>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleImageUpload}
+                                    accept="image/*"
+                                    style={{ display: 'none' }}
+                                />
+                                <div 
+                                    onClick={() => fileInputRef.current?.click()}
+                                    style={{
+                                        width: '80px',
+                                        height: '80px',
+                                        background: profileImage ? `url(${profileImage}) center/cover` : 'linear-gradient(135deg, #3b82f6 0%, #1e40af 100%)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: 'white',
+                                        fontSize: '32px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        position: 'relative',
+                                        overflow: 'hidden'
+                                    }}
+                                >
+                                    {!profileImage && (userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                                    <div style={{
+                                        position: 'absolute',
+                                        bottom: 0,
+                                        left: 0,
+                                        right: 0,
+                                        background: 'rgba(0,0,0,0.6)',
+                                        color: 'white',
+                                        fontSize: '10px',
+                                        padding: '4px 0',
+                                        textAlign: 'center',
+                                        fontWeight: '500'
+                                    }}>
+                                        {uploadingImage ? '...' : '📷 Edit'}
+                                    </div>
+                                </div>
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text }}>
+                                    {userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User'}
+                                </div>
+                                <div style={{ fontSize: '14px', color: theme.textSecondary, marginTop: '6px' }}>
+                                    {userProfile?.email}
+                                </div>
+                                <div style={{ 
+                                    display: 'inline-block',
+                                    marginTop: '10px',
+                                    padding: '6px 14px',
+                                    background: '#3b82f6',
+                                    color: 'white',
+                                    fontSize: '11px',
+                                    fontWeight: '600',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px'
+                                }}>
+                                    {userProfile?.role || 'User'}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Profile Form */}
+                        <div style={{ display: 'grid', gap: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Display Name</label>
+                                <input
+                                    type="text"
+                                    value={profileData.displayName}
+                                    onChange={(e) => setProfileData(prev => ({ ...prev, displayName: e.target.value }))}
+                                    placeholder="Enter your name"
+                                    style={inputStyle}
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Phone Number</label>
+                                <input
+                                    type="tel"
+                                    value={profileData.phone}
+                                    onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
+                                    placeholder="Enter phone number"
+                                    style={inputStyle}
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Address</label>
+                                <input
+                                    type="text"
+                                    value={profileData.address}
+                                    onChange={(e) => setProfileData(prev => ({ ...prev, address: e.target.value }))}
+                                    placeholder="Enter your address"
+                                    style={inputStyle}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: '28px', display: 'flex', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={handleProfileUpdate}
+                                disabled={loading}
+                                style={{
+                                    padding: '12px 32px',
+                                    background: loading ? '#93c5fd' : '#3b82f6',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '0',
+                                    fontSize: '13px',
+                                    fontWeight: '600',
+                                    cursor: loading ? 'wait' : 'pointer',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px'
+                                }}
+                            >
+                                {loading ? 'Saving...' : 'Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Right Column - Account Info */}
+                    <div>
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                Account Details
+                            </h3>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Email Address</span>
+                                    <span style={{ color: theme.text, fontWeight: '600' }}>{userProfile?.email || '-'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Role</span>
+                                    <span style={{ color: theme.text, fontWeight: '600', textTransform: 'capitalize' }}>{userProfile?.role || 'User'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Status</span>
+                                    <span style={{ color: '#22c55e', fontWeight: '600' }}>● Active</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                Session Info
+                            </h3>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Last Login</span>
+                                    <span style={{ color: theme.text, fontSize: '13px' }}>{currentUser?.metadata?.lastSignInTime ? new Date(currentUser.metadata.lastSignInTime).toLocaleDateString() : '-'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Member Since</span>
+                                    <span style={{ color: theme.text, fontSize: '13px' }}>{currentUser?.metadata?.creationTime ? new Date(currentUser.metadata.creationTime).toLocaleDateString() : '-'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Account Settings Tab */}
+            {activeTab === 'account' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                    {/* Left Column */}
+                    <div>
+                        {/* Change Password */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                🔐 Change Password
+                            </h3>
+                            <div style={{ display: 'grid', gap: '20px' }}>
+                                <div>
+                                    <label style={labelStyle}>New Password</label>
+                                    <input
+                                        type="password"
+                                        value={passwordData.newPassword}
+                                        onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                                        placeholder="Enter new password"
+                                        style={inputStyle}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Confirm New Password</label>
+                                    <input
+                                        type="password"
+                                        value={passwordData.confirmPassword}
+                                        onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                                        placeholder="Confirm new password"
+                                        style={inputStyle}
+                                    />
+                                </div>
+                                <button
+                                    onClick={handlePasswordChange}
+                                    disabled={loading}
+                                    style={{
+                                        padding: '12px 32px',
+                                        background: loading ? '#fca5a5' : '#ef4444',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '0',
+                                        fontSize: '13px',
+                                        fontWeight: '600',
+                                        cursor: loading ? 'wait' : 'pointer',
+                                        width: 'fit-content',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                    }}
+                                >
+                                    {loading ? 'Changing...' : 'Change Password'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Preferences */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                🎨 Preferences
+                            </h3>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                <div>
+                                    <div style={{ color: theme.text, fontWeight: '600' }}>Dark Mode</div>
+                                    <div style={{ color: theme.textSecondary, fontSize: '13px', marginTop: '4px' }}>Toggle dark/light theme</div>
+                                </div>
+                                <button
+                                    onClick={toggleTheme}
+                                    style={{ 
+                                        padding: '10px 20px', 
+                                        background: isDark ? '#3b82f6' : '#e2e8f0', 
+                                        color: isDark ? 'white' : '#64748b',
+                                        fontSize: '12px',
+                                        fontWeight: '600',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {isDark ? '🌙' : '☀️'} {isDark ? 'Dark' : 'Light'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Column */}
+                    <div>
+                        {/* Session Info */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                📱 Session Information
+                            </h3>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>User ID</span>
+                                    <span style={{ color: theme.text, fontFamily: 'monospace', fontSize: '11px' }}>{currentUser?.uid ? currentUser.uid.substring(0, 16) + '...' : '-'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Last Sign In</span>
+                                    <span style={{ color: theme.text, fontSize: '13px' }}>{currentUser?.metadata?.lastSignInTime ? new Date(currentUser.metadata.lastSignInTime).toLocaleString() : '-'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Account Created</span>
+                                    <span style={{ color: theme.text, fontSize: '13px' }}>{currentUser?.metadata?.creationTime ? new Date(currentUser.metadata.creationTime).toLocaleString() : '-'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Security Status */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                🔒 Security Status
+                            </h3>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Email Verified</span>
+                                    <span style={{ color: currentUser?.emailVerified ? '#22c55e' : '#f59e0b', fontWeight: '600' }}>
+                                        {currentUser?.emailVerified ? '● Verified' : '○ Pending'}
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Account Status</span>
+                                    <span style={{ color: '#22c55e', fontWeight: '600' }}>● Active</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Help & Support Tab */}
+            {activeTab === 'support' && (
+                <div>
+                    {/* Quick Help */}
+                    <div style={cardStyle}>
+                        <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                            📚 Quick Help
+                        </h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+                            {[
+                                { icon: '🚗', title: 'Vehicle Intake', desc: 'Register vehicles and manage queue' },
+                                { icon: '💳', title: 'Billing & Payments', desc: 'Process payments and invoices' },
+                                { icon: '👥', title: 'Customer Management', desc: 'Manage customers and loyalty' },
+                                { icon: '📊', title: 'Reports', desc: 'Analytics and performance' }
+                            ].map((item, idx) => (
+                                <div key={idx} style={{ 
+                                    padding: '20px', 
+                                    background: theme.bgSecondary, 
+                                    border: `1px solid ${theme.border}`,
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    textAlign: 'center'
+                                }}>
+                                    <div style={{ fontSize: '32px', marginBottom: '12px' }}>{item.icon}</div>
+                                    <div style={{ fontWeight: '600', color: theme.text, marginBottom: '6px', fontSize: '14px' }}>{item.title}</div>
+                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>{item.desc}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                        {/* Contact Support */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                📞 Contact Support
+                            </h3>
+                            <div style={{ display: 'grid', gap: '16px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <div style={{ width: '44px', height: '44px', background: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>📧</div>
+                                    <div>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>Email Support</div>
+                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>support@ecospark.co.ke</div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>📱</div>
+                                    <div>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>Phone Support</div>
+                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>+254 700 000 000</div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>💬</div>
+                                    <div>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>WhatsApp</div>
+                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>+254 700 000 000</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* System Info */}
+                        <div style={cardStyle}>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                ℹ️ System Information
+                            </h3>
+                            <div style={{ display: 'grid', gap: '0' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Application</span>
+                                    <span style={{ color: theme.text, fontWeight: '600' }}>EcoSpark</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Version</span>
+                                    <span style={{ color: theme.text }}>1.0.0</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0' }}>
+                                    <span style={{ color: theme.textSecondary, fontWeight: '500' }}>Last Updated</span>
+                                    <span style={{ color: theme.text }}>January 2026</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Reports & Analytics Component
+function ReportsAnalytics() {
+    const [loading, setLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('overview');
+    const [dateRange, setDateRange] = useState('month');
+    const [reportType, setReportType] = useState('summary');
+    const [showPreview, setShowPreview] = useState(false);
+    const [previewContent, setPreviewContent] = useState('');
+    const [data, setData] = useState({
+        billing: [], expenses: [], inventory: [], fleet: [], customers: [], staff: [], vehicles: []
+    });
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    useEffect(() => {
+        const observer = new MutationObserver(() => setIsDark(document.documentElement.getAttribute('data-theme') === 'dark'));
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        bgTertiary: isDark ? '#334155' : '#f1f5f9',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        inputBg: isDark ? '#1e293b' : 'white'
+    };
+
+    const formatCurrency = (amt) => `KSH ${(amt || 0).toLocaleString()}`;
+
+    // Load all data
+    useEffect(() => {
+        const unsubs = [];
+        const init = async () => {
+            let services = window.FirebaseServices;
+            let attempts = 0;
+            while (!services && attempts < 50) {
+                await new Promise(r => setTimeout(r, 100));
+                services = window.FirebaseServices;
+                attempts++;
+            }
+            if (!services) { setLoading(false); return; }
+
+            // Subscribe to billing/invoices (real-time revenue data)
+            if (services.billingService?.subscribeToInvoices) {
+                unsubs.push(services.billingService.subscribeToInvoices((invoices) => {
+                    setData(prev => ({ ...prev, billing: invoices }));
+                }));
+            }
+            // Subscribe to expenses
+            if (services.expensesService?.subscribeToExpenses) {
+                unsubs.push(services.expensesService.subscribeToExpenses((records) => {
+                    setData(prev => ({ ...prev, expenses: records }));
+                }));
+            }
+            // Subscribe to inventory
+            if (services.inventoryService?.subscribeToItems) {
+                unsubs.push(services.inventoryService.subscribeToItems((items) => {
+                    setData(prev => ({ ...prev, inventory: items }));
+                }));
+            }
+            // Subscribe to fleet
+            if (services.fleetService?.subscribeToAccounts) {
+                unsubs.push(services.fleetService.subscribeToAccounts((accounts) => {
+                    setData(prev => ({ ...prev, fleet: accounts }));
+                }));
+            }
+            // Subscribe to customers
+            if (services.customerService?.subscribeToCustomers) {
+                unsubs.push(services.customerService.subscribeToCustomers((customers) => {
+                    setData(prev => ({ ...prev, customers: customers }));
+                }));
+            }
+            // Subscribe to staff
+            if (services.staffService?.subscribeToStaff) {
+                unsubs.push(services.staffService.subscribeToStaff((staff) => {
+                    setData(prev => ({ ...prev, staff: staff }));
+                }));
+            }
+            // Subscribe to vehicles/intake
+            if (services.intakeRecordsService?.subscribeToRecords) {
+                unsubs.push(services.intakeRecordsService.subscribeToRecords((vehicles) => {
+                    setData(prev => ({ ...prev, vehicles: vehicles }));
+                }));
+            }
+            setLoading(false);
+        };
+        init();
+        return () => unsubs.forEach(u => u && u());
+    }, []);
+
+    // Calculate analytics
+    const now = new Date();
+    const getDateFilter = () => {
+        if (dateRange === 'today') return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (dateRange === 'week') { const d = new Date(now); d.setDate(d.getDate() - 7); return d; }
+        if (dateRange === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
+        if (dateRange === 'year') return new Date(now.getFullYear(), 0, 1);
+        return new Date(0);
+    };
+    const filterDate = getDateFilter();
+
+    const filterByDate = (items, dateField = 'createdAt') => {
+        return items.filter(item => {
+            const d = item[dateField] || item.date || item.createdAt;
+            return d && new Date(d) >= filterDate;
+        });
+    };
+
+    const filteredBilling = filterByDate(data.billing);
+    const filteredExpenses = filterByDate(data.expenses, 'date');
+    const filteredVehicles = filterByDate(data.vehicles);
+
+    // Key Metrics - using totalAmount from invoices, with fallbacks
+    const totalRevenue = filteredBilling.reduce((s, b) => s + (b.totalAmount || b.total || b.amount || 0), 0);
+    const totalExpenses = filteredExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const netProfit = totalRevenue - totalExpenses;
+    const totalServices = filteredBilling.length;
+    const avgTicket = totalServices > 0 ? totalRevenue / totalServices : 0;
+
+    // Count paid vs unpaid
+    const paidInvoices = filteredBilling.filter(b => b.paymentStatus === 'paid');
+    const unpaidInvoices = filteredBilling.filter(b => b.paymentStatus !== 'paid');
+    const paidRevenue = paidInvoices.reduce((s, b) => s + (b.totalAmount || b.total || b.amount || 0), 0);
+    const unpaidRevenue = unpaidInvoices.reduce((s, b) => s + (b.totalAmount || b.total || b.amount || 0), 0);
+
+    // Inventory stats
+    const inventoryValue = data.inventory.reduce((s, i) => s + ((i.quantity || 0) * (i.unitCost || 0)), 0);
+    const lowStockItems = data.inventory.filter(i => (i.quantity || 0) <= (i.reorderLevel || 5)).length;
+
+    // Fleet stats
+    const fleetBalance = data.fleet.reduce((s, f) => s + (f.balance || 0), 0);
+    const fleetSpent = data.fleet.reduce((s, f) => s + (f.totalSpent || 0), 0);
+    const fleetVehicles = data.fleet.reduce((s, f) => s + (f.vehicles?.length || 0), 0);
+
+    // Customer stats
+    const totalCustomers = data.customers.length;
+    const loyaltyPoints = data.customers.reduce((s, c) => s + (c.loyaltyPoints || 0), 0);
+
+    // Revenue by service type/source
+    const revenueByService = {};
+    filteredBilling.forEach(b => {
+        // Try to get service name from services array, or use source
+        let svc = 'Other';
+        if (b.services && b.services.length > 0) {
+            svc = b.services[0].name || b.source || 'Other';
+        } else {
+            svc = b.source === 'wash' ? 'Car Wash' : b.source === 'garage' ? 'Garage Service' : (b.service || b.packageName || 'Other');
+        }
+        revenueByService[svc] = (revenueByService[svc] || 0) + (b.totalAmount || b.total || b.amount || 0);
+    });
+    const topServices = Object.entries(revenueByService).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    // Expenses by category
+    const expensesByCategory = {};
+    filteredExpenses.forEach(e => {
+        const cat = e.category || 'Other';
+        expensesByCategory[cat] = (expensesByCategory[cat] || 0) + (e.amount || 0);
+    });
+    const topExpenseCategories = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    // Daily revenue for chart (last 7 days)
+    const dailyRevenue = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+        const dayRevenue = data.billing.filter(b => (b.createdAt || b.date || '').startsWith(dateStr)).reduce((s, b) => s + (b.totalAmount || b.total || b.amount || 0), 0);
+        dailyRevenue.push({ day: d.toLocaleDateString('en', { weekday: 'short' }), date: dateStr, amount: dayRevenue });
+    }
+    const maxDailyRevenue = Math.max(...dailyRevenue.map(d => d.amount), 1);
+
+    // Print report
+    const printReport = () => {
+        const content = `
+<!DOCTYPE html><html><head><title>EcoSpark Analytics Report</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b}
+.header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
+.logo{font-size:28px;font-weight:800;color:#10b981}.logo span{color:#1e293b}
+.subtitle{color:#64748b;margin-top:8px}
+.section{margin-bottom:24px}.section-title{font-size:16px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #e2e8f0}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.card{background:#f8fafc;border:1px solid #e2e8f0;padding:16px;text-align:center}
+.card .value{font-size:24px;font-weight:800}.card .label{font-size:11px;color:#64748b;text-transform:uppercase;margin-top:4px}
+.green{color:#10b981}.red{color:#ef4444}.blue{color:#3b82f6}.purple{color:#8b5cf6}
+table{width:100%;border-collapse:collapse}th{background:#1e293b;color:white;padding:10px;text-align:left;font-size:11px;text-transform:uppercase}
+td{padding:10px;border-bottom:1px solid #e2e8f0}tr:nth-child(even){background:#f8fafc}
+.footer{margin-top:30px;text-align:center;color:#64748b;font-size:12px;padding-top:20px;border-top:1px solid #e2e8f0}
+@media print{body{padding:20px}}
+</style></head><body>
+<div class="header"><div class="logo">Eco<span>Spark</span></div><div class="subtitle">Analytics Report - ${new Date().toLocaleDateString()}</div></div>
+
+<div class="section"><div class="section-title">Key Performance Metrics (${dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'Last 7 Days' : dateRange === 'month' ? 'This Month' : 'This Year'})</div>
+<div class="grid">
+<div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+<div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+<div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">KSH ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
+<div class="card"><div class="value blue">${totalServices}</div><div class="label">Services Completed</div></div>
+</div></div>
+
+<div class="section"><div class="section-title">Business Summary</div>
+<div class="grid">
+<div class="card"><div class="value blue">KSH ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
+<div class="card"><div class="value purple">${totalCustomers}</div><div class="label">Total Customers</div></div>
+<div class="card"><div class="value green">KSH ${inventoryValue.toLocaleString()}</div><div class="label">Inventory Value</div></div>
+<div class="card"><div class="value blue">${fleetVehicles}</div><div class="label">Fleet Vehicles</div></div>
+</div></div>
+
+${topServices.length > 0 ? `<div class="section"><div class="section-title">Top Services by Revenue</div>
+<table><thead><tr><th>Service</th><th style="text-align:right">Revenue</th><th style="text-align:right">% of Total</th></tr></thead>
+<tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${totalRevenue > 0 ? ((amt / totalRevenue) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+
+${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-title">Expenses by Category</div>
+<table><thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">% of Total</th></tr></thead>
+<tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${totalExpenses > 0 ? ((amt / totalExpenses) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+
+<div class="footer">Generated on ${new Date().toLocaleString()} | EcoSpark Car Wash Management System</div>
+</body></html>`;
+        const w = window.open('', '_blank');
+        w.document.write(content);
+        w.document.close();
+        w.onload = () => w.print();
+    };
+
+    const tabStyle = (active) => ({
+        padding: '12px 24px', background: active ? '#3b82f6' : 'transparent', color: active ? 'white' : theme.textSecondary,
+        border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px', borderBottom: active ? 'none' : `1px solid ${theme.border}`
+    });
+    const cardStyle = { background: theme.bg, border: `1px solid ${theme.border}`, padding: '20px' };
+    const metricCard = (value, label, color = theme.text) => (
+        <div style={{ ...cardStyle, textAlign: 'center' }}>
+            <div style={{ fontSize: '28px', fontWeight: '800', color }}>{value}</div>
+            <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', marginTop: '6px', fontWeight: '600' }}>{label}</div>
+        </div>
+    );
+
+    if (loading) {
+        return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', color: theme.textSecondary }}>Loading analytics...</div>;
+    }
+
+    return (
+        <div style={{ padding: 0, width: '100%' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: theme.bgSecondary, borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ display: 'flex', gap: '0' }}>
+                    <button onClick={() => setActiveTab('overview')} style={tabStyle(activeTab === 'overview')}>Overview</button>
+                    <button onClick={() => setActiveTab('revenue')} style={tabStyle(activeTab === 'revenue')}>Revenue</button>
+                    <button onClick={() => setActiveTab('expenses')} style={tabStyle(activeTab === 'expenses')}>Expenses</button>
+                    <button onClick={() => setActiveTab('operations')} style={tabStyle(activeTab === 'operations')}>Operations</button>
+                    <button onClick={() => setActiveTab('generate')} style={tabStyle(activeTab === 'generate')}>Generate Reports</button>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#10b981', color: 'white', fontSize: '12px', fontWeight: '600' }}>
+                        <span style={{ width: '8px', height: '8px', background: '#fff', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
+                        LIVE
+                    </div>
+                    <select value={dateRange} onChange={(e) => setDateRange(e.target.value)} style={{ padding: '10px 14px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '13px' }}>
+                        <option value="today">Today</option>
+                        <option value="week">Last 7 Days</option>
+                        <option value="month">This Month</option>
+                        <option value="year">This Year</option>
+                        <option value="all">All Time</option>
+                    </select>
+                    <button onClick={printReport} style={{ padding: '10px 20px', background: '#1e293b', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>Print Report</button>
+                </div>
+            </div>
+
+            {/* Overview Tab */}
+            {activeTab === 'overview' && (
+                <div style={{ padding: '20px' }}>
+                    {/* Key Metrics */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                        {metricCard(formatCurrency(totalRevenue), 'Total Revenue', '#10b981')}
+                        {metricCard(formatCurrency(totalExpenses), 'Total Expenses', '#ef4444')}
+                        {metricCard(formatCurrency(netProfit), 'Net Profit', netProfit >= 0 ? '#10b981' : '#ef4444')}
+                        {metricCard(totalServices.toString(), 'Services', '#3b82f6')}
+                        {metricCard(formatCurrency(avgTicket), 'Avg Ticket', '#8b5cf6')}
+                    </div>
+
+                    {/* Charts Row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                        {/* Revenue Chart */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Daily Revenue (Last 7 Days)</h4>
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', height: '180px' }}>
+                                {dailyRevenue.map((d, i) => (
+                                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                                        <div style={{ fontSize: '10px', color: '#10b981', fontWeight: '600', marginBottom: '4px' }}>{d.amount > 0 ? `${(d.amount / 1000).toFixed(0)}K` : ''}</div>
+                                        <div style={{ width: '100%', background: '#10b981', height: `${(d.amount / maxDailyRevenue) * 140}px`, minHeight: d.amount > 0 ? '4px' : '0' }}></div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px', fontWeight: '600' }}>{d.day}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Quick Stats */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Quick Stats</h4>
+                            <div style={{ display: 'grid', gap: '12px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary }}>Customers</span>
+                                    <span style={{ fontWeight: '700', color: theme.text }}>{totalCustomers}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary }}>Fleet Accounts</span>
+                                    <span style={{ fontWeight: '700', color: theme.text }}>{data.fleet.length}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary }}>Fleet Vehicles</span>
+                                    <span style={{ fontWeight: '700', color: theme.text }}>{fleetVehicles}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary }}>Staff Members</span>
+                                    <span style={{ fontWeight: '700', color: theme.text }}>{data.staff.length}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary }}>Inventory Items</span>
+                                    <span style={{ fontWeight: '700', color: theme.text }}>{data.inventory.length}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Bottom Row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+                        {/* Top Services */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Top Services</h4>
+                            {topServices.length > 0 ? topServices.map(([svc, amt], i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.text }}>{svc}</span>
+                                    <span style={{ fontWeight: '700', color: '#10b981' }}>{formatCurrency(amt)}</span>
+                                </div>
+                            )) : <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>No data</div>}
+                        </div>
+
+                        {/* Expense Categories */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Top Expense Categories</h4>
+                            {topExpenseCategories.length > 0 ? topExpenseCategories.map(([cat, amt], i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <span style={{ color: theme.text }}>{cat}</span>
+                                    <span style={{ fontWeight: '700', color: '#ef4444' }}>{formatCurrency(amt)}</span>
+                                </div>
+                            )) : <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>No data</div>}
+                        </div>
+
+                        {/* Inventory & Fleet */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Assets Overview</h4>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                <span style={{ color: theme.textSecondary }}>Inventory Value</span>
+                                <span style={{ fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(inventoryValue)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                <span style={{ color: theme.textSecondary }}>Low Stock Items</span>
+                                <span style={{ fontWeight: '700', color: lowStockItems > 0 ? '#ef4444' : '#10b981' }}>{lowStockItems}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                <span style={{ color: theme.textSecondary }}>Fleet Balance</span>
+                                <span style={{ fontWeight: '700', color: '#10b981' }}>{formatCurrency(fleetBalance)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0' }}>
+                                <span style={{ color: theme.textSecondary }}>Fleet Revenue</span>
+                                <span style={{ fontWeight: '700', color: '#8b5cf6' }}>{formatCurrency(fleetSpent)}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Revenue Tab */}
+            {activeTab === 'revenue' && (
+                <div style={{ padding: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                        {metricCard(formatCurrency(totalRevenue), 'Total Revenue', '#10b981')}
+                        {metricCard(formatCurrency(paidRevenue), 'Paid', '#3b82f6')}
+                        {metricCard(formatCurrency(unpaidRevenue), 'Unpaid', '#f59e0b')}
+                        {metricCard(totalServices.toString(), 'Invoices', '#8b5cf6')}
+                        {metricCard(formatCurrency(avgTicket), 'Avg Ticket', '#06b6d4')}
+                    </div>
+                    <div style={cardStyle}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                            <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Recent Transactions (Real-time)</h4>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: '#10b981', color: 'white', fontSize: '11px', fontWeight: '600' }}>
+                                <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%' }}></span>
+                                LIVE
+                            </div>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ background: theme.bgTertiary }}>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Date</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Invoice</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Customer</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Service</th>
+                                    <th style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Status</th>
+                                    <th style={{ padding: '12px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredBilling.slice(0, 20).map((b, i) => (
+                                    <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                        <td style={{ padding: '12px', color: theme.textSecondary, fontSize: '13px' }}>{new Date(b.createdAt || b.date).toLocaleDateString()}</td>
+                                        <td style={{ padding: '12px', color: '#3b82f6', fontWeight: '600', fontFamily: 'monospace', fontSize: '12px' }}>{b.invoiceNumber || '-'}</td>
+                                        <td style={{ padding: '12px', color: theme.text }}>{b.customerName || 'Walk-in'}</td>
+                                        <td style={{ padding: '12px', color: theme.text, fontWeight: '500' }}>{b.services?.[0]?.name || b.source || '-'}</td>
+                                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                                            <span style={{ padding: '4px 10px', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', background: b.paymentStatus === 'paid' ? '#dcfce7' : '#fef3c7', color: b.paymentStatus === 'paid' ? '#166534' : '#92400e' }}>
+                                                {b.paymentStatus || 'pending'}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#10b981' }}>{formatCurrency(b.totalAmount || b.total || b.amount)}</td>
+                                    </tr>
+                                ))}
+                                {filteredBilling.length === 0 && (
+                                    <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>No transactions found for this period</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Expenses Tab */}
+            {activeTab === 'expenses' && (
+                <div style={{ padding: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                        {metricCard(formatCurrency(totalExpenses), 'Total Expenses', '#ef4444')}
+                        {metricCard(filteredExpenses.length.toString(), 'Expense Count', '#3b82f6')}
+                        {metricCard(formatCurrency(filteredExpenses.length > 0 ? totalExpenses / filteredExpenses.length : 0), 'Avg Expense', '#8b5cf6')}
+                        {metricCard(formatCurrency(totalRevenue - totalExpenses), 'Net Profit', netProfit >= 0 ? '#10b981' : '#ef4444')}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>By Category</h4>
+                            {topExpenseCategories.map(([cat, amt], i) => (
+                                <div key={i} style={{ marginBottom: '12px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                        <span style={{ color: theme.text, fontSize: '13px' }}>{cat}</span>
+                                        <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '13px' }}>{formatCurrency(amt)}</span>
+                                    </div>
+                                    <div style={{ height: '8px', background: theme.bgTertiary }}>
+                                        <div style={{ height: '100%', background: '#ef4444', width: `${(amt / totalExpenses) * 100}%` }}></div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Recent Expenses</h4>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: theme.bgTertiary }}>
+                                        <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Date</th>
+                                        <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Description</th>
+                                        <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Category</th>
+                                        <th style={{ padding: '12px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredExpenses.slice(0, 10).map((e, i) => (
+                                        <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '12px', color: theme.textSecondary, fontSize: '13px' }}>{new Date(e.date).toLocaleDateString()}</td>
+                                            <td style={{ padding: '12px', color: theme.text, fontWeight: '500' }}>{e.description || '-'}</td>
+                                            <td style={{ padding: '12px', color: theme.textSecondary }}>{e.category || '-'}</td>
+                                            <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(e.amount)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Operations Tab */}
+            {activeTab === 'operations' && (
+                <div style={{ padding: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                        {metricCard(totalCustomers.toString(), 'Customers', '#3b82f6')}
+                        {metricCard(data.fleet.length.toString(), 'Fleet Accounts', '#8b5cf6')}
+                        {metricCard(fleetVehicles.toString(), 'Fleet Vehicles', '#f59e0b')}
+                        {metricCard(data.staff.length.toString(), 'Staff', '#10b981')}
+                        {metricCard(data.inventory.length.toString(), 'Inventory Items', '#ef4444')}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px', marginBottom: '20px' }}>
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Fleet Accounts</h4>
+                            {data.fleet.slice(0, 8).map((f, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <div>
+                                        <div style={{ color: theme.text, fontWeight: '600' }}>{f.companyName}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>{f.vehicles?.length || 0} vehicles</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontWeight: '700', color: f.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(f.balance)}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>Spent: {formatCurrency(f.totalSpent)}</div>
+                                    </div>
+                                </div>
+                            ))}
+                            {data.fleet.length === 0 && <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>No fleet accounts</div>}
+                        </div>
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Low Stock Alerts</h4>
+                            {data.inventory.filter(i => (i.quantity || 0) <= (i.reorderLevel || 5)).slice(0, 8).map((item, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <div>
+                                        <div style={{ color: theme.text, fontWeight: '600' }}>{item.name}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>{item.category || 'Uncategorized'}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontWeight: '700', color: '#ef4444' }}>{item.quantity || 0} {item.unit || 'pcs'}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>Reorder: {item.reorderLevel || 5}</div>
+                                    </div>
+                                </div>
+                            ))}
+                            {lowStockItems === 0 && <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>All items well stocked</div>}
+                        </div>
+                    </div>
+
+                    {/* Full Inventory Table */}
+                    <div style={cardStyle}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                            <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Inventory Items (Real-time)</h4>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ fontSize: '13px', color: theme.textSecondary }}>
+                                    Total Value: <span style={{ fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(inventoryValue)}</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: '#10b981', color: 'white', fontSize: '11px', fontWeight: '600' }}>
+                                    <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%' }}></span>
+                                    LIVE
+                                </div>
+                            </div>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ background: theme.bgTertiary }}>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Item Name</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Category</th>
+                                    <th style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Quantity</th>
+                                    <th style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Unit</th>
+                                    <th style={{ padding: '12px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Unit Cost</th>
+                                    <th style={{ padding: '12px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Total Value</th>
+                                    <th style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.inventory.map((item, i) => {
+                                    const isLow = (item.quantity || 0) <= (item.reorderLevel || 5);
+                                    const itemValue = (item.quantity || 0) * (item.unitCost || 0);
+                                    return (
+                                        <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '12px', color: theme.text, fontWeight: '600' }}>{item.name}</td>
+                                            <td style={{ padding: '12px', color: theme.textSecondary }}>{item.category || 'Uncategorized'}</td>
+                                            <td style={{ padding: '12px', textAlign: 'center', fontWeight: '700', color: isLow ? '#ef4444' : theme.text }}>{item.quantity || 0}</td>
+                                            <td style={{ padding: '12px', textAlign: 'center', color: theme.textSecondary }}>{item.unit || 'pcs'}</td>
+                                            <td style={{ padding: '12px', textAlign: 'right', color: theme.text }}>{formatCurrency(item.unitCost || 0)}</td>
+                                            <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(itemValue)}</td>
+                                            <td style={{ padding: '12px', textAlign: 'center' }}>
+                                                <span style={{ padding: '4px 10px', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', background: isLow ? '#fef2f2' : '#dcfce7', color: isLow ? '#dc2626' : '#166534' }}>
+                                                    {isLow ? 'Low Stock' : 'In Stock'}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                {data.inventory.length === 0 && (
+                                    <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>No inventory items found</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Generate Reports Tab */}
+            {activeTab === 'generate' && (
+                <div style={{ padding: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', gap: '20px' }}>
+                        {/* Report Options */}
+                        <div style={cardStyle}>
+                            <h4 style={{ margin: '0 0 20px', color: theme.text, fontWeight: '700' }}>Report Generator</h4>
+                            
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600', marginBottom: '6px' }}>Report Type</label>
+                                <select value={reportType} onChange={(e) => setReportType(e.target.value)} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '14px' }}>
+                                    <option value="summary">Executive Summary</option>
+                                    <option value="revenue">Revenue Report</option>
+                                    <option value="expenses">Expenses Report</option>
+                                    <option value="fleet">Fleet Account Report</option>
+                                    <option value="inventory">Inventory Report</option>
+                                    <option value="customers">Customer Report</option>
+                                    <option value="staff">Staff Report</option>
+                                    <option value="profit">Profit & Loss Statement</option>
+                                </select>
+                            </div>
+
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600', marginBottom: '6px' }}>Date Range</label>
+                                <select value={dateRange} onChange={(e) => setDateRange(e.target.value)} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '14px' }}>
+                                    <option value="today">Today</option>
+                                    <option value="week">Last 7 Days</option>
+                                    <option value="month">This Month</option>
+                                    <option value="year">This Year</option>
+                                    <option value="all">All Time</option>
+                                </select>
+                            </div>
+
+                            <div style={{ background: theme.bgSecondary, padding: '16px', marginBottom: '20px', border: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '8px' }}>Report Summary</div>
+                                <div style={{ fontSize: '14px', color: theme.text }}>
+                                    {reportType === 'summary' && 'Complete overview with key metrics, revenue breakdown, and expenses.'}
+                                    {reportType === 'revenue' && `${filteredBilling.length} transactions totaling ${formatCurrency(totalRevenue)}`}
+                                    {reportType === 'expenses' && `${filteredExpenses.length} expenses totaling ${formatCurrency(totalExpenses)}`}
+                                    {reportType === 'fleet' && `${data.fleet.length} fleet accounts with ${fleetVehicles} vehicles`}
+                                    {reportType === 'inventory' && `${data.inventory.length} items valued at ${formatCurrency(inventoryValue)}`}
+                                    {reportType === 'customers' && `${totalCustomers} registered customers`}
+                                    {reportType === 'staff' && `${data.staff.length} staff members`}
+                                    {reportType === 'profit' && `Net Profit: ${formatCurrency(netProfit)}`}
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'grid', gap: '10px' }}>
+                                <button onClick={() => generateReport('preview')} style={{ padding: '14px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>Preview Report</button>
+                                <button onClick={() => generateReport('print')} style={{ padding: '14px 20px', background: '#1e293b', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>Print Report</button>
+                                <button onClick={() => generateReport('pdf')} style={{ padding: '14px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>Download PDF</button>
+                            </div>
+                        </div>
+
+                        {/* Available Reports */}
+                        <div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+                                {[
+                                    { type: 'summary', title: 'Executive Summary', desc: 'Complete business overview', icon: '📊', color: '#3b82f6' },
+                                    { type: 'revenue', title: 'Revenue Report', desc: 'All transactions and income', icon: '💰', color: '#10b981' },
+                                    { type: 'expenses', title: 'Expenses Report', desc: 'All expenses by category', icon: '📉', color: '#ef4444' },
+                                    { type: 'profit', title: 'Profit & Loss', desc: 'Income vs expenses analysis', icon: '📈', color: '#8b5cf6' },
+                                    { type: 'fleet', title: 'Fleet Accounts', desc: 'All fleet account details', icon: '🚛', color: '#f59e0b' },
+                                    { type: 'inventory', title: 'Inventory Report', desc: 'Stock levels and values', icon: '📦', color: '#06b6d4' },
+                                    { type: 'customers', title: 'Customer Report', desc: 'Customer database summary', icon: '👥', color: '#ec4899' },
+                                    { type: 'staff', title: 'Staff Report', desc: 'Staff roster and details', icon: '👔', color: '#84cc16' },
+                                ].map((r, i) => (
+                                    <div key={i} onClick={() => setReportType(r.type)} style={{ ...cardStyle, cursor: 'pointer', border: reportType === r.type ? `2px solid ${r.color}` : `1px solid ${theme.border}`, transition: 'all 0.2s' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div style={{ fontSize: '32px' }}>{r.icon}</div>
+                                            <div>
+                                                <div style={{ fontWeight: '700', color: theme.text }}>{r.title}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{r.desc}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Quick Stats for Selected Report */}
+                            <div style={{ ...cardStyle, marginTop: '20px' }}>
+                                <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>
+                                    {reportType === 'summary' && 'Executive Summary Preview'}
+                                    {reportType === 'revenue' && 'Revenue Preview'}
+                                    {reportType === 'expenses' && 'Expenses Preview'}
+                                    {reportType === 'profit' && 'Profit & Loss Preview'}
+                                    {reportType === 'fleet' && 'Fleet Preview'}
+                                    {reportType === 'inventory' && 'Inventory Preview'}
+                                    {reportType === 'customers' && 'Customer Preview'}
+                                    {reportType === 'staff' && 'Staff Preview'}
+                                </h4>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                                    {reportType === 'summary' && <>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(totalRevenue)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Revenue</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#ef4444' }}>{formatCurrency(totalExpenses)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Expenses</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: netProfit >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(netProfit)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Net Profit</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#3b82f6' }}>{totalServices}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Services</div>
+                                        </div>
+                                    </>}
+                                    {reportType === 'revenue' && filteredBilling.slice(0, 4).map((b, i) => (
+                                        <div key={i} style={{ background: theme.bgSecondary, padding: '12px' }}>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{new Date(b.createdAt || b.date).toLocaleDateString()}</div>
+                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{b.service || b.packageName || 'Service'}</div>
+                                            <div style={{ fontWeight: '700', color: '#10b981' }}>{formatCurrency(b.total || b.amount)}</div>
+                                        </div>
+                                    ))}
+                                    {reportType === 'expenses' && filteredExpenses.slice(0, 4).map((e, i) => (
+                                        <div key={i} style={{ background: theme.bgSecondary, padding: '12px' }}>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{e.category || 'Other'}</div>
+                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{e.description || 'Expense'}</div>
+                                            <div style={{ fontWeight: '700', color: '#ef4444' }}>{formatCurrency(e.amount)}</div>
+                                        </div>
+                                    ))}
+                                    {reportType === 'fleet' && data.fleet.slice(0, 4).map((f, i) => (
+                                        <div key={i} style={{ background: theme.bgSecondary, padding: '12px' }}>
+                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{f.companyName}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{f.vehicles?.length || 0} vehicles</div>
+                                            <div style={{ fontWeight: '700', color: f.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(f.balance)}</div>
+                                        </div>
+                                    ))}
+                                    {reportType === 'inventory' && data.inventory.slice(0, 4).map((item, i) => (
+                                        <div key={i} style={{ background: theme.bgSecondary, padding: '12px' }}>
+                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{item.name}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{item.quantity || 0} {item.unit || 'pcs'}</div>
+                                            <div style={{ fontWeight: '700', color: '#3b82f6' }}>{formatCurrency((item.quantity || 0) * (item.unitCost || 0))}</div>
+                                        </div>
+                                    ))}
+                                    {reportType === 'customers' && <>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#3b82f6' }}>{totalCustomers}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Total</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{loyaltyPoints.toLocaleString()}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Loyalty Pts</div>
+                                        </div>
+                                    </>}
+                                    {reportType === 'staff' && <>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#3b82f6' }}>{data.staff.length}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Total Staff</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{data.staff.filter(s => s.status === 'active').length}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Active</div>
+                                        </div>
+                                    </>}
+                                    {reportType === 'profit' && <>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(totalRevenue)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Income</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#ef4444' }}>{formatCurrency(totalExpenses)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Expenses</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: netProfit >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(netProfit)}</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Net Profit</div>
+                                        </div>
+                                        <div style={{ background: theme.bgSecondary, padding: '16px', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0}%</div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Margin</div>
+                                        </div>
+                                    </>}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Report Preview Modal */}
+            {showPreview && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowPreview(false)}>
+                    <div style={{ background: 'white', width: '900px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', border: '1px solid #e2e8f0' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#1e293b', color: 'white' }}>
+                            <h3 style={{ margin: 0, fontWeight: '700' }}>Report Preview</h3>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={() => { generateReport('print'); setShowPreview(false); }} style={{ padding: '8px 16px', background: '#10b981', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Print</button>
+                                <button onClick={() => setShowPreview(false)} style={{ padding: '8px 16px', background: 'none', border: '1px solid white', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Close</button>
+                            </div>
+                        </div>
+                        <div dangerouslySetInnerHTML={{ __html: previewContent }} style={{ padding: '20px' }}></div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+
+    function generateReport(action) {
+        const periodLabel = dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'Last 7 Days' : dateRange === 'month' ? 'This Month' : dateRange === 'year' ? 'This Year' : 'All Time';
+        
+        let reportTitle = '';
+        let reportBody = '';
+
+        if (reportType === 'summary' || reportType === 'profit') {
+            reportTitle = reportType === 'summary' ? 'Executive Summary Report' : 'Profit & Loss Statement';
+            reportBody = `
+                <div class="section"><div class="section-title">Key Performance Metrics</div>
+                <div class="grid">
+                    <div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+                    <div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+                    <div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">KSH ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
+                    <div class="card"><div class="value blue">${totalServices}</div><div class="label">Services</div></div>
+                </div></div>
+                ${topServices.length > 0 ? `<div class="section"><div class="section-title">Revenue by Service</div>
+                <table><thead><tr><th>Service</th><th style="text-align:right">Revenue</th><th style="text-align:right">%</th></tr></thead>
+                <tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalRevenue)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+                ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-title">Expenses by Category</div>
+                <table><thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th></tr></thead>
+                <tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalExpenses)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+        } else if (reportType === 'revenue') {
+            reportTitle = 'Revenue Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Revenue Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+                    <div class="card"><div class="value blue">${filteredBilling.length}</div><div class="label">Transactions</div></div>
+                    <div class="card"><div class="value purple">KSH ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Transactions</div>
+                <table><thead><tr><th>Date</th><th>Service</th><th>Customer</th><th style="text-align:right">Amount</th></tr></thead>
+                <tbody>${filteredBilling.slice(0, 50).map(b => `<tr><td>${new Date(b.createdAt || b.date).toLocaleDateString()}</td><td>${b.service || b.packageName || '-'}</td><td>${b.customerName || '-'}</td><td style="text-align:right" class="green">KSH ${(b.total || b.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+        } else if (reportType === 'expenses') {
+            reportTitle = 'Expenses Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Expenses Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+                    <div class="card"><div class="value blue">${filteredExpenses.length}</div><div class="label">Count</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Expense List</div>
+                <table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th></tr></thead>
+                <tbody>${filteredExpenses.slice(0, 50).map(e => `<tr><td>${new Date(e.date).toLocaleDateString()}</td><td>${e.description || '-'}</td><td>${e.category || '-'}</td><td style="text-align:right" class="red">KSH ${(e.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+        } else if (reportType === 'fleet') {
+            reportTitle = 'Fleet Account Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Fleet Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value blue">${data.fleet.length}</div><div class="label">Accounts</div></div>
+                    <div class="card"><div class="value purple">${fleetVehicles}</div><div class="label">Vehicles</div></div>
+                    <div class="card"><div class="value green">KSH ${fleetBalance.toLocaleString()}</div><div class="label">Total Balance</div></div>
+                    <div class="card"><div class="value orange">KSH ${fleetSpent.toLocaleString()}</div><div class="label">Total Spent</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Fleet Accounts</div>
+                <table><thead><tr><th>Company</th><th>Contact</th><th style="text-align:center">Vehicles</th><th style="text-align:right">Balance</th><th style="text-align:right">Spent</th></tr></thead>
+                <tbody>${data.fleet.map(f => `<tr><td>${f.companyName}</td><td>${f.contactPerson || '-'}</td><td style="text-align:center">${f.vehicles?.length || 0}</td><td style="text-align:right" class="${f.balance >= 0 ? 'green' : 'red'}">KSH ${(f.balance || 0).toLocaleString()}</td><td style="text-align:right">KSH ${(f.totalSpent || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+        } else if (reportType === 'inventory') {
+            reportTitle = 'Inventory Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Inventory Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value blue">${data.inventory.length}</div><div class="label">Total Items</div></div>
+                    <div class="card"><div class="value green">KSH ${inventoryValue.toLocaleString()}</div><div class="label">Total Value</div></div>
+                    <div class="card"><div class="value red">${lowStockItems}</div><div class="label">Low Stock</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Inventory Items</div>
+                <table><thead><tr><th>Item</th><th>Category</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Value</th></tr></thead>
+                <tbody>${data.inventory.map(i => `<tr><td>${i.name}</td><td>${i.category || '-'}</td><td style="text-align:center">${i.quantity || 0} ${i.unit || ''}</td><td style="text-align:right">KSH ${(i.unitCost || 0).toLocaleString()}</td><td style="text-align:right" class="green">KSH ${((i.quantity || 0) * (i.unitCost || 0)).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+        } else if (reportType === 'customers') {
+            reportTitle = 'Customer Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Customer Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value blue">${totalCustomers}</div><div class="label">Total Customers</div></div>
+                    <div class="card"><div class="value purple">${loyaltyPoints.toLocaleString()}</div><div class="label">Loyalty Points</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Customer List</div>
+                <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th style="text-align:right">Loyalty Points</th></tr></thead>
+                <tbody>${data.customers.slice(0, 50).map(c => `<tr><td>${c.name}</td><td>${c.phone || '-'}</td><td>${c.email || '-'}</td><td style="text-align:right">${(c.loyaltyPoints || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+        } else if (reportType === 'staff') {
+            reportTitle = 'Staff Report';
+            reportBody = `
+                <div class="section"><div class="section-title">Staff Summary</div>
+                <div class="grid">
+                    <div class="card"><div class="value blue">${data.staff.length}</div><div class="label">Total Staff</div></div>
+                    <div class="card"><div class="value green">${data.staff.filter(s => s.status === 'active').length}</div><div class="label">Active</div></div>
+                </div></div>
+                <div class="section"><div class="section-title">Staff List</div>
+                <table><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Status</th></tr></thead>
+                <tbody>${data.staff.map(s => `<tr><td>${s.name}</td><td>${s.role || '-'}</td><td>${s.phone || '-'}</td><td class="${s.status === 'active' ? 'green' : 'red'}">${s.status || 'Unknown'}</td></tr>`).join('')}</tbody></table></div>`;
+        }
+
+        const content = `
+<!DOCTYPE html><html><head><title>EcoSpark - ${reportTitle}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b;font-size:12px}
+.header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
+.logo{font-size:28px;font-weight:800;color:#10b981}.logo span{color:#1e293b}
+.subtitle{color:#64748b;margin-top:8px}
+.section{margin-bottom:24px}.section-title{font-size:14px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #e2e8f0}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.card{background:#f8fafc;border:1px solid #e2e8f0;padding:14px;text-align:center}
+.card .value{font-size:20px;font-weight:800}.card .label{font-size:10px;color:#64748b;text-transform:uppercase;margin-top:4px}
+.green{color:#10b981}.red{color:#ef4444}.blue{color:#3b82f6}.purple{color:#8b5cf6}.orange{color:#f59e0b}
+table{width:100%;border-collapse:collapse}th{background:#1e293b;color:white;padding:8px 10px;text-align:left;font-size:10px;text-transform:uppercase}
+td{padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:11px}tr:nth-child(even){background:#f8fafc}
+.footer{margin-top:30px;text-align:center;color:#64748b;font-size:11px;padding-top:20px;border-top:1px solid #e2e8f0}
+@media print{body{padding:15px}.grid{grid-template-columns:repeat(4,1fr)}}
+</style></head><body>
+<div class="header"><div class="logo">Eco<span>Spark</span></div><div class="subtitle">${reportTitle} - ${periodLabel}</div></div>
+${reportBody}
+<div class="footer">Generated on ${new Date().toLocaleString()} | EcoSpark Car Wash Management System</div>
+</body></html>`;
+
+        if (action === 'preview') {
+            setPreviewContent(reportBody);
+            setShowPreview(true);
+        } else if (action === 'print' || action === 'pdf') {
+            const w = window.open('', '_blank');
+            w.document.write(content);
+            w.document.close();
+            w.onload = () => w.print();
+        }
+    }
+}
+
+// ==================== ACTIVITIES MODULE ====================
+function ActivitiesModule() {
+    const [activities, setActivities] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [dateFilter, setDateFilter] = useState('all');
+    const [typeFilter, setTypeFilter] = useState('all');
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+
+    // Theme detection
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        cardShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
+        inputBg: isDark ? '#1e293b' : 'white',
+    };
+
+    // Subscribe to activities
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services?.activityService?.subscribeToActivities) {
+            setLoading(false);
+            return;
+        }
+
+        const unsub = services.activityService.subscribeToActivities(
+            (data) => {
+                setActivities(data);
+                setLoading(false);
+            },
+            500 // Get lots of activities for filtering
+        );
+
+        return () => {
+            if (unsub) unsub();
+        };
+    }, []);
+
+    // Date filter logic
+    const getFilteredActivities = () => {
+        let filtered = activities;
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - 7);
+        const monthStart = new Date(today);
+        monthStart.setDate(monthStart.getDate() - 30);
+
+        // Date filter
+        if (dateFilter !== 'all') {
+            filtered = filtered.filter(a => {
+                const aDate = new Date(a.timestamp);
+                aDate.setHours(0, 0, 0, 0);
+                switch (dateFilter) {
+                    case 'today':
+                        return aDate.getTime() === today.getTime();
+                    case 'yesterday':
+                        return aDate.getTime() === yesterday.getTime();
+                    case 'week':
+                        return aDate >= weekStart;
+                    case 'month':
+                        return aDate >= monthStart;
+                    default:
+                        return true;
+                }
+            });
+        }
+
+        // Type filter
+        if (typeFilter !== 'all') {
+            filtered = filtered.filter(a => a.type === typeFilter);
+        }
+
+        // Search filter
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            filtered = filtered.filter(a =>
+                a.action?.toLowerCase().includes(query) ||
+                a.description?.toLowerCase().includes(query) ||
+                a.details?.toLowerCase().includes(query) ||
+                a.user?.toLowerCase().includes(query) ||
+                a.type?.toLowerCase().includes(query) ||
+                a.loggedBy?.toLowerCase().includes(query) ||
+                a.loggedByRole?.toLowerCase().includes(query)
+            );
+        }
+
+        return filtered;
+    };
+
+    const filteredActivities = getFilteredActivities();
+
+    const dateFilters = [
+        { id: 'all', label: 'All Time' },
+        { id: 'today', label: 'Today' },
+        { id: 'yesterday', label: 'Yesterday' },
+        { id: 'week', label: 'This Week' },
+        { id: 'month', label: 'This Month' }
+    ];
+
+    const typeFilters = [
+        { id: 'all', label: 'All Types' },
+        { id: 'intake', label: 'Intake' },
+        { id: 'wash', label: 'Wash' },
+        { id: 'billing', label: 'Billing' },
+        { id: 'garage', label: 'Garage' },
+        { id: 'inventory', label: 'Inventory' },
+        { id: 'staff', label: 'Staff' },
+        { id: 'system', label: 'System' }
+    ];
+
+    const getTypeIcon = (type) => {
+        switch(type) {
+            case 'intake': return '🚗';
+            case 'billing': return '💳';
+            case 'wash': return '🚿';
+            case 'garage': return '🔧';
+            case 'inventory': return '📦';
+            case 'staff': return '👤';
+            case 'system': return '⚙️';
+            default: return '📋';
+        }
+    };
+
+    const getTypeColor = (type) => {
+        switch(type) {
+            case 'intake': return '#3b82f6';
+            case 'billing': return '#10b981';
+            case 'wash': return '#6366f1';
+            case 'garage': return '#f59e0b';
+            case 'inventory': return '#8b5cf6';
+            case 'staff': return '#ec4899';
+            case 'system': return '#64748b';
+            default: return '#94a3b8';
+        }
+    };
+
+    if (loading) {
+        return (
+            <div style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>
+                Loading activities...
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+            {/* Header */}
+            <div style={{ marginBottom: '24px' }}>
+                <h2 style={{ margin: 0, color: theme.text, fontSize: '24px', fontWeight: '600' }}>
+                    Activity Log
+                </h2>
+                <p style={{ margin: '8px 0 0', color: theme.textSecondary, fontSize: '14px' }}>
+                    View all system activities and events
+                </p>
+            </div>
+
+            {/* Stats Row */}
+            <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
+                gap: '16px', 
+                marginBottom: '24px' 
+            }}>
+                {[
+                    { label: 'Total', value: activities.length, color: '#64748b' },
+                    { label: 'Today', value: activities.filter(a => {
+                        const aDate = new Date(a.timestamp);
+                        const today = new Date();
+                        return aDate.toDateString() === today.toDateString();
+                    }).length, color: '#3b82f6' },
+                    { label: 'This Week', value: activities.filter(a => {
+                        const aDate = new Date(a.timestamp);
+                        const weekAgo = new Date();
+                        weekAgo.setDate(weekAgo.getDate() - 7);
+                        return aDate >= weekAgo;
+                    }).length, color: '#10b981' },
+                    { label: 'Filtered', value: filteredActivities.length, color: '#8b5cf6' }
+                ].map((stat, idx) => (
+                    <div key={idx} style={{
+                        padding: '20px 24px',
+                        background: theme.bg,
+                        borderRadius: '0',
+                        border: `1px solid ${theme.border}`,
+                        boxShadow: theme.cardShadow
+                    }}>
+                        <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{stat.label}</div>
+                        <div style={{ fontSize: '28px', fontWeight: '700', color: stat.color }}>{stat.value}</div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Filters Row */}
+            <div style={{ 
+                display: 'flex', 
+                gap: '16px', 
+                marginBottom: '20px', 
+                flexWrap: 'wrap',
+                alignItems: 'center'
+            }}>
+                {/* Search */}
+                <div style={{ flex: '1', minWidth: '200px', maxWidth: '350px' }}>
+                    <input
+                        type="text"
+                        placeholder="Search activities..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        style={{
+                            width: '100%',
+                            padding: '12px 16px',
+                            borderRadius: '0',
+                            border: `1px solid ${theme.border}`,
+                            background: theme.inputBg,
+                            color: theme.text,
+                            fontSize: '14px'
+                        }}
+                    />
+                </div>
+
+                {/* Date Filter */}
+                <div style={{ display: 'flex', gap: '2px', background: theme.bgSecondary, borderRadius: '0', padding: '4px' }}>
+                    {dateFilters.map(f => (
+                        <button
+                            key={f.id}
+                            onClick={() => setDateFilter(f.id)}
+                            style={{
+                                padding: '10px 16px',
+                                border: 'none',
+                                borderRadius: '0',
+                                background: dateFilter === f.id ? theme.bg : 'transparent',
+                                color: dateFilter === f.id ? theme.text : theme.textSecondary,
+                                fontSize: '13px',
+                                fontWeight: dateFilter === f.id ? '600' : '400',
+                                cursor: 'pointer',
+                                boxShadow: dateFilter === f.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                            }}
+                        >
+                            {f.label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Type Filter */}
+                <select
+                    value={typeFilter}
+                    onChange={e => setTypeFilter(e.target.value)}
+                    style={{
+                        padding: '12px 16px',
+                        borderRadius: '0',
+                        border: `1px solid ${theme.border}`,
+                        background: theme.inputBg,
+                        color: theme.text,
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                        minWidth: '140px'
+                    }}
+                >
+                    {typeFilters.map(f => (
+                        <option key={f.id} value={f.id}>{f.label}</option>
+                    ))}
+                </select>
+            </div>
+
+            {/* Activities List */}
+            <div style={{
+                background: theme.bg,
+                borderRadius: '0',
+                border: `1px solid ${theme.border}`,
+                boxShadow: theme.cardShadow,
+                overflow: 'hidden'
+            }}>
+                {filteredActivities.length === 0 ? (
+                    <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                        <div style={{ fontSize: '16px', fontWeight: '500' }}>No activities found</div>
+                        <div style={{ fontSize: '14px', marginTop: '8px' }}>
+                            {searchQuery || dateFilter !== 'all' || typeFilter !== 'all' 
+                                ? 'Try adjusting your filters' 
+                                : 'Activities will appear here as they occur'}
+                        </div>
+                    </div>
+                ) : (
+                    <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                        {filteredActivities.map((activity, idx) => (
+                            <div 
+                                key={activity.id || idx}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '16px',
+                                    padding: '16px 20px',
+                                    borderBottom: idx < filteredActivities.length - 1 ? `1px solid ${theme.border}` : 'none',
+                                    transition: 'background 0.15s'
+                                }}
+                            >
+                                {/* Icon */}
+                                <div style={{
+                                    width: '44px',
+                                    height: '44px',
+                                    borderRadius: '0',
+                                    background: `${getTypeColor(activity.type)}15`,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '18px',
+                                    flexShrink: 0
+                                }}>
+                                    {getTypeIcon(activity.type)}
+                                </div>
+
+                                {/* Content */}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+                                        <span style={{ 
+                                            fontWeight: '600', 
+                                            color: theme.text, 
+                                            fontSize: '14px' 
+                                        }}>
+                                            {activity.action || activity.description || 'Activity'}
+                                        </span>
+                                        <span style={{
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            fontSize: '11px',
+                                            fontWeight: '600',
+                                            textTransform: 'uppercase',
+                                            background: `${getTypeColor(activity.type)}20`,
+                                            color: getTypeColor(activity.type)
+                                        }}>
+                                            {activity.type || 'general'}
+                                        </span>
+                                    </div>
+                                    <div style={{ fontSize: '13px', color: theme.textSecondary }}>
+                                        {activity.details || activity.user || '-'}
+                                    </div>
+                                </div>
+
+                                {/* Logged By Column */}
+                                <div style={{ 
+                                    minWidth: '140px', 
+                                    flexShrink: 0,
+                                    padding: '0 12px',
+                                    borderLeft: `1px solid ${theme.border}`,
+                                    borderRight: `1px solid ${theme.border}`
+                                }}>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '4px', textTransform: 'uppercase' }}>
+                                        Logged By
+                                    </div>
+                                    <div style={{ 
+                                        fontSize: '13px', 
+                                        fontWeight: '500', 
+                                        color: theme.text,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}>
+                                        <span style={{
+                                            width: '24px',
+                                            height: '24px',
+                                            borderRadius: '0',
+                                            background: '#3b82f6',
+                                            color: 'white',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontSize: '11px',
+                                            fontWeight: '600'
+                                        }}>
+                                            {(activity.loggedBy || 'S').charAt(0).toUpperCase()}
+                                        </span>
+                                        <div>
+                                            <div style={{ fontSize: '13px' }}>{activity.loggedBy || 'System'}</div>
+                                            {activity.loggedByRole && (
+                                                <div style={{ 
+                                                    fontSize: '10px', 
+                                                    color: theme.textSecondary,
+                                                    textTransform: 'capitalize'
+                                                }}>
+                                                    {activity.loggedByRole}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Time & Status */}
+                                <div style={{ textAlign: 'right', flexShrink: 0, minWidth: '90px' }}>
+                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                        {new Date(activity.timestamp).toLocaleDateString('en-US', {
+                                            month: 'short',
+                                            day: 'numeric'
+                                        })}
+                                    </div>
+                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                        {new Date(activity.timestamp).toLocaleTimeString('en-US', {
+                                            hour: '2-digit',
+                                            minute: '2-digit'
+                                        })}
+                                    </div>
+                                    {activity.status && (
+                                        <div style={{
+                                            marginTop: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            fontSize: '10px',
+                                            fontWeight: '600',
+                                            textTransform: 'uppercase',
+                                            background: activity.status === 'success' ? '#d1fae5' :
+                                                       activity.status === 'pending' ? '#fef3c7' :
+                                                       activity.status === 'error' ? '#fee2e2' :
+                                                       theme.bgSecondary,
+                                            color: activity.status === 'success' ? '#059669' :
+                                                   activity.status === 'pending' ? '#d97706' :
+                                                   activity.status === 'error' ? '#dc2626' :
+                                                   theme.textSecondary
+                                        }}>
+                                            {activity.status}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // Content Area Component
-function ContentArea({ activeModule, onModuleClick }) {
+function ContentArea({ activeModule, onModuleClick, settingsTab }) {
     const currentModule = menuItems.find(item => item.id === activeModule);
     
     return (
@@ -11277,10 +17177,16 @@ function ContentArea({ activeModule, onModuleClick }) {
                 {activeModule === 'service-packages' && <ServicePackages />}
                 {activeModule === 'equipment' && <EquipmentManagement />}
                 {activeModule === 'customers' && <CustomerManagement />}
+                {activeModule === 'fleet' && <FleetAccounts />}
                 {activeModule === 'garage-management' && <GarageManagement />}
                 {activeModule === 'wash-bays' && <WashBays />}
                 {activeModule === 'staff' && <StaffManagement />}
                 {activeModule === 'billing' && <BillingModule />}
+                {activeModule === 'inventory' && <InventoryModule />}
+                {activeModule === 'expenses' && <ExpensesModule />}
+                {activeModule === 'reports' && <ReportsAnalytics />}
+                {activeModule === 'activities' && <ActivitiesModule />}
+                {activeModule === 'settings' && <SystemSettings initialTab={settingsTab} />}
             </div>
         </div>
     );
@@ -11291,12 +17197,17 @@ function App() {
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
     const [isDarkMode, setIsDarkMode] = useState(false);
     const [activeModule, setActiveModule] = useState('dashboard');
+    const [settingsTab, setSettingsTab] = useState('profile');
     
     // Authentication state
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState(null);
     const [userProfile, setUserProfile] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
+    
+    // Permission denied modal state
+    const [showPermissionModal, setShowPermissionModal] = useState(false);
+    const [deniedModule, setDeniedModule] = useState('');
 
     // Check authentication state on mount
     useEffect(() => {
@@ -11333,6 +17244,8 @@ function App() {
                             setCurrentUser(user);
                             setUserProfile(profileResult.data);
                             setIsAuthenticated(true);
+                            // Store globally for activity logging
+                            window.currentUserProfile = profileResult.data;
                         } else {
                             // User is deactivated
                             await services.authService.signOut();
@@ -11363,6 +17276,8 @@ function App() {
         setCurrentUser(user);
         setUserProfile(profile);
         setIsAuthenticated(true);
+        // Store globally for activity logging
+        window.currentUserProfile = profile;
     };
 
     const handleLogout = async () => {
@@ -11376,6 +17291,8 @@ function App() {
         setUserProfile(null);
         setIsAuthenticated(false);
         setActiveModule('dashboard');
+        // Clear global user
+        window.currentUserProfile = null;
     };
 
     const toggleSidebar = () => {
@@ -11387,16 +17304,22 @@ function App() {
         document.documentElement.setAttribute('data-theme', !isDarkMode ? 'dark' : 'light');
     };
 
-    const handleModuleClick = (moduleId) => {
+    const handleModuleClick = (moduleId, tab = null) => {
         // Check if user has access to this module
         if (userProfile && window.FirebaseServices?.userService) {
             const hasAccess = window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId);
             if (!hasAccess) {
-                alert('You do not have access to this module. Please contact your administrator.');
+                const moduleName = menuItems.find(m => m.id === moduleId)?.label || moduleId;
+                setDeniedModule(moduleName);
+                setShowPermissionModal(true);
                 return;
             }
         }
         setActiveModule(moduleId);
+        // Handle settings tab
+        if (moduleId === 'settings' && tab) {
+            setSettingsTab(tab);
+        }
     };
 
     // Permission helper functions
@@ -11444,9 +17367,107 @@ function App() {
                             isDarkMode={isDarkMode}
                             userProfile={userProfile}
                             onLogout={handleLogout}
+                            onModuleClick={handleModuleClick}
                         />
-                        <ContentArea activeModule={activeModule} onModuleClick={handleModuleClick} />
+                        <ContentArea activeModule={activeModule} onModuleClick={handleModuleClick} settingsTab={settingsTab} />
                     </div>
+                    
+                    {/* Permission Denied Modal */}
+                    {showPermissionModal && (
+                        <div 
+                            style={{
+                                position: 'fixed',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'rgba(0, 0, 0, 0.5)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 9999,
+                                backdropFilter: 'blur(4px)'
+                            }}
+                            onClick={() => setShowPermissionModal(false)}
+                        >
+                            <div 
+                                style={{
+                                    background: isDarkMode ? '#1e293b' : 'white',
+                                    borderRadius: '16px',
+                                    padding: '32px',
+                                    maxWidth: '400px',
+                                    width: '90%',
+                                    textAlign: 'center',
+                                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+                                    animation: 'slideIn 0.2s ease-out'
+                                }}
+                                onClick={e => e.stopPropagation()}
+                            >
+                                <div style={{
+                                    width: '64px',
+                                    height: '64px',
+                                    borderRadius: '50%',
+                                    background: '#fef2f2',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    margin: '0 auto 20px',
+                                    fontSize: '32px'
+                                }}>
+                                    🔒
+                                </div>
+                                <h3 style={{
+                                    margin: '0 0 12px',
+                                    fontSize: '20px',
+                                    fontWeight: '700',
+                                    color: isDarkMode ? '#f1f5f9' : '#1e293b'
+                                }}>
+                                    Access Denied
+                                </h3>
+                                <p style={{
+                                    margin: '0 0 8px',
+                                    fontSize: '15px',
+                                    color: isDarkMode ? '#94a3b8' : '#64748b',
+                                    lineHeight: '1.6'
+                                }}>
+                                    You don't have permission to access
+                                </p>
+                                <p style={{
+                                    margin: '0 0 20px',
+                                    fontSize: '16px',
+                                    fontWeight: '600',
+                                    color: isDarkMode ? '#f1f5f9' : '#1e293b'
+                                }}>
+                                    "{deniedModule}"
+                                </p>
+                                <p style={{
+                                    margin: '0 0 24px',
+                                    fontSize: '13px',
+                                    color: isDarkMode ? '#64748b' : '#94a3b8'
+                                }}>
+                                    Please contact your administrator to request access.
+                                </p>
+                                <button
+                                    onClick={() => setShowPermissionModal(false)}
+                                    style={{
+                                        padding: '12px 32px',
+                                        background: '#3b82f6',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onMouseOver={e => e.target.style.background = '#2563eb'}
+                                    onMouseOut={e => e.target.style.background = '#3b82f6'}
+                                >
+                                    OK, Got it
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </AuthContext.Provider>
         </PermissionContext.Provider>
