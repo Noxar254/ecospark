@@ -227,6 +227,12 @@ const menuGroups = [
         ]
     },
     {
+        label: 'Human Resources',
+        items: [
+            { id: 'hr', label: 'HR Statistics', icon: Icons.users }
+        ]
+    },
+    {
         label: 'Financial',
         items: [
             { id: 'billing', label: 'Billing Payments', icon: Icons.creditCard },
@@ -6684,6 +6690,10 @@ function GarageManagement() {
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    const [staffList, setStaffList] = useState([]); // Staff for technician assignment
+    const [showAssignTechModal, setShowAssignTechModal] = useState(false);
+    const [selectedQueueItem, setSelectedQueueItem] = useState(null);
+    const [selectedTechnician, setSelectedTechnician] = useState('');
 
     // Form data for adding to queue
     const [formData, setFormData] = useState({
@@ -6693,7 +6703,8 @@ function GarageManagement() {
         customerPhone: '',
         services: [],
         notes: '',
-        priority: 'normal'
+        priority: 'normal',
+        assignedTo: ''
     });
 
     // Listen for theme changes
@@ -6735,7 +6746,7 @@ function GarageManagement() {
 
     // Initialize Firebase subscriptions
     useEffect(() => {
-        let unsubQueue, unsubJobs, unsubGarageServices, unsubIntakeQueue, unsubIntakeRecords;
+        let unsubQueue, unsubJobs, unsubGarageServices, unsubIntakeQueue, unsubIntakeRecords, unsubStaff;
         let retryCount = 0;
         const maxRetries = 10;
 
@@ -6818,6 +6829,15 @@ function GarageManagement() {
                     );
                 }
 
+                // Subscribe to staff list for technician assignment
+                if (services.staffService?.subscribeToStaff) {
+                    unsubStaff = services.staffService.subscribeToStaff((data) => {
+                        // Include all active staff for assignment
+                        const activeStaff = data.filter(s => s.status === 'active');
+                        setStaffList(activeStaff);
+                    });
+                }
+
                 setLoading(false);
             } catch (err) {
                 console.error('Failed to initialize garage:', err);
@@ -6834,6 +6854,7 @@ function GarageManagement() {
             if (unsubGarageServices) unsubGarageServices();
             if (unsubIntakeQueue) unsubIntakeQueue();
             if (unsubIntakeRecords) unsubIntakeRecords();
+            if (unsubStaff) unsubStaff();
         };
     }, []);
 
@@ -7034,7 +7055,8 @@ function GarageManagement() {
                 customerPhone: '',
                 services: [],
                 notes: '',
-                priority: 'normal'
+                priority: 'normal',
+                assignedTo: ''
             });
             setShowAddModal(false);
         } catch (err) {
@@ -7044,8 +7066,17 @@ function GarageManagement() {
         }
     };
 
-    // Start job from queue
+    // Start job from queue - show technician selection first
     const handleStartJob = async (queueItem) => {
+        setSelectedQueueItem(queueItem);
+        setSelectedTechnician('');
+        setShowAssignTechModal(true);
+    };
+
+    // Actually start the job with assigned technician
+    const executeStartJob = async () => {
+        if (!selectedQueueItem) return;
+        
         const services = window.FirebaseServices;
         if (!services?.garageJobsService || !services?.garageQueueService) {
             setError('Services not available');
@@ -7054,26 +7085,29 @@ function GarageManagement() {
 
         setActionLoading(true);
         try {
-            // Create job in Firestore (service will handle ID properly)
+            // Create job in Firestore with assigned technician
             const result = await services.garageJobsService.createJob({
-                plateNumber: queueItem.plateNumber,
-                vehicleType: queueItem.vehicleType,
-                customerName: queueItem.customerName || '',
-                customerPhone: queueItem.customerPhone || '',
-                services: queueItem.services || [],
-                notes: queueItem.notes || '',
-                priority: queueItem.priority || 'normal',
-                totalCost: queueItem.totalCost || 0,
-                source: queueItem.source || 'direct'
-                // Note: Don't pass queueItem.id - service handles it
+                plateNumber: selectedQueueItem.plateNumber,
+                vehicleType: selectedQueueItem.vehicleType,
+                customerName: selectedQueueItem.customerName || '',
+                customerPhone: selectedQueueItem.customerPhone || '',
+                services: selectedQueueItem.services || [],
+                notes: selectedQueueItem.notes || '',
+                priority: selectedQueueItem.priority || 'normal',
+                totalCost: selectedQueueItem.totalCost || 0,
+                source: selectedQueueItem.source || 'direct',
+                assignedTo: selectedTechnician // Technician name for HR tracking
             });
             
             if (result.success) {
-                console.log('✅ Job created:', result.id);
+                console.log('✅ Job created:', result.id, 'assigned to:', selectedTechnician);
                 // Remove from queue after job is created
-                await services.garageQueueService.removeFromQueue(queueItem.id);
+                await services.garageQueueService.removeFromQueue(selectedQueueItem.id);
                 // Switch to jobs tab
                 setActiveTab('jobs');
+                setShowAssignTechModal(false);
+                setSelectedQueueItem(null);
+                setSelectedTechnician('');
             } else {
                 setError('Failed to create job: ' + (result.error || 'Unknown error'));
             }
@@ -7659,12 +7693,13 @@ function GarageManagement() {
             {/* Data Table - Responsive */}
             <div style={{ background: theme.bg, borderRadius: '0', boxShadow: theme.cardShadow, border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '900px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1000px' }}>
                         <thead>
                             <tr style={{ backgroundColor: theme.bgTertiary }}>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Vehicle</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Customer</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Services</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Assigned To</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>
                                     {activeTab === 'queue' ? 'Priority' : 'Status'}
                                 </th>
@@ -7676,7 +7711,7 @@ function GarageManagement() {
                     <tbody>
                         {filteredData.length === 0 ? (
                             <tr>
-                                <td colSpan="7" style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary }}>
+                                <td colSpan="8" style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary }}>
                                     <div>
                                         <span style={{ fontSize: '48px', display: 'block', marginBottom: '12px' }}>
                                             {activeTab === 'queue' ? '📋' : activeTab === 'jobs' ? '🔧' : '✅'}
@@ -7720,6 +7755,25 @@ function GarageManagement() {
                                         )}
                                         {item.notes && (
                                             <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '4px' }}>{item.notes}</div>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '14px 16px' }}>
+                                        {item.assignedTo ? (
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                padding: '4px 10px',
+                                                borderRadius: '0',
+                                                fontSize: '12px',
+                                                fontWeight: '500',
+                                                backgroundColor: '#dbeafe',
+                                                color: '#2563eb'
+                                            }}>
+                                                👤 {item.assignedTo}
+                                            </span>
+                                        ) : (
+                                            <span style={{ color: theme.textMuted, fontSize: '13px' }}>Unassigned</span>
                                         )}
                                     </td>
                                     <td style={{ padding: '14px 16px' }}>
@@ -8071,6 +8125,43 @@ function GarageManagement() {
                                 </div>
                             </div>
                             <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', fontSize: '13px', color: theme.textSecondary, marginBottom: '6px' }}>Assigned Technician</label>
+                                {staffList.length === 0 ? (
+                                    <div style={{
+                                        padding: '12px',
+                                        backgroundColor: theme.bgSecondary, 
+                                        borderRadius: '0',
+                                        border: `1px dashed ${theme.border}`,
+                                        textAlign: 'center',
+                                        color: theme.textSecondary,
+                                        fontSize: '13px'
+                                    }}>
+                                        No technicians available. Add staff in Staff Management.
+                                    </div>
+                                ) : (
+                                    <select
+                                        value={formData.assignedTo}
+                                        onChange={e => setFormData(prev => ({ ...prev, assignedTo: e.target.value }))}
+                                        style={{
+                                            width: '100%',
+                                            padding: '10px 12px',
+                                            borderRadius: '0',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: theme.inputBg,
+                                            color: theme.text,
+                                            fontSize: '14px'
+                                        }}
+                                    >
+                                        <option value="">-- Select Technician (Optional) --</option>
+                                        {staffList.map(staff => (
+                                            <option key={staff.id} value={staff.name}>
+                                                {staff.name} ({staff.role})
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                            </div>
+                            <div style={{ marginBottom: '16px' }}>
                                 <label style={{ display: 'block', fontSize: '13px', color: theme.textSecondary, marginBottom: '6px' }}>Services Required</label>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
                                     {garageServices.map(service => (
@@ -8175,18 +8266,33 @@ function GarageManagement() {
                             </div>
 
                             {/* Status */}
-                            <div style={{ marginBottom: '20px' }}>
-                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '8px' }}>Status</div>
-                                <span style={{
-                                    display: 'inline-block',
-                                    padding: '6px 14px',
-                                    backgroundColor: selectedItem.status === 'completed' ? '#d1fae5' : selectedItem.status === 'in-progress' ? '#fef3c7' : '#dbeafe',
-                                    color: selectedItem.status === 'completed' ? '#059669' : selectedItem.status === 'in-progress' ? '#d97706' : '#2563eb',
-                                    fontWeight: '500',
-                                    fontSize: '13px'
-                                }}>
-                                    {selectedItem.status === 'completed' ? '✅ Completed' : selectedItem.status === 'in-progress' ? '🔧 In Progress' : '⏳ Waiting'}
-                                </span>
+                            <div style={{ marginBottom: '20px', display: 'flex', gap: '24px' }}>
+                                <div>
+                                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '8px' }}>Status</div>
+                                    <span style={{
+                                        display: 'inline-block',
+                                        padding: '6px 14px',
+                                        backgroundColor: selectedItem.status === 'completed' ? '#d1fae5' : selectedItem.status === 'in-progress' ? '#fef3c7' : '#dbeafe',
+                                        color: selectedItem.status === 'completed' ? '#059669' : selectedItem.status === 'in-progress' ? '#d97706' : '#2563eb',
+                                        fontWeight: '500',
+                                        fontSize: '13px'
+                                    }}>
+                                        {selectedItem.status === 'completed' ? '✅ Completed' : selectedItem.status === 'in-progress' ? '🔧 In Progress' : '⏳ Waiting'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '8px' }}>Assigned Technician</div>
+                                    <span style={{
+                                        display: 'inline-block',
+                                        padding: '6px 14px',
+                                        backgroundColor: selectedItem.assignedTo ? '#dbeafe' : theme.bgTertiary,
+                                        color: selectedItem.assignedTo ? '#2563eb' : theme.textSecondary,
+                                        fontWeight: '500',
+                                        fontSize: '13px'
+                                    }}>
+                                        {selectedItem.assignedTo ? `👤 ${selectedItem.assignedTo}` : 'Unassigned'}
+                                    </span>
+                                </div>
                             </div>
 
                             {/* Services */}
@@ -8934,6 +9040,93 @@ function GarageManagement() {
                                     {actionLoading ? 'Sending...' : '🔧 Send to Garage Queue'}
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Assign Technician Modal */}
+            {showAssignTechModal && selectedQueueItem && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, borderRadius: '0', width: '100%', maxWidth: '450px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>👷 Assign Technician</h2>
+                            <button onClick={() => { setShowAssignTechModal(false); setSelectedQueueItem(null); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            {/* Vehicle Info */}
+                            <div style={{ backgroundColor: theme.bgTertiary, padding: '16px', marginBottom: '20px' }}>
+                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '16px' }}>{selectedQueueItem.plateNumber}</div>
+                                <div style={{ color: theme.textSecondary, fontSize: '13px' }}>{selectedQueueItem.vehicleType} • {selectedQueueItem.customerName || 'Walk-in'}</div>
+                            </div>
+
+                            {/* Services */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text, marginBottom: '8px' }}>Services Requested</div>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                    {selectedQueueItem.services?.map((sId, idx) => {
+                                        const service = garageServices.find(s => s.id === sId);
+                                        return service ? (
+                                            <span key={idx} style={{ fontSize: '12px', padding: '4px 10px', backgroundColor: '#fef3c7', color: '#92400e' }}>
+                                                {service.name}
+                                            </span>
+                                        ) : null;
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Technician Selection */}
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: theme.text, marginBottom: '8px' }}>
+                                    Select Technician *
+                                </label>
+                                <select
+                                    value={selectedTechnician}
+                                    onChange={(e) => setSelectedTechnician(e.target.value)}
+                                    style={{ 
+                                        width: '100%', 
+                                        padding: '12px', 
+                                        border: `1px solid ${theme.border}`, 
+                                        borderRadius: '0', 
+                                        fontSize: '14px', 
+                                        backgroundColor: theme.inputBg, 
+                                        color: theme.text,
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <option value="">-- Select Technician --</option>
+                                    {staffList.map(staff => (
+                                        <option key={staff.id} value={staff.name}>{staff.name} ({staff.role})</option>
+                                    ))}
+                                </select>
+                                <div style={{ marginTop: '8px', fontSize: '12px', color: theme.textSecondary }}>
+                                    💡 The assigned technician will be tracked in HR for commission/payment calculations
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ padding: '16px 24px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => { setShowAssignTechModal(false); setSelectedQueueItem(null); }}
+                                style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '14px' }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={executeStartJob}
+                                disabled={actionLoading || !selectedTechnician}
+                                style={{ 
+                                    padding: '10px 20px', 
+                                    backgroundColor: selectedTechnician ? '#10b981' : '#94a3b8', 
+                                    color: 'white', 
+                                    border: 'none', 
+                                    borderRadius: '0', 
+                                    cursor: selectedTechnician ? 'pointer' : 'not-allowed', 
+                                    fontSize: '14px', 
+                                    fontWeight: '500' 
+                                }}
+                            >
+                                {actionLoading ? 'Starting...' : '🚀 Start Job'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -11667,6 +11860,1448 @@ function Dashboard({ onModuleClick }) {
     );
 }
 
+// ==================== HR MODULE COMPONENT ====================
+function HRModule() {
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    const [activeTab, setActiveTab] = useState('overview');
+    const [staffList, setStaffList] = useState([]);
+    const [usersList, setUsersList] = useState([]);
+    const [assignments, setAssignments] = useState([]);
+    const [washHistory, setWashHistory] = useState([]);
+    const [garageJobs, setGarageJobs] = useState([]);
+    const [payments, setPayments] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedStaff, setSelectedStaff] = useState(null);
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [showViewPaymentModal, setShowViewPaymentModal] = useState(false);
+    const [viewingPayment, setViewingPayment] = useState(null);
+    const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [showCommissionModal, setShowCommissionModal] = useState(false);
+    const [showAddWorkModal, setShowAddWorkModal] = useState(false);
+    const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [confirmAction, setConfirmAction] = useState({ title: '', message: '', onConfirm: null });
+    const [actionLoading, setActionLoading] = useState(false);
+    const [successMessage, setSuccessMessage] = useState(null);
+    const [error, setError] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filterPaymentType, setFilterPaymentType] = useState('all');
+    const [dateRange, setDateRange] = useState({ start: '', end: '' });
+
+    // Payment form
+    const [paymentForm, setPaymentForm] = useState({
+        amount: '',
+        periodStart: '',
+        periodEnd: '',
+        deductions: '',
+        paye: '',
+        nhif: '',
+        nssf: '',
+        otherDeductions: '',
+        notes: ''
+    });
+
+    // Commission settings form
+    const [commissionForm, setCommissionForm] = useState({
+        paymentType: 'monthly',
+        salary: '',
+        commissionRate: ''
+    });
+
+    // Work entry form
+    const [workForm, setWorkForm] = useState({
+        staffId: '',
+        jobType: 'wash',
+        vehiclePlate: '',
+        customerName: '',
+        serviceName: '',
+        servicePrice: ''
+    });
+
+    const PAYMENT_TYPES = [
+        { id: 'monthly', label: 'Monthly Salary', icon: '📅' },
+        { id: 'weekly', label: 'Weekly Salary', icon: '📆' },
+        { id: 'daily', label: 'Daily Rate', icon: '🌅' },
+        { id: 'commission', label: 'Commission Based', icon: '💰' }
+    ];
+
+    const JOB_TYPES = [
+        { id: 'wash', label: 'Car Wash', icon: '🚗' },
+        { id: 'detail', label: 'Detailing', icon: '✨' },
+        { id: 'garage', label: 'Garage Work', icon: '🔧' },
+        { id: 'other', label: 'Other', icon: '📋' }
+    ];
+
+    // Theme observer
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+        });
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        return () => observer.disconnect();
+    }, []);
+
+    // Load data
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services) return;
+
+        let unsubStaff, unsubUsers, unsubAssignments, unsubPayments, unsubWashHistory, unsubGarageJobs;
+
+        // Subscribe to staff
+        if (services.staffService?.subscribeToAllStaff) {
+            unsubStaff = services.staffService.subscribeToAllStaff((data) => {
+                setStaffList(data.filter(s => s.status === 'active'));
+            });
+        }
+
+        // Subscribe to users
+        if (services.userService?.subscribeToUsers) {
+            unsubUsers = services.userService.subscribeToUsers((data) => {
+                setUsersList(data.filter(u => u.isActive));
+            });
+        }
+
+        // Subscribe to manual HR assignments
+        if (services.hrService?.subscribeToAssignments) {
+            unsubAssignments = services.hrService.subscribeToAssignments((data) => {
+                setAssignments(data);
+            });
+        }
+
+        // Subscribe to wash history (completed washes from wash bays)
+        if (services.washBayService?.subscribeToHistory) {
+            unsubWashHistory = services.washBayService.subscribeToHistory((data) => {
+                // Filter only completed washes with assigned staff
+                const completedWashes = data.filter(w => w.action === 'completed' && w.vehicle?.assignedBy);
+                setWashHistory(completedWashes);
+            });
+        }
+
+        // Subscribe to garage jobs (completed ones)
+        if (services.garageJobsService?.subscribeToJobs) {
+            unsubGarageJobs = services.garageJobsService.subscribeToJobs((data) => {
+                // Filter only completed jobs with assigned technician
+                const completedJobs = data.filter(j => j.status === 'completed' && j.assignedTo);
+                setGarageJobs(completedJobs);
+            });
+        }
+
+        // Subscribe to payments
+        if (services.hrService?.subscribeToPayments) {
+            unsubPayments = services.hrService.subscribeToPayments((data) => {
+                setPayments(data);
+                setLoading(false);
+            });
+        } else {
+            setLoading(false);
+        }
+
+        return () => {
+            if (unsubStaff) unsubStaff();
+            if (unsubUsers) unsubUsers();
+            if (unsubAssignments) unsubAssignments();
+            if (unsubPayments) unsubPayments();
+            if (unsubWashHistory) unsubWashHistory();
+            if (unsubGarageJobs) unsubGarageJobs();
+        };
+    }, []);
+
+    // Combine all work history: manual assignments + wash history + garage jobs
+    const getAllWorkHistory = useCallback(() => {
+        const allWork = [];
+
+        // Add manual HR assignments
+        assignments.forEach(a => {
+            allWork.push({
+                id: a.id,
+                type: 'manual',
+                jobType: a.jobType || 'other',
+                staffId: a.staffId,
+                staffName: a.staffName,
+                vehiclePlate: a.vehiclePlate || '',
+                customerName: a.customerName || '',
+                serviceName: a.serviceName || '',
+                servicePrice: parseFloat(a.servicePrice) || 0,
+                commissionRate: parseFloat(a.commissionRate) || 0,
+                commissionAmount: parseFloat(a.commissionAmount) || 0,
+                completedAt: a.completedAt || a.createdAt,
+                source: 'manual'
+            });
+        });
+
+        // Add wash history - match by staff name
+        washHistory.forEach(w => {
+            const staffName = w.vehicle?.assignedBy || '';
+            const staff = staffList.find(s => s.name?.toLowerCase() === staffName.toLowerCase());
+            const servicePrice = parseFloat(w.vehicle?.servicePrice) || parseFloat(w.vehicle?.service?.price) || 0;
+            const commissionRate = staff?.commissionRate || 0;
+            const commissionAmount = (servicePrice * commissionRate) / 100;
+
+            allWork.push({
+                id: w.id || `wash-${w.timestamp}`,
+                type: 'wash',
+                jobType: 'wash',
+                staffId: staff?.id || '',
+                staffName: staffName,
+                vehiclePlate: w.vehicle?.plateNumber || '',
+                customerName: w.vehicle?.customerName || '',
+                serviceName: w.vehicle?.service?.name || w.vehicle?.service || 'Car Wash',
+                servicePrice: servicePrice,
+                commissionRate: commissionRate,
+                commissionAmount: commissionAmount,
+                completedAt: w.endTime || w.timestamp,
+                bayName: w.bayName || '',
+                duration: w.duration || 0,
+                source: 'washbay'
+            });
+        });
+
+        // Add garage jobs - match by assigned technician name
+        garageJobs.forEach(j => {
+            const staffName = j.assignedTo || '';
+            const staff = staffList.find(s => s.name?.toLowerCase() === staffName.toLowerCase());
+            const servicePrice = parseFloat(j.totalCost) || 0;
+            const commissionRate = staff?.commissionRate || 0;
+            const commissionAmount = (servicePrice * commissionRate) / 100;
+
+            allWork.push({
+                id: j.id,
+                type: 'garage',
+                jobType: 'garage',
+                staffId: staff?.id || '',
+                staffName: staffName,
+                vehiclePlate: j.plateNumber || '',
+                customerName: j.customerName || '',
+                serviceName: j.services?.map(sId => typeof sId === 'object' ? sId.name : sId).join(', ') || 'Garage Work',
+                servicePrice: servicePrice,
+                commissionRate: commissionRate,
+                commissionAmount: commissionAmount,
+                completedAt: j.completedAt,
+                source: 'garage'
+            });
+        });
+
+        // Sort by completion date descending
+        allWork.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+
+        return allWork;
+    }, [assignments, washHistory, garageJobs, staffList]);
+
+    // Get all work history
+    const allWorkHistory = getAllWorkHistory();
+
+    // Calculate staff stats from all sources
+    const getStaffStats = (staffId, staffName) => {
+        // Get work by staff ID or name match
+        const staffWork = allWorkHistory.filter(w => 
+            w.staffId === staffId || 
+            w.staffName?.toLowerCase() === staffName?.toLowerCase()
+        );
+        const staffPayments = payments.filter(p => p.staffId === staffId);
+        
+        const totalJobs = staffWork.length;
+        const totalCommission = staffWork.reduce((sum, w) => sum + (parseFloat(w.commissionAmount) || 0), 0);
+        const totalPaid = staffPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+        
+        return { 
+            totalJobs, 
+            totalCommission, 
+            totalPaid, 
+            pendingCommission: Math.max(0, totalCommission - totalPaid),
+            workHistory: staffWork
+        };
+    };
+
+    // Filter staff
+    const filteredStaff = staffList.filter(staff => {
+        const matchesSearch = !searchTerm || 
+            staff.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            staff.role?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesPaymentType = filterPaymentType === 'all' || staff.paymentType === filterPaymentType;
+        return matchesSearch && matchesPaymentType;
+    });
+
+    // Handle commission settings update
+    const handleUpdateCommission = async () => {
+        if (!selectedStaff) return;
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.staffService.updateStaff(selectedStaff.id, {
+                paymentType: commissionForm.paymentType,
+                salary: parseFloat(commissionForm.salary) || 0,
+                commissionRate: parseFloat(commissionForm.commissionRate) || 0
+            });
+            setSuccessMessage('Payment settings updated successfully');
+            setShowCommissionModal(false);
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle record payment
+    const handleRecordPayment = async () => {
+        if (!selectedStaff || !paymentForm.amount) return;
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const stats = getStaffStats(selectedStaff.id, selectedStaff.name);
+            
+            const grossAmount = parseFloat(paymentForm.amount) || 0;
+            const paye = parseFloat(paymentForm.paye) || 0;
+            const nhif = parseFloat(paymentForm.nhif) || 0;
+            const nssf = parseFloat(paymentForm.nssf) || 0;
+            const otherDeductions = parseFloat(paymentForm.otherDeductions) || 0;
+            const totalDeductions = paye + nhif + nssf + otherDeductions;
+            const netPay = grossAmount - totalDeductions;
+
+            await services.hrService.recordPayment({
+                staffId: selectedStaff.id,
+                staffName: selectedStaff.name,
+                paymentType: selectedStaff.paymentType || 'monthly',
+                grossAmount: grossAmount,
+                amount: netPay,
+                periodStart: paymentForm.periodStart,
+                periodEnd: paymentForm.periodEnd,
+                jobsCount: stats.totalJobs,
+                totalCommission: stats.totalCommission,
+                baseSalary: selectedStaff.salary || 0,
+                paye: paye,
+                nhif: nhif,
+                nssf: nssf,
+                otherDeductions: otherDeductions,
+                totalDeductions: totalDeductions,
+                deductions: totalDeductions,
+                notes: paymentForm.notes
+            });
+            
+            setSuccessMessage('Payment recorded successfully');
+            setShowPaymentModal(false);
+            setPaymentForm({ amount: '', periodStart: '', periodEnd: '', deductions: '', paye: '', nhif: '', nssf: '', otherDeductions: '', notes: '' });
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Show confirm modal
+    const showConfirm = (title, message, onConfirm) => {
+        setConfirmAction({ title, message, onConfirm });
+        setShowConfirmModal(true);
+    };
+
+    // Execute confirmed action
+    const executeConfirmedAction = async () => {
+        if (confirmAction.onConfirm) {
+            await confirmAction.onConfirm();
+        }
+        setShowConfirmModal(false);
+        setConfirmAction({ title: '', message: '', onConfirm: null });
+    };
+
+    // Handle cancel/reverse payment
+    const handleCancelPayment = (payment) => {
+        showConfirm(
+            'Cancel Payment',
+            `Are you sure you want to cancel this payment of KES ${(payment.amount || 0).toLocaleString()} to ${payment.staffName}? This action cannot be undone.`,
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    await services.hrService.updatePayment(payment.id, {
+                        status: 'cancelled',
+                        cancelledAt: new Date().toISOString(),
+                        cancelledBy: 'Admin'
+                    });
+                    setSuccessMessage('Payment cancelled successfully');
+                    setTimeout(() => setSuccessMessage(null), 3000);
+                } catch (err) {
+                    setError(err.message || 'Failed to cancel payment');
+                } finally {
+                    setActionLoading(false);
+                }
+            }
+        );
+    };
+
+    // Handle mark payment as paid (for pending payments)
+    const handleMarkAsPaid = async (payment) => {
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.hrService.updatePayment(payment.id, {
+                status: 'paid',
+                paidAt: new Date().toISOString()
+            });
+            setSuccessMessage('Payment marked as paid');
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err) {
+            setError(err.message || 'Failed to update payment');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle add work entry
+    const handleAddWork = async () => {
+        if (!workForm.staffId || !workForm.serviceName) return;
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const staff = staffList.find(s => s.id === workForm.staffId);
+            const servicePrice = parseFloat(workForm.servicePrice) || 0;
+            const commissionRate = staff?.commissionRate || 0;
+            const commissionAmount = (servicePrice * commissionRate) / 100;
+
+            await services.hrService.assignStaffToJob({
+                staffId: workForm.staffId,
+                staffName: staff?.name || '',
+                jobType: workForm.jobType,
+                vehiclePlate: workForm.vehiclePlate,
+                customerName: workForm.customerName,
+                serviceName: workForm.serviceName,
+                servicePrice: servicePrice,
+                commissionRate: commissionRate,
+                commissionAmount: commissionAmount
+            });
+            
+            setSuccessMessage('Work entry added successfully');
+            setShowAddWorkModal(false);
+            setWorkForm({ staffId: '', jobType: 'wash', vehiclePlate: '', customerName: '', serviceName: '', servicePrice: '' });
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Print payment receipt (Payslip)
+    const handlePrintReceipt = (payment) => {
+        const grossAmount = payment.grossAmount || payment.amount || 0;
+        const paye = payment.paye || 0;
+        const nhif = payment.nhif || 0;
+        const nssf = payment.nssf || 0;
+        const otherDeductions = payment.otherDeductions || 0;
+        const totalDeductions = payment.totalDeductions || (paye + nhif + nssf + otherDeductions);
+        const netPay = payment.amount || (grossAmount - totalDeductions);
+
+        const receiptContent = `
+            <html>
+            <head>
+                <title>Payslip - ${payment.staffName}</title>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; max-width: 500px; margin: 0 auto; color: #333; }
+                    .payslip { border: 2px solid #1e3a5f; }
+                    .header { background: #1e3a5f; color: white; padding: 20px; text-align: center; }
+                    .logo { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
+                    .subtitle { font-size: 14px; opacity: 0.9; }
+                    .payslip-title { background: #f8f9fa; padding: 12px; text-align: center; font-size: 16px; font-weight: 600; border-bottom: 1px solid #ddd; text-transform: uppercase; letter-spacing: 1px; }
+                    .section { padding: 16px 20px; border-bottom: 1px solid #eee; }
+                    .section-title { font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px; }
+                    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+                    .info-item { display: flex; justify-content: space-between; padding: 4px 0; }
+                    .info-item .label { color: #666; font-size: 13px; }
+                    .info-item .value { font-weight: 600; font-size: 13px; }
+                    .earnings-row, .deduction-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #eee; font-size: 13px; }
+                    .earnings-row:last-child, .deduction-row:last-child { border-bottom: none; }
+                    .earnings-row .amount { color: #16a34a; font-weight: 600; }
+                    .deduction-row .amount { color: #dc2626; font-weight: 600; }
+                    .subtotal { display: flex; justify-content: space-between; padding: 10px 0; font-weight: 600; border-top: 2px solid #ddd; margin-top: 8px; }
+                    .subtotal.gross .amount { color: #16a34a; }
+                    .subtotal.deduct .amount { color: #dc2626; }
+                    .net-pay { background: #1e3a5f; color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
+                    .net-pay .label { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+                    .net-pay .amount { font-size: 24px; font-weight: bold; }
+                    .footer { padding: 16px 20px; text-align: center; font-size: 11px; color: #666; background: #f8f9fa; }
+                    .footer p { margin: 4px 0; }
+                    .signature-area { padding: 20px; display: flex; justify-content: space-between; }
+                    .signature-box { width: 45%; }
+                    .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 8px; font-size: 12px; color: #666; }
+                    @media print { 
+                        body { padding: 10px; } 
+                        .payslip { border: 1px solid #333; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="payslip">
+                    <div class="header">
+                        <div class="logo">🚗 ECOSPARK</div>
+                        <div class="subtitle">Car Wash & Auto Services</div>
+                    </div>
+                    
+                    <div class="payslip-title">Employee Payslip</div>
+                    
+                    <div class="section">
+                        <div class="section-title">Employee Information</div>
+                        <div class="info-grid">
+                            <div class="info-item"><span class="label">Employee Name:</span></div>
+                            <div class="info-item"><span class="value">${payment.staffName || 'N/A'}</span></div>
+                            <div class="info-item"><span class="label">Payment Type:</span></div>
+                            <div class="info-item"><span class="value" style="text-transform: capitalize;">${payment.paymentType || 'Salary'}</span></div>
+                            <div class="info-item"><span class="label">Pay Period:</span></div>
+                            <div class="info-item"><span class="value">${payment.periodStart ? new Date(payment.periodStart).toLocaleDateString('en-GB') : '-'} to ${payment.periodEnd ? new Date(payment.periodEnd).toLocaleDateString('en-GB') : '-'}</span></div>
+                            <div class="info-item"><span class="label">Payment Date:</span></div>
+                            <div class="info-item"><span class="value">${new Date(payment.paidAt || payment.createdAt).toLocaleDateString('en-GB')}</span></div>
+                            <div class="info-item"><span class="label">Payslip No:</span></div>
+                            <div class="info-item"><span class="value">#PS-${payment.id?.slice(-6).toUpperCase() || 'N/A'}</span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <div class="section-title">Earnings</div>
+                        ${payment.baseSalary > 0 ? `<div class="earnings-row"><span>Base Salary</span><span class="amount">KES ${(payment.baseSalary || 0).toLocaleString()}</span></div>` : ''}
+                        ${payment.totalCommission > 0 ? `<div class="earnings-row"><span>Commission (${payment.jobsCount || 0} jobs)</span><span class="amount">KES ${(payment.totalCommission || 0).toLocaleString()}</span></div>` : ''}
+                        ${payment.baseSalary <= 0 && payment.totalCommission <= 0 ? `<div class="earnings-row"><span>Gross Pay</span><span class="amount">KES ${grossAmount.toLocaleString()}</span></div>` : ''}
+                        <div class="subtotal gross">
+                            <span>GROSS EARNINGS</span>
+                            <span class="amount">KES ${grossAmount.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <div class="section-title">Statutory Deductions</div>
+                        ${paye > 0 ? `<div class="deduction-row"><span>P.A.Y.E (Tax)</span><span class="amount">- KES ${paye.toLocaleString()}</span></div>` : ''}
+                        ${nhif > 0 ? `<div class="deduction-row"><span>NHIF</span><span class="amount">- KES ${nhif.toLocaleString()}</span></div>` : ''}
+                        ${nssf > 0 ? `<div class="deduction-row"><span>NSSF</span><span class="amount">- KES ${nssf.toLocaleString()}</span></div>` : ''}
+                        ${otherDeductions > 0 ? `<div class="deduction-row"><span>Other Deductions</span><span class="amount">- KES ${otherDeductions.toLocaleString()}</span></div>` : ''}
+                        ${totalDeductions === 0 ? `<div class="deduction-row"><span>No deductions</span><span class="amount">KES 0</span></div>` : ''}
+                        <div class="subtotal deduct">
+                            <span>TOTAL DEDUCTIONS</span>
+                            <span class="amount">- KES ${totalDeductions.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="net-pay">
+                        <span class="label">Net Pay</span>
+                        <span class="amount">KES ${netPay.toLocaleString()}</span>
+                    </div>
+                    
+                    <div class="signature-area">
+                        <div class="signature-box">
+                            <div class="signature-line">Employee Signature</div>
+                        </div>
+                        <div class="signature-box">
+                            <div class="signature-line">Authorized Signature</div>
+                        </div>
+                    </div>
+                    
+                    <div class="footer">
+                        <p><strong>EcoSpark Car Wash & Auto Services</strong></p>
+                        <p>This is a computer-generated payslip. No signature required.</p>
+                        <p>For queries, contact HR department.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `;
+        const printWindow = window.open('', '_blank');
+        printWindow.document.write(receiptContent);
+        printWindow.document.close();
+        printWindow.print();
+    };
+
+    // Styles - Sharp edges for clean look
+    const cardStyle = { background: isDark ? '#1e293b' : 'white', border: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, borderRadius: '0', padding: '20px' };
+    const headerStyle = { fontSize: '14px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.5px' };
+    const statCardStyle = { ...cardStyle, textAlign: 'center', padding: '24px' };
+    const statValueStyle = { fontSize: '28px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' };
+    const statLabelStyle = { fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b', marginTop: '4px' };
+    const btnPrimary = { background: '#3b82f6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '0', cursor: 'pointer', fontSize: '14px', fontWeight: '500' };
+    const btnSecondary = { background: isDark ? '#334155' : '#e2e8f0', color: isDark ? '#f1f5f9' : '#1e293b', border: 'none', padding: '8px 16px', borderRadius: '0', cursor: 'pointer', fontSize: '13px' };
+    const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, borderRadius: '0', background: isDark ? '#0f172a' : 'white', color: isDark ? '#f1f5f9' : '#1e293b', fontSize: '14px', boxSizing: 'border-box' };
+    const selectStyle = { ...inputStyle, cursor: 'pointer' };
+    const labelStyle = { display: 'block', fontSize: '13px', fontWeight: '500', color: isDark ? '#94a3b8' : '#64748b', marginBottom: '6px' };
+    const tableStyle = { width: '100%', borderCollapse: 'collapse' };
+    const thStyle = { textAlign: 'left', padding: '12px', borderBottom: `2px solid ${isDark ? '#334155' : '#e2e8f0'}`, fontSize: '13px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b' };
+    const tdStyle = { padding: '12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, fontSize: '14px', color: isDark ? '#f1f5f9' : '#1e293b' };
+    const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
+    const modalContent = { background: isDark ? '#1e293b' : 'white', borderRadius: '0', padding: '24px', width: '90%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' };
+    const tabStyle = (isActive) => ({ padding: '10px 20px', border: 'none', background: isActive ? (isDark ? '#3b82f6' : '#3b82f6') : 'transparent', color: isActive ? 'white' : (isDark ? '#94a3b8' : '#64748b'), cursor: 'pointer', borderRadius: '0', fontSize: '14px', fontWeight: '500' });
+
+    // Stats calculations
+    const totalStaff = staffList.length;
+    const commissionStaff = staffList.filter(s => s.paymentType === 'commission').length;
+    const totalJobsThisMonth = allWorkHistory.filter(w => new Date(w.completedAt).getMonth() === new Date().getMonth()).length;
+    const totalPaymentsThisMonth = payments.filter(p => new Date(p.createdAt).getMonth() === new Date().getMonth()).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const totalEarningsThisMonth = allWorkHistory.filter(w => new Date(w.completedAt).getMonth() === new Date().getMonth()).reduce((sum, w) => sum + (parseFloat(w.commissionAmount) || 0), 0);
+
+    if (loading) {
+        return (
+            <div style={{ padding: '24px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', marginBottom: '16px' }}>⏳</div>
+                <p style={{ color: isDark ? '#94a3b8' : '#64748b' }}>Loading HR data...</p>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '24px' }}>
+            {/* Success/Error Messages */}
+            {successMessage && (
+                <div style={{ background: '#10b981', color: 'white', padding: '12px 20px', borderRadius: '0', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span>✓</span> {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ background: '#ef4444', color: 'white', padding: '12px 20px', borderRadius: '0', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>⚠ {error}</span>
+                    <button onClick={() => setError(null)} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>✕</button>
+                </div>
+            )}
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
+                <button style={tabStyle(activeTab === 'overview')} onClick={() => setActiveTab('overview')}>📊 Overview</button>
+                <button style={tabStyle(activeTab === 'staff')} onClick={() => setActiveTab('staff')}>👥 Staff List</button>
+                <button style={tabStyle(activeTab === 'work')} onClick={() => setActiveTab('work')}>📋 Work History</button>
+                <button style={tabStyle(activeTab === 'payments')} onClick={() => setActiveTab('payments')}>💰 Payments</button>
+            </div>
+
+            {/* Overview Tab */}
+            {activeTab === 'overview' && (
+                <div>
+                    {/* Stats Cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                        <div style={statCardStyle}>
+                            <div style={{ fontSize: '32px', marginBottom: '8px' }}>👥</div>
+                            <div style={statValueStyle}>{totalStaff}</div>
+                            <div style={statLabelStyle}>Total Staff</div>
+                        </div>
+                        <div style={statCardStyle}>
+                            <div style={{ fontSize: '32px', marginBottom: '8px' }}>💰</div>
+                            <div style={statValueStyle}>{commissionStaff}</div>
+                            <div style={statLabelStyle}>Commission Based</div>
+                        </div>
+                        <div style={statCardStyle}>
+                            <div style={{ fontSize: '32px', marginBottom: '8px' }}>🚗</div>
+                            <div style={statValueStyle}>{totalJobsThisMonth}</div>
+                            <div style={statLabelStyle}>Jobs This Month</div>
+                        </div>
+                        <div style={statCardStyle}>
+                            <div style={{ fontSize: '32px', marginBottom: '8px' }}>💵</div>
+                            <div style={statValueStyle}>KES {totalPaymentsThisMonth.toLocaleString()}</div>
+                            <div style={statLabelStyle}>Paid This Month</div>
+                        </div>
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div style={cardStyle}>
+                        <h3 style={headerStyle}>Quick Actions</h3>
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                            <button style={btnPrimary} onClick={() => setShowAddWorkModal(true)}>➕ Add Work Entry</button>
+                            <button style={btnSecondary} onClick={() => setActiveTab('staff')}>👥 View Staff</button>
+                            <button style={btnSecondary} onClick={() => setActiveTab('payments')}>💰 View Payments</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Staff List Tab */}
+            {activeTab === 'staff' && (
+                <div>
+                    {/* Filters */}
+                    <div style={{ ...cardStyle, marginBottom: '20px' }}>
+                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                            <div style={{ flex: '1', minWidth: '200px' }}>
+                                <label style={labelStyle}>Search Staff</label>
+                                <input
+                                    type="text"
+                                    placeholder="Search by name or role..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    style={inputStyle}
+                                />
+                            </div>
+                            <div style={{ minWidth: '180px' }}>
+                                <label style={labelStyle}>Payment Type</label>
+                                <select value={filterPaymentType} onChange={(e) => setFilterPaymentType(e.target.value)} style={selectStyle}>
+                                    <option value="all">All Types</option>
+                                    {PAYMENT_TYPES.map(pt => (
+                                        <option key={pt.id} value={pt.id}>{pt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Staff Table */}
+                    <div style={cardStyle}>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={tableStyle}>
+                                <thead>
+                                    <tr>
+                                        <th style={thStyle}>Staff Name</th>
+                                        <th style={thStyle}>Role</th>
+                                        <th style={thStyle}>Payment Type</th>
+                                        <th style={thStyle}>Rate/Salary</th>
+                                        <th style={thStyle}>Jobs Done</th>
+                                        <th style={thStyle}>Earnings</th>
+                                        <th style={thStyle}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredStaff.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="7" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
+                                                <div style={{ fontSize: '24px', marginBottom: '8px' }}>👥</div>
+                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No staff found</p>
+                                            </td>
+                                        </tr>
+                                    ) : filteredStaff.map(staff => {
+                                        const stats = getStaffStats(staff.id, staff.name);
+                                        const paymentType = PAYMENT_TYPES.find(pt => pt.id === staff.paymentType);
+                                        return (
+                                            <tr key={staff.id}>
+                                                <td style={tdStyle}>
+                                                    <div style={{ fontWeight: '600' }}>{staff.name}</div>
+                                                    <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>{staff.phone}</div>
+                                                </td>
+                                                <td style={tdStyle}>{staff.role}</td>
+                                                <td style={tdStyle}>
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: isDark ? '#334155' : '#f1f5f9', padding: '4px 10px', borderRadius: '0', fontSize: '12px' }}>
+                                                        {paymentType?.icon} {paymentType?.label || 'Not Set'}
+                                                    </span>
+                                                </td>
+                                                <td style={tdStyle}>
+                                                    {staff.paymentType === 'commission' 
+                                                        ? `${staff.commissionRate || 0}%`
+                                                        : `KES ${(staff.salary || 0).toLocaleString()}`
+                                                    }
+                                                </td>
+                                                <td style={tdStyle}>{stats.totalJobs}</td>
+                                                <td style={tdStyle}>
+                                                    <div>KES {stats.totalCommission.toLocaleString()}</div>
+                                                    {stats.pendingCommission > 0 && (
+                                                        <div style={{ fontSize: '11px', color: '#f59e0b' }}>Pending: KES {stats.pendingCommission.toLocaleString()}</div>
+                                                    )}
+                                                </td>
+                                                <td style={tdStyle}>
+                                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '6px 12px', fontSize: '12px' }}
+                                                            onClick={() => { setSelectedStaff(staff); setCommissionForm({ paymentType: staff.paymentType || 'monthly', salary: staff.salary || '', commissionRate: staff.commissionRate || '' }); setShowCommissionModal(true); }}
+                                                        >⚙️ Settings</button>
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '6px 12px', fontSize: '12px' }}
+                                                            onClick={() => { setSelectedStaff(staff); setShowHistoryModal(true); }}
+                                                        >📋 History</button>
+                                                        <button
+                                                            style={{ ...btnPrimary, padding: '6px 12px', fontSize: '12px' }}
+                                                            onClick={() => { setSelectedStaff(staff); setPaymentForm({ amount: '', periodStart: '', periodEnd: '', deductions: '', paye: '', nhif: '', nssf: '', otherDeductions: '', notes: '' }); setShowPaymentModal(true); }}
+                                                        >💵 Pay</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Work History Tab */}
+            {activeTab === 'work' && (
+                <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                        <h3 style={{ ...headerStyle, margin: 0 }}>Work History <span style={{ fontSize: '12px', fontWeight: '400', color: isDark ? '#64748b' : '#94a3b8' }}>({allWorkHistory.length} jobs)</span></h3>
+                        <button style={btnPrimary} onClick={() => setShowAddWorkModal(true)}>➕ Add Manual Entry</button>
+                    </div>
+                    <div style={cardStyle}>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={tableStyle}>
+                                <thead>
+                                    <tr>
+                                        <th style={thStyle}>Date</th>
+                                        <th style={thStyle}>Staff</th>
+                                        <th style={thStyle}>Source</th>
+                                        <th style={thStyle}>Vehicle/Service</th>
+                                        <th style={thStyle}>Customer</th>
+                                        <th style={thStyle}>Price</th>
+                                        <th style={thStyle}>Commission</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {allWorkHistory.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="7" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
+                                                <div style={{ fontSize: '24px', marginBottom: '8px' }}>📋</div>
+                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No work entries yet</p>
+                                                <p style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '8px' }}>Complete jobs in Wash Bays or Garage to see them here</p>
+                                            </td>
+                                        </tr>
+                                    ) : allWorkHistory.slice(0, 100).map(work => {
+                                        const jobType = JOB_TYPES.find(jt => jt.id === work.jobType);
+                                        const sourceLabel = work.source === 'washbay' ? '🚿 Wash Bay' : work.source === 'garage' ? '🔧 Garage' : '📝 Manual';
+                                        const sourceColor = work.source === 'washbay' ? '#3b82f6' : work.source === 'garage' ? '#f59e0b' : '#8b5cf6';
+                                        return (
+                                            <tr key={work.id}>
+                                                <td style={tdStyle}>{new Date(work.completedAt).toLocaleDateString()}</td>
+                                                <td style={tdStyle}>
+                                                    <div style={{ fontWeight: '500' }}>{work.staffName || 'Unassigned'}</div>
+                                                </td>
+                                                <td style={tdStyle}>
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: isDark ? '#1e293b' : '#f8fafc', padding: '4px 8px', borderRadius: '0', fontSize: '11px', color: sourceColor, border: `1px solid ${sourceColor}30` }}>
+                                                        {sourceLabel}
+                                                    </span>
+                                                </td>
+                                                <td style={tdStyle}>
+                                                    <div style={{ fontWeight: '500' }}>{work.vehiclePlate || '-'}</div>
+                                                    <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>{work.serviceName}</div>
+                                                    {work.bayName && <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8' }}>Bay: {work.bayName}</div>}
+                                                </td>
+                                                <td style={tdStyle}>{work.customerName || '-'}</td>
+                                                <td style={tdStyle}>KES {(work.servicePrice || 0).toLocaleString()}</td>
+                                                <td style={tdStyle}>
+                                                    <span style={{ color: '#10b981', fontWeight: '600' }}>
+                                                        KES {(work.commissionAmount || 0).toLocaleString()}
+                                                    </span>
+                                                    {work.commissionRate > 0 && (
+                                                        <span style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginLeft: '4px' }}>
+                                                            ({work.commissionRate}%)
+                                                        </span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Payments Tab */}
+            {activeTab === 'payments' && (
+                <div>
+                    <h3 style={{ ...headerStyle, marginBottom: '20px' }}>Payment History</h3>
+                    <div style={cardStyle}>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={tableStyle}>
+                                <thead>
+                                    <tr>
+                                        <th style={thStyle}>Date</th>
+                                        <th style={thStyle}>Staff</th>
+                                        <th style={thStyle}>Type</th>
+                                        <th style={thStyle}>Period</th>
+                                        <th style={thStyle}>Jobs</th>
+                                        <th style={thStyle}>Amount</th>
+                                        <th style={thStyle}>Status</th>
+                                        <th style={thStyle}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {payments.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="8" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
+                                                <div style={{ fontSize: '24px', marginBottom: '8px' }}>💰</div>
+                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No payments recorded yet</p>
+                                            </td>
+                                        </tr>
+                                    ) : payments.map(payment => (
+                                        <tr key={payment.id}>
+                                            <td style={tdStyle}>{new Date(payment.paidAt).toLocaleDateString()}</td>
+                                            <td style={tdStyle}>{payment.staffName}</td>
+                                            <td style={tdStyle}>
+                                                <span style={{ textTransform: 'capitalize' }}>{payment.paymentType}</span>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                {payment.periodStart && payment.periodEnd 
+                                                    ? `${new Date(payment.periodStart).toLocaleDateString()} - ${new Date(payment.periodEnd).toLocaleDateString()}`
+                                                    : '-'
+                                                }
+                                            </td>
+                                            <td style={tdStyle}>{payment.jobsCount || 0}</td>
+                                            <td style={tdStyle}>
+                                                <span style={{ fontWeight: '700', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>KES {(payment.amount || 0).toLocaleString()}</span>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <span style={{
+                                                    display: 'inline-block',
+                                                    padding: '4px 10px',
+                                                    borderRadius: '0',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: payment.status === 'cancelled' ? '#fee2e2' : payment.status === 'pending' ? '#fef3c7' : '#dcfce7',
+                                                    color: payment.status === 'cancelled' ? '#dc2626' : payment.status === 'pending' ? '#d97706' : '#16a34a'
+                                                }}>
+                                                    {payment.status === 'cancelled' ? '❌ Cancelled' : payment.status === 'pending' ? '⏳ Pending' : '✅ Paid'}
+                                                </span>
+                                            </td>
+                                            <td style={tdStyle}>
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    <button
+                                                        style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
+                                                        onClick={() => { setViewingPayment(payment); setShowViewPaymentModal(true); }}
+                                                    >👁️ View</button>
+                                                    {payment.status !== 'cancelled' && (
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
+                                                            onClick={() => handlePrintReceipt(payment)}
+                                                        >🖨️ Print</button>
+                                                    )}
+                                                    {payment.status === 'pending' && (
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#dcfce7', color: '#16a34a' }}
+                                                            onClick={() => handleMarkAsPaid(payment)}
+                                                            disabled={actionLoading}
+                                                        >✓ Mark Paid</button>
+                                                    )}
+                                                    {payment.status !== 'cancelled' && (
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#fee2e2', color: '#dc2626' }}
+                                                            onClick={() => handleCancelPayment(payment)}
+                                                            disabled={actionLoading}
+                                                        >✕ Cancel</button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Commission Settings Modal */}
+            {showCommissionModal && selectedStaff && (
+                <div style={modalOverlay} onClick={() => setShowCommissionModal(false)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>⚙️ Payment Settings - {selectedStaff.name}</h2>
+                            <button onClick={() => setShowCommissionModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+                        
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Payment Type</label>
+                            <select value={commissionForm.paymentType} onChange={(e) => setCommissionForm({...commissionForm, paymentType: e.target.value})} style={selectStyle}>
+                                {PAYMENT_TYPES.map(pt => (
+                                    <option key={pt.id} value={pt.id}>{pt.icon} {pt.label}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {commissionForm.paymentType !== 'commission' && (
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Salary Amount (KES)</label>
+                                <input
+                                    type="number"
+                                    value={commissionForm.salary}
+                                    onChange={(e) => setCommissionForm({...commissionForm, salary: e.target.value})}
+                                    placeholder="Enter salary amount"
+                                    style={inputStyle}
+                                />
+                            </div>
+                        )}
+
+                        {commissionForm.paymentType === 'commission' && (
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Commission Rate (%)</label>
+                                <input
+                                    type="number"
+                                    value={commissionForm.commissionRate}
+                                    onChange={(e) => setCommissionForm({...commissionForm, commissionRate: e.target.value})}
+                                    placeholder="e.g. 10 for 10%"
+                                    style={inputStyle}
+                                    min="0"
+                                    max="100"
+                                />
+                                <p style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '6px' }}>
+                                    This percentage will be calculated from each job's service price.
+                                </p>
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowCommissionModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleUpdateCommission} disabled={actionLoading}>
+                                {actionLoading ? 'Saving...' : 'Save Settings'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Record Payment Modal */}
+            {showPaymentModal && selectedStaff && (
+                <div style={modalOverlay} onClick={() => setShowPaymentModal(false)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>💵 Record Payment - {selectedStaff.name}</h2>
+                            <button onClick={() => setShowPaymentModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+
+                        {/* Staff Summary */}
+                        <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Payment Type:</span> <strong>{selectedStaff.paymentType || 'Not Set'}</strong></div>
+                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Jobs Done:</span> <strong>{getStaffStats(selectedStaff.id, selectedStaff.name).totalJobs}</strong></div>
+                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings:</span> <strong>KES {getStaffStats(selectedStaff.id, selectedStaff.name).totalCommission.toLocaleString()}</strong></div>
+                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Pending:</span> <strong style={{ color: '#f59e0b' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).pendingCommission.toLocaleString()}</strong></div>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Period Start</label>
+                                <input type="date" value={paymentForm.periodStart} onChange={(e) => setPaymentForm({...paymentForm, periodStart: e.target.value})} style={inputStyle} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Period End</label>
+                                <input type="date" value={paymentForm.periodEnd} onChange={(e) => setPaymentForm({...paymentForm, periodEnd: e.target.value})} style={inputStyle} />
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Gross Payment Amount (KES) *</label>
+                            <input
+                                type="number"
+                                value={paymentForm.amount}
+                                onChange={(e) => setPaymentForm({...paymentForm, amount: e.target.value})}
+                                placeholder="Enter gross amount"
+                                style={inputStyle}
+                                required
+                            />
+                        </div>
+
+                        {/* Statutory Deductions Section */}
+                        <div style={{ background: isDark ? '#0f172a' : '#fef2f2', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626', marginBottom: '12px' }}>📉 Statutory Deductions</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <label style={{ ...labelStyle, fontSize: '12px' }}>P.A.Y.E (Tax)</label>
+                                    <input
+                                        type="number"
+                                        value={paymentForm.paye}
+                                        onChange={(e) => setPaymentForm({...paymentForm, paye: e.target.value})}
+                                        placeholder="0"
+                                        style={{ ...inputStyle, padding: '8px 10px' }}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={{ ...labelStyle, fontSize: '12px' }}>NHIF</label>
+                                    <input
+                                        type="number"
+                                        value={paymentForm.nhif}
+                                        onChange={(e) => setPaymentForm({...paymentForm, nhif: e.target.value})}
+                                        placeholder="0"
+                                        style={{ ...inputStyle, padding: '8px 10px' }}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={{ ...labelStyle, fontSize: '12px' }}>NSSF</label>
+                                    <input
+                                        type="number"
+                                        value={paymentForm.nssf}
+                                        onChange={(e) => setPaymentForm({...paymentForm, nssf: e.target.value})}
+                                        placeholder="0"
+                                        style={{ ...inputStyle, padding: '8px 10px' }}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={{ ...labelStyle, fontSize: '12px' }}>Other Deductions</label>
+                                    <input
+                                        type="number"
+                                        value={paymentForm.otherDeductions}
+                                        onChange={(e) => setPaymentForm({...paymentForm, otherDeductions: e.target.value})}
+                                        placeholder="0"
+                                        style={{ ...inputStyle, padding: '8px 10px' }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Net Pay Calculation Display */}
+                        {paymentForm.amount && (
+                            <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '13px' }}>
+                                    <span style={{ color: isDark ? '#94a3b8' : '#64748b' }}>Gross Amount:</span>
+                                    <span style={{ fontWeight: '600', color: '#16a34a' }}>KES {parseFloat(paymentForm.amount || 0).toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '13px' }}>
+                                    <span style={{ color: isDark ? '#94a3b8' : '#64748b' }}>Total Deductions:</span>
+                                    <span style={{ fontWeight: '600', color: '#dc2626' }}>- KES {(
+                                        (parseFloat(paymentForm.paye) || 0) + 
+                                        (parseFloat(paymentForm.nhif) || 0) + 
+                                        (parseFloat(paymentForm.nssf) || 0) + 
+                                        (parseFloat(paymentForm.otherDeductions) || 0)
+                                    ).toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', borderTop: `2px solid ${isDark ? '#334155' : '#d1fae5'}`, fontSize: '15px' }}>
+                                    <span style={{ fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>NET PAY:</span>
+                                    <span style={{ fontWeight: '700', color: '#059669', fontSize: '18px' }}>KES {(
+                                        (parseFloat(paymentForm.amount) || 0) - 
+                                        (parseFloat(paymentForm.paye) || 0) - 
+                                        (parseFloat(paymentForm.nhif) || 0) - 
+                                        (parseFloat(paymentForm.nssf) || 0) - 
+                                        (parseFloat(paymentForm.otherDeductions) || 0)
+                                    ).toLocaleString()}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Notes</label>
+                            <textarea
+                                value={paymentForm.notes}
+                                onChange={(e) => setPaymentForm({...paymentForm, notes: e.target.value})}
+                                placeholder="Payment notes..."
+                                style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowPaymentModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleRecordPayment} disabled={actionLoading || !paymentForm.amount}>
+                                {actionLoading ? 'Processing...' : 'Record Payment'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* View Payment Details Modal */}
+            {showViewPaymentModal && viewingPayment && (
+                <div style={modalOverlay} onClick={() => setShowViewPaymentModal(false)}>
+                    <div style={{ ...modalContent, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>💵 Payment Details</h2>
+                            <button onClick={() => setShowViewPaymentModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+
+                        {/* Payment Header */}
+                        <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', marginBottom: '20px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px' }}>Payslip No.</div>
+                            <div style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>#PS-{viewingPayment.id?.slice(-6).toUpperCase() || 'N/A'}</div>
+                        </div>
+
+                        {/* Employee & Period Info */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
+                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Employee</div>
+                                <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>{viewingPayment.staffName}</div>
+                            </div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
+                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Payment Type</div>
+                                <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b', textTransform: 'capitalize' }}>{viewingPayment.paymentType || 'Salary'}</div>
+                            </div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
+                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Pay Period</div>
+                                <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>
+                                    {viewingPayment.periodStart ? new Date(viewingPayment.periodStart).toLocaleDateString('en-GB') : '-'} to {viewingPayment.periodEnd ? new Date(viewingPayment.periodEnd).toLocaleDateString('en-GB') : '-'}
+                                </div>
+                            </div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
+                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Payment Date</div>
+                                <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>
+                                    {new Date(viewingPayment.paidAt || viewingPayment.createdAt).toLocaleDateString('en-GB')}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Earnings Section */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: '600', color: '#16a34a', marginBottom: '8px', textTransform: 'uppercase' }}>📈 Earnings</div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', borderRadius: '0', overflow: 'hidden' }}>
+                                {viewingPayment.baseSalary > 0 && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Base Salary</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>KES {(viewingPayment.baseSalary || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {viewingPayment.totalCommission > 0 && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Commission ({viewingPayment.jobsCount || 0} jobs)</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>KES {(viewingPayment.totalCommission || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#1e3a5f20' : '#dcfce7' }}>
+                                    <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>GROSS EARNINGS</span>
+                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#16a34a' }}>KES {(viewingPayment.grossAmount || viewingPayment.amount || 0).toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Deductions Section */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: '600', color: '#dc2626', marginBottom: '8px', textTransform: 'uppercase' }}>📉 Deductions</div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', borderRadius: '0', overflow: 'hidden' }}>
+                                {(viewingPayment.paye > 0) && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>P.A.Y.E (Tax)</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.paye || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {(viewingPayment.nhif > 0) && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NHIF</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.nhif || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {(viewingPayment.nssf > 0) && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NSSF</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.nssf || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {(viewingPayment.otherDeductions > 0) && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Other Deductions</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.otherDeductions || 0).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {(!viewingPayment.paye && !viewingPayment.nhif && !viewingPayment.nssf && !viewingPayment.otherDeductions && (viewingPayment.totalDeductions || 0) === 0) && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>No deductions</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b' }}>KES 0</span>
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#7f1d1d20' : '#fee2e2' }}>
+                                    <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>TOTAL DEDUCTIONS</span>
+                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#dc2626' }}>- KES {(viewingPayment.totalDeductions || 0).toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Net Pay */}
+                        <div style={{ background: '#1e3a5f', padding: '16px', borderRadius: '0', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '14px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>NET PAY</span>
+                            <span style={{ fontSize: '24px', fontWeight: '700', color: 'white' }}>KES {(viewingPayment.amount || 0).toLocaleString()}</span>
+                        </div>
+
+                        {/* Notes */}
+                        {viewingPayment.notes && (
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '12px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b', marginBottom: '6px' }}>Notes</div>
+                                <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0', fontSize: '13px', color: isDark ? '#f1f5f9' : '#1e293b' }}>
+                                    {viewingPayment.notes}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowViewPaymentModal(false)}>Close</button>
+                            <button style={btnPrimary} onClick={() => { handlePrintReceipt(viewingPayment); }}>
+                                🖨️ Print Payslip
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Staff History Modal */}
+            {showHistoryModal && selectedStaff && (
+                <div style={modalOverlay} onClick={() => setShowHistoryModal(false)}>
+                    <div style={{ ...modalContent, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>📋 Work History - {selectedStaff.name}</h2>
+                            <button onClick={() => setShowHistoryModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+
+                        {/* Stats Summary */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                            <div style={{ background: isDark ? '#0f172a' : '#f0f9ff', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#3b82f6' }}>{getStaffStats(selectedStaff.id, selectedStaff.name).totalJobs}</div>
+                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Jobs</div>
+                            </div>
+                            <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).totalCommission.toLocaleString()}</div>
+                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings</div>
+                            </div>
+                            <div style={{ background: isDark ? '#0f172a' : '#fffbeb', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).pendingCommission.toLocaleString()}</div>
+                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Pending</div>
+                            </div>
+                        </div>
+
+                        {/* Work List */}
+                        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                            <table style={tableStyle}>
+                                <thead>
+                                    <tr>
+                                        <th style={thStyle}>Date</th>
+                                        <th style={thStyle}>Source</th>
+                                        <th style={thStyle}>Service</th>
+                                        <th style={thStyle}>Vehicle</th>
+                                        <th style={thStyle}>Price</th>
+                                        <th style={thStyle}>Commission</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {getStaffStats(selectedStaff.id, selectedStaff.name).workHistory.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="6" style={{ ...tdStyle, textAlign: 'center', padding: '30px' }}>
+                                                <p>No work history found</p>
+                                                <p style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Jobs will appear here when {selectedStaff.name} completes work in Wash Bays or Garage</p>
+                                            </td>
+                                        </tr>
+                                    ) : getStaffStats(selectedStaff.id, selectedStaff.name).workHistory.map(w => {
+                                        const sourceLabel = w.source === 'washbay' ? '🚿 Wash' : w.source === 'garage' ? '🔧 Garage' : '📝 Manual';
+                                        return (
+                                            <tr key={w.id}>
+                                                <td style={tdStyle}>{new Date(w.completedAt).toLocaleDateString()}</td>
+                                                <td style={tdStyle}><span style={{ fontSize: '12px' }}>{sourceLabel}</span></td>
+                                                <td style={tdStyle}>{w.serviceName}</td>
+                                                <td style={tdStyle}>
+                                                    <span style={{ fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b', background: isDark ? '#334155' : '#f1f5f9', padding: '2px 8px', fontSize: '12px' }}>
+                                                        {w.vehiclePlate || '-'}
+                                                    </span>
+                                                </td>
+                                                <td style={tdStyle}>KES {(w.servicePrice || 0).toLocaleString()}</td>
+                                                <td style={tdStyle}>
+                                                    <span style={{ color: '#10b981', fontWeight: '600' }}>KES {(w.commissionAmount || 0).toLocaleString()}</span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                            <button style={btnSecondary} onClick={() => setShowHistoryModal(false)}>Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Work Entry Modal */}
+            {showAddWorkModal && (
+                <div style={modalOverlay} onClick={() => setShowAddWorkModal(false)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>➕ Add Work Entry</h2>
+                            <button onClick={() => setShowAddWorkModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Staff Member *</label>
+                            <select value={workForm.staffId} onChange={(e) => setWorkForm({...workForm, staffId: e.target.value})} style={selectStyle} required>
+                                <option value="">Select staff...</option>
+                                {staffList.map(staff => (
+                                    <option key={staff.id} value={staff.id}>{staff.name} ({staff.role})</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Job Type</label>
+                            <select value={workForm.jobType} onChange={(e) => setWorkForm({...workForm, jobType: e.target.value})} style={selectStyle}>
+                                {JOB_TYPES.map(jt => (
+                                    <option key={jt.id} value={jt.id}>{jt.icon} {jt.label}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Vehicle Plate</label>
+                                <input
+                                    type="text"
+                                    value={workForm.vehiclePlate}
+                                    onChange={(e) => setWorkForm({...workForm, vehiclePlate: e.target.value.toUpperCase()})}
+                                    placeholder="e.g. KAA 123X"
+                                    style={inputStyle}
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Customer Name</label>
+                                <input
+                                    type="text"
+                                    value={workForm.customerName}
+                                    onChange={(e) => setWorkForm({...workForm, customerName: e.target.value})}
+                                    placeholder="Customer name"
+                                    style={inputStyle}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Service/Work Description *</label>
+                            <input
+                                type="text"
+                                value={workForm.serviceName}
+                                onChange={(e) => setWorkForm({...workForm, serviceName: e.target.value})}
+                                placeholder="e.g. Full Wash, Interior Cleaning"
+                                style={inputStyle}
+                                required
+                            />
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Service Price (KES) *</label>
+                            <input
+                                type="number"
+                                value={workForm.servicePrice}
+                                onChange={(e) => setWorkForm({...workForm, servicePrice: e.target.value})}
+                                placeholder="Service price"
+                                style={inputStyle}
+                                required
+                            />
+                            {workForm.staffId && (
+                                <p style={{ fontSize: '12px', color: '#10b981', marginTop: '6px' }}>
+                                    Commission: KES {(((parseFloat(workForm.servicePrice) || 0) * (staffList.find(s => s.id === workForm.staffId)?.commissionRate || 0)) / 100).toLocaleString()} 
+                                    ({staffList.find(s => s.id === workForm.staffId)?.commissionRate || 0}%)
+                                </p>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowAddWorkModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleAddWork} disabled={actionLoading || !workForm.staffId || !workForm.serviceName || !workForm.servicePrice}>
+                                {actionLoading ? 'Adding...' : 'Add Work Entry'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirm Action Modal */}
+            {showConfirmModal && (
+                <div style={modalOverlay} onClick={() => setShowConfirmModal(false)}>
+                    <div style={{ ...modalContent, maxWidth: '400px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+                        <h2 style={{ margin: '0 0 12px 0', fontSize: '18px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>
+                            {confirmAction.title}
+                        </h2>
+                        <p style={{ margin: '0 0 24px 0', fontSize: '14px', color: isDark ? '#94a3b8' : '#64748b', lineHeight: '1.5' }}>
+                            {confirmAction.message}
+                        </p>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                            <button 
+                                style={{ ...btnSecondary, padding: '12px 24px' }} 
+                                onClick={() => setShowConfirmModal(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                style={{ ...btnPrimary, padding: '12px 24px', background: '#dc2626' }} 
+                                onClick={executeConfirmedAction}
+                                disabled={actionLoading}
+                            >
+                                {actionLoading ? 'Processing...' : 'Confirm'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ==================== BILLING MODULE COMPONENT ====================
 function BillingModule() {
     const [activeTab, setActiveTab] = useState('paid');
@@ -13616,6 +15251,7 @@ function StaffManagement() {
         { id: 'customers', label: 'Customer Management', icon: '👥', category: 'Customer Relations' },
         { id: 'fleet', label: 'Fleet Accounts', icon: '🚛', category: 'Customer Relations' },
         { id: 'staff', label: 'Staff Management', icon: '👷', category: 'Staff' },
+        { id: 'hr', label: 'HR Statistics', icon: '👥', category: 'Human Resources' },
         { id: 'billing', label: 'Billing & Payments', icon: '💳', category: 'Financial' },
         { id: 'expenses', label: 'Expenses', icon: '📉', category: 'Financial' },
         { id: 'inventory', label: 'Inventory Management', icon: '📋', category: 'Financial' },
@@ -14412,12 +16048,25 @@ function InventoryModule() {
     const [usageNotes, setUsageNotes] = useState('');
     const [message, setMessage] = useState({ type: '', text: '' });
     const [formData, setFormData] = useState({ name: '', category: '', quantity: '', minStock: '', unit: '', cost: '', usageAlertDays: '7' });
+    const [showExportMenu, setShowExportMenu] = useState(false);
+    const exportMenuRef = React.useRef(null);
 
     const { inventoryService } = window.FirebaseServices;
 
     // Load items
     useEffect(() => {
         loadItems();
+    }, []);
+
+    // Close export menu when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+                setShowExportMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
     const loadItems = async () => {
@@ -14530,8 +16179,6 @@ function InventoryModule() {
         };
         return styles[alert.level];
     };
-
-    const [showExportMenu, setShowExportMenu] = useState(false);
 
     const exportExcel = () => {
         let html = '<html><head><meta charset="UTF-8"></head><body>';
@@ -14689,7 +16336,7 @@ function InventoryModule() {
                     </select>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
-                    <div style={{ position: 'relative' }}>
+                    <div style={{ position: 'relative' }} ref={exportMenuRef}>
                         <button onClick={() => setShowExportMenu(!showExportMenu)} style={btnSecondary}>📥 Export ▾</button>
                         {showExportMenu && (
                             <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, minWidth: '140px' }}>
@@ -18139,6 +19786,7 @@ function ContentArea({ activeModule, onModuleClick, settingsTab }) {
                 {activeModule === 'garage-management' && <GarageManagement />}
                 {activeModule === 'wash-bays' && <WashBays />}
                 {activeModule === 'staff' && <StaffManagement />}
+                {activeModule === 'hr' && <HRModule />}
                 {activeModule === 'billing' && <BillingModule />}
                 {activeModule === 'inventory' && <InventoryModule />}
                 {activeModule === 'expenses' && <ExpensesModule />}

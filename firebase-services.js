@@ -1113,6 +1113,10 @@ export const staffService = {
         department: staffData.department || 'Operations',
         hireDate: staffData.hireDate || new Date().toISOString().split('T')[0],
         hourlyRate: staffData.hourlyRate || 0,
+        // HR Payment Fields
+        paymentType: staffData.paymentType || 'monthly', // monthly, weekly, daily, commission
+        salary: staffData.salary || 0,
+        commissionRate: staffData.commissionRate || 0, // percentage for commission-based
         emergencyContact: staffData.emergencyContact || '',
         notes: staffData.notes || '',
         status: 'active',
@@ -2194,7 +2198,7 @@ const DEFAULT_ROLES = {
   admin: {
     name: 'Administrator',
     description: 'Full access to all modules and features',
-    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'expenses', 'billing', 'inventory', 'reports', 'activities', 'marketing', 'settings', 'users'],
+    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'hr', 'expenses', 'billing', 'inventory', 'reports', 'activities', 'marketing', 'settings', 'users'],
     permissions: {
       canCreate: true,
       canEdit: true,
@@ -2210,7 +2214,7 @@ const DEFAULT_ROLES = {
   manager: {
     name: 'Manager',
     description: 'Manage operations and staff',
-    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'expenses', 'billing', 'inventory', 'reports', 'activities'],
+    modules: ['dashboard', 'vehicle-intake', 'service-packages', 'garage-management', 'wash-bays', 'equipment', 'customers', 'fleet', 'staff', 'hr', 'expenses', 'billing', 'inventory', 'reports', 'activities'],
     permissions: {
       canCreate: true,
       canEdit: true,
@@ -3269,6 +3273,218 @@ const expensesService = {
   }
 };
 
+// ==================== HR SERVICE ====================
+export const hrService = {
+  // Assign staff to a job/wash
+  async assignStaffToJob(jobData) {
+    try {
+      const assignmentId = Date.now().toString();
+      const assignmentRef = ref(realtimeDb, `hrAssignments/${assignmentId}`);
+      await set(assignmentRef, {
+        id: assignmentId,
+        staffId: jobData.staffId,
+        staffName: jobData.staffName,
+        jobType: jobData.jobType || 'wash', // wash, garage, detail, other
+        vehiclePlate: jobData.vehiclePlate || '',
+        customerName: jobData.customerName || '',
+        serviceId: jobData.serviceId || '',
+        serviceName: jobData.serviceName || '',
+        servicePrice: jobData.servicePrice || 0,
+        commissionRate: jobData.commissionRate || 0,
+        commissionAmount: jobData.commissionAmount || 0,
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+      return { success: true, id: assignmentId };
+    } catch (error) {
+      console.error('Error assigning staff to job:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all staff assignments/work history
+  async getStaffAssignments(staffId = null) {
+    try {
+      const assignmentsRef = ref(realtimeDb, 'hrAssignments');
+      const snapshot = await get(assignmentsRef);
+      const data = snapshot.val();
+      if (data) {
+        let assignments = Object.values(data);
+        if (staffId) {
+          assignments = assignments.filter(a => a.staffId === staffId);
+        }
+        assignments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return { success: true, data: assignments };
+      }
+      return { success: true, data: [] };
+    } catch (error) {
+      console.error('Error getting staff assignments:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to staff assignments (real-time)
+  subscribeToAssignments(callback, staffId = null) {
+    const assignmentsRef = ref(realtimeDb, 'hrAssignments');
+    return onValue(assignmentsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        let assignments = Object.values(data);
+        if (staffId) {
+          assignments = assignments.filter(a => a.staffId === staffId);
+        }
+        assignments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        callback(assignments);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Record a payment to staff
+  async recordPayment(paymentData) {
+    try {
+      const paymentId = Date.now().toString();
+      const paymentRef = ref(realtimeDb, `hrPayments/${paymentId}`);
+      await set(paymentRef, {
+        id: paymentId,
+        staffId: paymentData.staffId,
+        staffName: paymentData.staffName,
+        paymentType: paymentData.paymentType, // salary, commission, bonus
+        grossAmount: paymentData.grossAmount || paymentData.amount,
+        amount: paymentData.amount,
+        periodStart: paymentData.periodStart || '',
+        periodEnd: paymentData.periodEnd || '',
+        jobsCount: paymentData.jobsCount || 0,
+        totalCommission: paymentData.totalCommission || 0,
+        baseSalary: paymentData.baseSalary || 0,
+        paye: paymentData.paye || 0,
+        nhif: paymentData.nhif || 0,
+        nssf: paymentData.nssf || 0,
+        otherDeductions: paymentData.otherDeductions || 0,
+        totalDeductions: paymentData.totalDeductions || 0,
+        deductions: paymentData.deductions || 0,
+        notes: paymentData.notes || '',
+        status: 'paid',
+        paidAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+      return { success: true, id: paymentId };
+    } catch (error) {
+      console.error('Error recording payment:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update a payment (for cancel/status change)
+  async updatePayment(paymentId, updateData) {
+    try {
+      const paymentRef = ref(realtimeDb, `hrPayments/${paymentId}`);
+      const snapshot = await get(paymentRef);
+      if (!snapshot.exists()) {
+        return { success: false, error: 'Payment not found' };
+      }
+      const currentData = snapshot.val();
+      await set(paymentRef, {
+        ...currentData,
+        ...updateData,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating payment:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get payment history
+  async getPayments(staffId = null) {
+    try {
+      const paymentsRef = ref(realtimeDb, 'hrPayments');
+      const snapshot = await get(paymentsRef);
+      const data = snapshot.val();
+      if (data) {
+        let payments = Object.values(data);
+        if (staffId) {
+          payments = payments.filter(p => p.staffId === staffId);
+        }
+        payments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return { success: true, data: payments };
+      }
+      return { success: true, data: [] };
+    } catch (error) {
+      console.error('Error getting payments:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to payments (real-time)
+  subscribeToPayments(callback, staffId = null) {
+    const paymentsRef = ref(realtimeDb, 'hrPayments');
+    return onValue(paymentsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        let payments = Object.values(data);
+        if (staffId) {
+          payments = payments.filter(p => p.staffId === staffId);
+        }
+        payments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        callback(payments);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Get staff statistics (jobs count, earnings, etc.)
+  async getStaffStats(staffId, periodStart = null, periodEnd = null) {
+    try {
+      const assignmentsResult = await this.getStaffAssignments(staffId);
+      const paymentsResult = await this.getPayments(staffId);
+      
+      let assignments = assignmentsResult.data || [];
+      let payments = paymentsResult.data || [];
+      
+      // Filter by period if provided
+      if (periodStart && periodEnd) {
+        const start = new Date(periodStart);
+        const end = new Date(periodEnd);
+        end.setHours(23, 59, 59, 999);
+        
+        assignments = assignments.filter(a => {
+          const date = new Date(a.createdAt);
+          return date >= start && date <= end;
+        });
+        
+        payments = payments.filter(p => {
+          const date = new Date(p.createdAt);
+          return date >= start && date <= end;
+        });
+      }
+      
+      const totalJobs = assignments.length;
+      const totalCommission = assignments.reduce((sum, a) => sum + (parseFloat(a.commissionAmount) || 0), 0);
+      const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+      
+      return {
+        success: true,
+        data: {
+          totalJobs,
+          totalCommission,
+          totalPaid,
+          pendingCommission: totalCommission - totalPaid,
+          assignments,
+          payments
+        }
+      };
+    } catch (error) {
+      console.error('Error getting staff stats:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
 // ==================== MAKE SERVICES GLOBALLY AVAILABLE ====================
 
 // Attach to window for use in non-module scripts (React via Babel)
@@ -3297,6 +3513,8 @@ if (typeof window !== 'undefined') {
     userService,
     // Staff Management
     staffService,
+    // HR Service
+    hrService,
     // Audit Trail
     auditService,
     // Original Services
