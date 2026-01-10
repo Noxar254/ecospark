@@ -445,6 +445,206 @@ const Icons = {
     printer: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
 };
 
+// ==================== ALERT MODAL COMPONENT ====================
+// Reusable modal for alerts, confirmations, and notifications
+function AlertModal({ isOpen, onClose, title, message, type = 'info', confirmText = 'OK', cancelText = 'Cancel', onConfirm, showCancel = false }) {
+    if (!isOpen) return null;
+
+    const typeConfig = {
+        success: {
+            icon: (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="#dcfce7" stroke="#22c55e" strokeWidth="2"/>
+                    <path d="M8 12l2.5 2.5L16 9" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+            ),
+            accentColor: '#22c55e',
+            bgGradient: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
+        },
+        error: {
+            icon: (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="#fee2e2" stroke="#ef4444" strokeWidth="2"/>
+                    <path d="M15 9l-6 6M9 9l6 6" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round"/>
+                </svg>
+            ),
+            accentColor: '#ef4444',
+            bgGradient: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)'
+        },
+        warning: {
+            icon: (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="#fef3c7" stroke="#f59e0b" strokeWidth="2"/>
+                    <path d="M12 8v4M12 16h.01" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round"/>
+                </svg>
+            ),
+            accentColor: '#f59e0b',
+            bgGradient: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)'
+        },
+        info: {
+            icon: (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="#dbeafe" stroke="#3b82f6" strokeWidth="2"/>
+                    <path d="M12 16v-4M12 8h.01" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round"/>
+                </svg>
+            ),
+            accentColor: '#3b82f6',
+            bgGradient: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)'
+        },
+        loyalty: {
+            icon: (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="#fae8ff" stroke="#a855f7" strokeWidth="2"/>
+                    <path d="M12 2l2.4 7.4h7.6l-6 4.6 2.3 7-6.3-4.6-6.3 4.6 2.3-7-6-4.6h7.6z" fill="#a855f7" stroke="#a855f7" strokeWidth="1"/>
+                </svg>
+            ),
+            accentColor: '#a855f7',
+            bgGradient: 'linear-gradient(135deg, #fdf4ff 0%, #fae8ff 100%)'
+        }
+    };
+
+    const config = typeConfig[type] || typeConfig.info;
+
+    const handleConfirm = () => {
+        if (onConfirm) {
+            onConfirm();
+        }
+        onClose();
+    };
+
+    return (
+        <div 
+            className="alert-modal-overlay" 
+            onClick={onClose}
+            style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10000,
+                animation: 'alertFadeIn 0.2s ease-out'
+            }}
+        >
+            <div 
+                className="alert-modal-content"
+                onClick={e => e.stopPropagation()}
+                style={{
+                    background: 'white',
+                    borderRadius: '16px',
+                    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+                    maxWidth: '400px',
+                    width: '90%',
+                    overflow: 'hidden',
+                    animation: 'alertSlideIn 0.3s ease-out'
+                }}
+            >
+                {/* Icon Section */}
+                <div style={{
+                    background: config.bgGradient,
+                    padding: '32px 24px 24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    borderBottom: `3px solid ${config.accentColor}`
+                }}>
+                    <div style={{ marginBottom: '16px' }}>
+                        {config.icon}
+                    </div>
+                    {title && (
+                        <h3 style={{
+                            margin: 0,
+                            fontSize: '20px',
+                            fontWeight: '700',
+                            color: '#1e293b',
+                            textAlign: 'center'
+                        }}>
+                            {title}
+                        </h3>
+                    )}
+                </div>
+
+                {/* Message Section */}
+                <div style={{ padding: '24px' }}>
+                    <p style={{
+                        margin: 0,
+                        fontSize: '15px',
+                        lineHeight: '1.6',
+                        color: '#475569',
+                        textAlign: 'center',
+                        whiteSpace: 'pre-line'
+                    }}>
+                        {message}
+                    </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{
+                    padding: '16px 24px 24px',
+                    display: 'flex',
+                    gap: '12px',
+                    justifyContent: 'center'
+                }}>
+                    {showCancel && (
+                        <button
+                            onClick={onClose}
+                            style={{
+                                padding: '12px 24px',
+                                borderRadius: '10px',
+                                border: '1px solid #e2e8f0',
+                                background: 'white',
+                                color: '#64748b',
+                                fontSize: '14px',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                minWidth: '100px'
+                            }}
+                            onMouseOver={e => e.target.style.background = '#f8fafc'}
+                            onMouseOut={e => e.target.style.background = 'white'}
+                        >
+                            {cancelText}
+                        </button>
+                    )}
+                    <button
+                        onClick={handleConfirm}
+                        style={{
+                            padding: '12px 24px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            background: config.accentColor,
+                            color: 'white',
+                            fontSize: '14px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            minWidth: '100px',
+                            boxShadow: `0 4px 12px ${config.accentColor}40`
+                        }}
+                        onMouseOver={e => e.target.style.transform = 'translateY(-1px)'}
+                        onMouseOut={e => e.target.style.transform = 'translateY(0)'}
+                    >
+                        {confirmText}
+                    </button>
+                </div>
+            </div>
+
+            <style>{`
+                @keyframes alertFadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes alertSlideIn {
+                    from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+                    to { opacity: 1; transform: scale(1) translateY(0); }
+                }
+            `}</style>
+        </div>
+    );
+}
+
 // Menu items configuration with categories
 const menuGroups = [
     {
@@ -1565,6 +1765,32 @@ function VehicleIntake() {
     const [plateSearchResults, setPlateSearchResults] = useState([]); // Search results for existing vehicles
     const [showPlateSearchResults, setShowPlateSearchResults] = useState(false);
     const [selectedExistingVehicle, setSelectedExistingVehicle] = useState(null);
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    // Helper to show alert modal
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({
+            isOpen: true,
+            title,
+            message,
+            type,
+            onConfirm,
+            showCancel
+        });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
 
     // Generate next auto-ID for non-vehicle categories
     const generateNextId = (category) => {
@@ -2073,9 +2299,13 @@ function VehicleIntake() {
             // Show loyalty points notification if awarded
             if (result.loyaltyPointsAwarded > 0 && result.customerFound) {
                 const rewardMsg = result.qualifiesForReward 
-                    ? ` 🎁 Customer now qualifies for a reward!` 
+                    ? `\n\n🎁 Customer now qualifies for a reward!` 
                     : '';
-                alert(`🎯 Loyalty Points Awarded!\n\n+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`);
+                showAlert(
+                    'Loyalty Points Awarded!',
+                    `+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`,
+                    'loyalty'
+                );
             }
 
             // Update bay status
@@ -2142,9 +2372,13 @@ function VehicleIntake() {
             // Show loyalty points notification if awarded
             if (result.loyaltyPointsAwarded > 0 && result.customerFound) {
                 const rewardMsg = result.qualifiesForReward 
-                    ? ` 🎁 Customer now qualifies for a reward!` 
+                    ? `\n\n🎁 Customer now qualifies for a reward!` 
                     : '';
-                alert(`🎯 Loyalty Points Awarded!\n\n+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`);
+                showAlert(
+                    'Loyalty Points Awarded!',
+                    `+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`,
+                    'loyalty'
+                );
             }
         } catch (err) {
             console.error('Error sending to garage:', err);
@@ -2165,7 +2399,7 @@ function VehicleIntake() {
         console.log('intakeRecordsService:', !!svc?.intakeRecordsService);
         
         if (!svc?.intakeRecordsService) {
-            alert('Firebase not ready. Please refresh the page.');
+            showAlert('Connection Error', 'Firebase not ready. Please refresh the page.', 'error');
             return;
         }
         
@@ -2219,7 +2453,7 @@ function VehicleIntake() {
         } catch (err) {
             console.error('FAILED:', err);
             setError('Complete failed: ' + err.message);
-            alert('Failed to complete: ' + err.message);
+            showAlert('Action Failed', 'Failed to complete: ' + err.message, 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2232,7 +2466,7 @@ function VehicleIntake() {
         
         const svc = window.FirebaseServices;
         if (!svc?.intakeRecordsService) {
-            alert('Firebase not ready. Please refresh the page.');
+            showAlert('Connection Error', 'Firebase not ready. Please refresh the page.', 'error');
             return;
         }
         
@@ -2285,7 +2519,7 @@ function VehicleIntake() {
         } catch (err) {
             console.error('FAILED:', err);
             setError('Status change failed: ' + err.message);
-            alert('Failed: ' + err.message);
+            showAlert('Action Failed', 'Failed to update status: ' + err.message, 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2523,26 +2757,33 @@ function VehicleIntake() {
 
     // Delete vehicle record
     const handleDeleteRecord = async (vehicle) => {
-        if (!confirm('Are you sure you want to delete this record?')) return;
-        
-        const services = window.FirebaseServices;
-        if (!services) {
-            setError('Firebase not ready. Please try again.');
-            return;
-        }
-        
-        setActionLoading(true);
-        try {
-            await services.intakeRecordsService.deleteRecord(vehicle.id);
-            console.log('✅ Vehicle record deleted:', vehicle.id);
-            setShowViewModal(false);
-            setSelectedVehicle(null);
-        } catch (err) {
-            console.error('Error deleting record:', err);
-            setError('Failed to delete record. Please try again.');
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Confirm Delete',
+            'Are you sure you want to delete this record? This action cannot be undone.',
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                if (!services) {
+                    setError('Firebase not ready. Please try again.');
+                    return;
+                }
+                
+                setActionLoading(true);
+                try {
+                    await services.intakeRecordsService.deleteRecord(vehicle.id);
+                    console.log('✅ Vehicle record deleted:', vehicle.id);
+                    setShowViewModal(false);
+                    setSelectedVehicle(null);
+                    showAlert('Deleted', 'Record has been successfully deleted.', 'success');
+                } catch (err) {
+                    console.error('Error deleting record:', err);
+                    setError('Failed to delete record. Please try again.');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true // showCancel
+        );
     };
 
     // Clear error message
@@ -3954,6 +4195,17 @@ function VehicleIntake() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -4352,6 +4604,24 @@ function EquipmentManagement() {
     const [selectedEquipment, setSelectedEquipment] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [error, setError] = useState(null);
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
     const [activeTab, setActiveTab] = useState('all'); // all, due, overdue
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
 
@@ -4570,19 +4840,27 @@ function EquipmentManagement() {
     };
 
     const handleDeleteEquipment = async (equipmentItem) => {
-        if (!confirm(`Are you sure you want to delete "${equipmentItem.name}"?`)) return;
-        
-        const services = window.FirebaseServices;
-        if (!services) return;
+        showAlert(
+            'Delete Equipment',
+            `Are you sure you want to delete "${equipmentItem.name}"? This action cannot be undone.`,
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                if (!services) return;
 
-        setActionLoading(true);
-        try {
-            await services.equipmentService.deleteEquipment(equipmentItem.id);
-        } catch (err) {
-            setError('Failed to delete equipment');
-        } finally {
-            setActionLoading(false);
-        }
+                setActionLoading(true);
+                try {
+                    await services.equipmentService.deleteEquipment(equipmentItem.id);
+                    showAlert('Deleted', 'Equipment has been successfully deleted.', 'success');
+                } catch (err) {
+                    setError('Failed to delete equipment');
+                    showAlert('Error', 'Failed to delete equipment. Please try again.', 'error');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     const handleTransfer = async (e) => {
@@ -5407,6 +5685,17 @@ function EquipmentManagement() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -5432,6 +5721,24 @@ function FleetAccounts() {
     const [successMessage, setSuccessMessage] = useState(null);
     const [error, setError] = useState(null);
     const [stats, setStats] = useState({ total: 0, active: 0, suspended: 0, totalVehicles: 0, totalBalance: 0, totalSpent: 0, totalServices: 0, totalExpenditures: 0 });
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
 
     const [accountForm, setAccountForm] = useState({
         companyName: '', contactPerson: '', phone: '', email: '', address: '',
@@ -5550,14 +5857,21 @@ function FleetAccounts() {
     };
 
     const handleDeleteAccount = async (account) => {
-        if (!confirm(`Delete fleet account "${account.companyName}"? This cannot be undone.`)) return;
-        const services = window.FirebaseServices;
-        const result = await services.fleetService.deleteAccount(account.id);
-        if (result.success) {
-            setSuccessMessage('Account deleted');
-        } else {
-            setError(result.error);
-        }
+        showAlert(
+            'Delete Fleet Account',
+            `Delete fleet account "${account.companyName}"? This action cannot be undone.`,
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                const result = await services.fleetService.deleteAccount(account.id);
+                if (result.success) {
+                    setSuccessMessage('Account deleted');
+                } else {
+                    setError(result.error);
+                }
+            },
+            true
+        );
     };
 
     const handleAddVehicle = async () => {
@@ -5582,16 +5896,23 @@ function FleetAccounts() {
     };
 
     const handleRemoveVehicle = async (vehicleId) => {
-        if (!confirm('Remove this vehicle from the fleet?')) return;
-        const services = window.FirebaseServices;
-        const result = await services.fleetService.removeVehicle(selectedAccount.id, vehicleId);
-        if (result.success) {
-            setSuccessMessage('Vehicle removed');
-            const accResult = await services.fleetService.getAccount(selectedAccount.id);
-            if (accResult.success) setSelectedAccount(accResult.data);
-        } else {
-            setError(result.error);
-        }
+        showAlert(
+            'Remove Vehicle',
+            'Remove this vehicle from the fleet?',
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                const result = await services.fleetService.removeVehicle(selectedAccount.id, vehicleId);
+                if (result.success) {
+                    setSuccessMessage('Vehicle removed');
+                    const accResult = await services.fleetService.getAccount(selectedAccount.id);
+                    if (accResult.success) setSelectedAccount(accResult.data);
+                } else {
+                    setError(result.error);
+                }
+            },
+            true
+        );
     };
 
     const handleAddContact = async () => {
@@ -5615,16 +5936,23 @@ function FleetAccounts() {
     };
 
     const handleRemoveContact = async (contactId) => {
-        if (!confirm('Remove this contact?')) return;
-        const services = window.FirebaseServices;
-        const result = await services.fleetService.removeContact(selectedAccount.id, contactId);
-        if (result.success) {
-            setSuccessMessage('Contact removed');
-            const accResult = await services.fleetService.getAccount(selectedAccount.id);
-            if (accResult.success) setSelectedAccount(accResult.data);
-        } else {
-            setError(result.error);
-        }
+        showAlert(
+            'Remove Contact',
+            'Remove this contact from the account?',
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                const result = await services.fleetService.removeContact(selectedAccount.id, contactId);
+                if (result.success) {
+                    setSuccessMessage('Contact removed');
+                    const accResult = await services.fleetService.getAccount(selectedAccount.id);
+                    if (accResult.success) setSelectedAccount(accResult.data);
+                } else {
+                    setError(result.error);
+                }
+            },
+            true
+        );
     };
 
     const handleTopUp = async () => {
@@ -5695,16 +6023,23 @@ function FleetAccounts() {
     };
 
     const handleDeleteExpenditure = async (expId) => {
-        if (!confirm('Delete this expenditure?')) return;
-        const services = window.FirebaseServices;
-        const result = await services.fleetService.deleteExpenditure(selectedAccount.id, expId);
-        if (result.success) {
-            setSuccessMessage('Expenditure deleted');
-            const accResult = await services.fleetService.getAccount(selectedAccount.id);
-            if (accResult.success) setSelectedAccount(accResult.data);
-        } else {
-            setError(result.error);
-        }
+        showAlert(
+            'Delete Expenditure',
+            'Delete this expenditure record?',
+            'warning',
+            async () => {
+                const services = window.FirebaseServices;
+                const result = await services.fleetService.deleteExpenditure(selectedAccount.id, expId);
+                if (result.success) {
+                    setSuccessMessage('Expenditure deleted');
+                    const accResult = await services.fleetService.getAccount(selectedAccount.id);
+                    if (accResult.success) setSelectedAccount(accResult.data);
+                } else {
+                    setError(result.error);
+                }
+            },
+            true
+        );
     };
 
     const openEditExpenditure = (exp) => {
@@ -6654,6 +6989,17 @@ function FleetAccounts() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -6679,6 +7025,24 @@ function CustomerManagement() {
     const [activeTab, setActiveTab] = useState('customers'); // 'customers', 'reminders', or 'rewards'
     const [showRewardModal, setShowRewardModal] = useState(false);
     const [rewardCustomer, setRewardCustomer] = useState(null);
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
     const [loyaltySettings, setLoyaltySettings] = useState({
         pointsPerVisit: 1,
         pointsPerRand: 0.1,
@@ -6974,17 +7338,24 @@ function CustomerManagement() {
 
     // Cancel pending reward
     const handleCancelReward = async (customer) => {
-        if (!confirm('Are you sure you want to cancel this pending reward?')) return;
-        setActionLoading(true);
-        try {
-            const services = window.FirebaseServices;
-            await services.customerService.updateCustomer(customer.id, {
-                pendingReward: null
-            });
-        } catch (err) {
-            setError('Failed to cancel reward');
-        }
-        setActionLoading(false);
+        showAlert(
+            'Cancel Reward',
+            'Are you sure you want to cancel this pending reward?',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    await services.customerService.updateCustomer(customer.id, {
+                        pendingReward: null
+                    });
+                } catch (err) {
+                    setError('Failed to cancel reward');
+                }
+                setActionLoading(false);
+            },
+            true
+        );
     };
 
     // Get formatted reward message for customer
@@ -7174,15 +7545,22 @@ function CustomerManagement() {
 
     // Handle delete customer
     const handleDeleteCustomer = async (customerId) => {
-        if (!confirm('Are you sure you want to delete this customer?')) return;
-        setActionLoading(true);
-        try {
-            const services = window.FirebaseServices;
-            await services.customerService.deleteCustomer(customerId);
-        } catch (err) {
-            setError('Failed to delete customer');
-        }
-        setActionLoading(false);
+        showAlert(
+            'Delete Customer',
+            'Are you sure you want to delete this customer? This action cannot be undone.',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    await services.customerService.deleteCustomer(customerId);
+                } catch (err) {
+                    setError('Failed to delete customer');
+                }
+                setActionLoading(false);
+            },
+            true
+        );
     };
 
     // Handle add vehicle to customer
@@ -7208,18 +7586,25 @@ function CustomerManagement() {
 
     // Handle remove vehicle from customer
     const handleRemoveVehicle = async (plateNumber) => {
-        if (!confirm('Are you sure you want to remove this vehicle?')) return;
-        setActionLoading(true);
-        try {
-            const services = window.FirebaseServices;
-            await services.customerService.removeVehicleFromCustomer(selectedCustomer.id, plateNumber);
-            // Refresh selected customer
-            const updated = customers.find(c => c.id === selectedCustomer.id);
-            if (updated) setSelectedCustomer(updated);
-        } catch (err) {
-            setError('Failed to remove vehicle');
-        }
-        setActionLoading(false);
+        showAlert(
+            'Remove Vehicle',
+            'Are you sure you want to remove this vehicle from the customer?',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    await services.customerService.removeVehicleFromCustomer(selectedCustomer.id, plateNumber);
+                    // Refresh selected customer
+                    const updated = customers.find(c => c.id === selectedCustomer.id);
+                    if (updated) setSelectedCustomer(updated);
+                } catch (err) {
+                    setError('Failed to remove vehicle');
+                }
+                setActionLoading(false);
+            },
+            true
+        );
     };
 
     // Handle save loyalty settings
@@ -8358,6 +8743,17 @@ function CustomerManagement() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -8384,6 +8780,24 @@ function GarageManagement() {
     const [showServicesModal, setShowServicesModal] = useState(false);
     const [showServiceFormModal, setShowServiceFormModal] = useState(false);
     const [editingService, setEditingService] = useState(null);
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
     const [serviceFormData, setServiceFormData] = useState({
         name: '',
         category: 'maintenance',
@@ -9050,16 +9464,22 @@ function GarageManagement() {
         const services = window.FirebaseServices;
         if (!services?.garageServicesService) return;
 
-        if (!confirm('Delete this service? This cannot be undone.')) return;
-
-        setActionLoading(true);
-        try {
-            await services.garageServicesService.deleteService(serviceId);
-        } catch (err) {
-            setError('Failed to delete service: ' + err.message);
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Delete Service',
+            'Delete this service? This action cannot be undone.',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    await services.garageServicesService.deleteService(serviceId);
+                } catch (err) {
+                    setError('Failed to delete service: ' + err.message);
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     // Print receipt
@@ -9166,16 +9586,22 @@ function GarageManagement() {
         const services = window.FirebaseServices;
         if (!services?.garageQueueService) return;
 
-        if (!confirm('Remove this vehicle from the queue?')) return;
-
-        setActionLoading(true);
-        try {
-            await services.garageQueueService.removeFromQueue(itemId);
-        } catch (err) {
-            setError('Failed to remove from queue');
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Remove from Queue',
+            'Remove this vehicle from the garage queue?',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    await services.garageQueueService.removeFromQueue(itemId);
+                } catch (err) {
+                    setError('Failed to remove from queue');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     // Delete job
@@ -9183,16 +9609,22 @@ function GarageManagement() {
         const services = window.FirebaseServices;
         if (!services?.garageJobsService) return;
 
-        if (!confirm('Delete this job record?')) return;
-
-        setActionLoading(true);
-        try {
-            await services.garageJobsService.deleteJob(jobId);
-        } catch (err) {
-            setError('Failed to delete job');
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Delete Job',
+            'Delete this job record? This action cannot be undone.',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    await services.garageJobsService.deleteJob(jobId);
+                } catch (err) {
+                    setError('Failed to delete job');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     // Toggle service selection
@@ -10865,6 +11297,17 @@ function GarageManagement() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -15514,6 +15957,24 @@ function BillingModule() {
     const [customDateFrom, setCustomDateFrom] = useState('');
     const [customDateTo, setCustomDateTo] = useState('');
     const [sourceFilter, setSourceFilter] = useState('all');
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
     const [billingStats, setBillingStats] = useState({
         totalInvoices: 0,
         pendingPayments: 0,
@@ -16012,42 +16473,54 @@ function BillingModule() {
 
     // Delete invoice
     const handleDeleteInvoice = async (invoice) => {
-        if (!confirm(`Delete invoice ${invoice.invoiceNumber}? This action cannot be undone.`)) return;
-        
-        setActionLoading(true);
-        try {
-            const services = window.FirebaseServices;
-            const result = await services.billingService.deleteInvoice(invoice.id);
-            if (result.success) {
-                setSuccessMessage('Invoice deleted successfully');
-            } else {
-                setError(result.error || 'Failed to delete invoice');
-            }
-        } catch (err) {
-            setError('Failed to delete invoice');
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Delete Invoice',
+            `Delete invoice ${invoice.invoiceNumber}? This action cannot be undone.`,
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    const result = await services.billingService.deleteInvoice(invoice.id);
+                    if (result.success) {
+                        setSuccessMessage('Invoice deleted successfully');
+                    } else {
+                        setError(result.error || 'Failed to delete invoice');
+                    }
+                } catch (err) {
+                    setError('Failed to delete invoice');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     // Cancel/Revert payment to unpaid
     const handleCancelPayment = async (invoice) => {
-        if (!confirm(`Revert payment for ${invoice.invoiceNumber}? This will set the invoice back to unpaid.`)) return;
-        
-        setActionLoading(true);
-        try {
-            const services = window.FirebaseServices;
-            const result = await services.billingService.revertToUnpaid(invoice.id);
-            if (result.success) {
-                setSuccessMessage('Payment cancelled - invoice set to unpaid');
-            } else {
-                setError(result.error || 'Failed to cancel payment');
-            }
-        } catch (err) {
-            setError('Failed to cancel payment');
-        } finally {
-            setActionLoading(false);
-        }
+        showAlert(
+            'Revert Payment',
+            `Revert payment for ${invoice.invoiceNumber}? This will set the invoice back to unpaid.`,
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    const result = await services.billingService.revertToUnpaid(invoice.id);
+                    if (result.success) {
+                        setSuccessMessage('Payment cancelled - invoice set to unpaid');
+                    } else {
+                        setError(result.error || 'Failed to cancel payment');
+                    }
+                } catch (err) {
+                    setError('Failed to cancel payment');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
     };
 
     // Print invoice receipt
@@ -17481,6 +17954,17 @@ function BillingModule() {
                     </div>
                 </div>
             )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
