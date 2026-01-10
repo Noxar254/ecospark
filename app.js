@@ -18056,8 +18056,9 @@ function ReportsAnalytics() {
     const unpaidRevenue = unpaidInvoices.reduce((s, b) => s + (b.totalAmount || b.total || b.amount || 0), 0);
 
     // Inventory stats
-    const inventoryValue = data.inventory.reduce((s, i) => s + ((i.quantity || 0) * (i.unitCost || 0)), 0);
-    const lowStockItems = data.inventory.filter(i => (i.quantity || 0) <= (i.reorderLevel || 5)).length;
+    const inventoryValue = data.inventory.reduce((s, i) => s + ((i.quantity || 0) * (i.unitCost || i.cost || 0)), 0);
+    const outOfStockItems = data.inventory.filter(i => (i.quantity || 0) === 0).length;
+    const lowStockItems = data.inventory.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).length;
 
     // Fleet stats
     const fleetBalance = data.fleet.reduce((s, f) => s + (f.balance || 0), 0);
@@ -18279,14 +18280,24 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
 
                         {/* Inventory & Fleet */}
                         <div style={cardStyle}>
-                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Assets Overview</h4>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Assets Overview</h4>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', background: '#10b981', color: 'white', fontSize: '10px', fontWeight: '600' }}>
+                                    <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
+                                    LIVE
+                                </div>
+                            </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
                                 <span style={{ color: theme.textSecondary }}>Inventory Value</span>
                                 <span style={{ fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(inventoryValue)}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
                                 <span style={{ color: theme.textSecondary }}>Low Stock Items</span>
-                                <span style={{ fontWeight: '700', color: lowStockItems > 0 ? '#ef4444' : '#10b981' }}>{lowStockItems}</span>
+                                <span style={{ fontWeight: '700', color: lowStockItems > 0 ? '#f59e0b' : '#10b981' }}>{lowStockItems}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                <span style={{ color: theme.textSecondary }}>Out of Stock Items</span>
+                                <span style={{ fontWeight: '700', color: outOfStockItems > 0 ? '#ef4444' : '#10b981' }}>{outOfStockItems}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
                                 <span style={{ color: theme.textSecondary }}>Fleet Balance</span>
@@ -18433,20 +18444,39 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
                             {data.fleet.length === 0 && <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>No fleet accounts</div>}
                         </div>
                         <div style={cardStyle}>
-                            <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Low Stock Alerts</h4>
-                            {data.inventory.filter(i => (i.quantity || 0) <= (i.reorderLevel || 5)).slice(0, 8).map((item, i) => (
-                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Stock Alerts</h4>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', background: '#10b981', color: 'white', fontSize: '10px', fontWeight: '600' }}>
+                                    <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
+                                    LIVE
+                                </div>
+                            </div>
+                            {/* Out of Stock Items */}
+                            {data.inventory.filter(i => (i.quantity || 0) === 0).map((item, i) => (
+                                <div key={`oos-${i}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
                                     <div>
                                         <div style={{ color: theme.text, fontWeight: '600' }}>{item.name}</div>
                                         <div style={{ fontSize: '11px', color: theme.textSecondary }}>{item.category || 'Uncategorized'}</div>
                                     </div>
                                     <div style={{ textAlign: 'right' }}>
-                                        <div style={{ fontWeight: '700', color: '#ef4444' }}>{item.quantity || 0} {item.unit || 'pcs'}</div>
-                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>Reorder: {item.reorderLevel || 5}</div>
+                                        <span style={{ padding: '3px 8px', fontSize: '10px', fontWeight: '700', background: '#fef2f2', color: '#dc2626' }}>OUT OF STOCK</span>
                                     </div>
                                 </div>
                             ))}
-                            {lowStockItems === 0 && <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>All items well stocked</div>}
+                            {/* Low Stock Items */}
+                            {data.inventory.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).slice(0, 6).map((item, i) => (
+                                <div key={`low-${i}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+                                    <div>
+                                        <div style={{ color: theme.text, fontWeight: '600' }}>{item.name}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>{item.category || 'Uncategorized'}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontWeight: '700', color: '#f59e0b' }}>{item.quantity || 0} {item.unit || 'pcs'}</div>
+                                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>Min: {item.minStock || item.reorderLevel || 5}</div>
+                                    </div>
+                                </div>
+                            ))}
+                            {(lowStockItems === 0 && outOfStockItems === 0) && <div style={{ color: theme.textSecondary, textAlign: 'center', padding: '20px' }}>All items well stocked ✓</div>}
                         </div>
                     </div>
 
@@ -18478,19 +18508,26 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
                             </thead>
                             <tbody>
                                 {data.inventory.map((item, i) => {
-                                    const isLow = (item.quantity || 0) <= (item.reorderLevel || 5);
-                                    const itemValue = (item.quantity || 0) * (item.unitCost || 0);
+                                    const isOutOfStock = (item.quantity || 0) === 0;
+                                    const isLow = !isOutOfStock && (item.quantity || 0) <= (item.minStock || item.reorderLevel || 5);
+                                    const itemValue = (item.quantity || 0) * (item.unitCost || item.cost || 0);
+                                    const statusStyle = isOutOfStock 
+                                        ? { background: '#fef2f2', color: '#dc2626' }
+                                        : isLow 
+                                        ? { background: '#fef9c3', color: '#92400e' }
+                                        : { background: '#dcfce7', color: '#166534' };
+                                    const statusText = isOutOfStock ? 'Out of Stock' : isLow ? 'Low Stock' : 'In Stock';
                                     return (
                                         <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '12px', color: theme.text, fontWeight: '600' }}>{item.name}</td>
                                             <td style={{ padding: '12px', color: theme.textSecondary }}>{item.category || 'Uncategorized'}</td>
-                                            <td style={{ padding: '12px', textAlign: 'center', fontWeight: '700', color: isLow ? '#ef4444' : theme.text }}>{item.quantity || 0}</td>
+                                            <td style={{ padding: '12px', textAlign: 'center', fontWeight: '700', color: isOutOfStock ? '#ef4444' : isLow ? '#f59e0b' : theme.text }}>{item.quantity || 0}</td>
                                             <td style={{ padding: '12px', textAlign: 'center', color: theme.textSecondary }}>{item.unit || 'pcs'}</td>
-                                            <td style={{ padding: '12px', textAlign: 'right', color: theme.text }}>{formatCurrency(item.unitCost || 0)}</td>
+                                            <td style={{ padding: '12px', textAlign: 'right', color: theme.text }}>{formatCurrency(item.unitCost || item.cost || 0)}</td>
                                             <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(itemValue)}</td>
                                             <td style={{ padding: '12px', textAlign: 'center' }}>
-                                                <span style={{ padding: '4px 10px', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', background: isLow ? '#fef2f2' : '#dcfce7', color: isLow ? '#dc2626' : '#166534' }}>
-                                                    {isLow ? 'Low Stock' : 'In Stock'}
+                                                <span style={{ padding: '4px 10px', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', ...statusStyle }}>
+                                                    {statusText}
                                                 </span>
                                             </td>
                                         </tr>
