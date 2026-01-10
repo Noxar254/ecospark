@@ -17,6 +17,7 @@ function LoginPage({ onLoginSuccess }) {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -74,10 +75,10 @@ function LoginPage({ onLoginSuccess }) {
                 let msg = result.error || 'Login failed';
                 // Log failed login attempt
                 await services.auditService?.logLogin({ email }, false, msg);
-                if (msg.includes('user-not-found')) msg = 'No account found';
-                else if (msg.includes('wrong-password') || msg.includes('invalid-credential')) msg = 'Invalid credentials';
-                else if (msg.includes('invalid-email')) msg = 'Invalid email format';
-                else if (msg.includes('too-many-requests')) msg = 'Too many attempts. Try later.';
+                if (msg.includes('user-not-found')) msg = 'No account found with this email';
+                else if (msg.includes('wrong-password') || msg.includes('invalid-credential')) msg = 'Invalid email or password';
+                else if (msg.includes('invalid-email')) msg = 'Please enter a valid email address';
+                else if (msg.includes('too-many-requests')) msg = 'Too many attempts. Please try again later.';
                 setError(msg);
             }
         } catch (err) {
@@ -87,57 +88,386 @@ function LoginPage({ onLoginSuccess }) {
         }
     };
 
+    // Car wash animation SVG icon
+    const CarIcon = () => (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: '100%', height: '100%' }}>
+            <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9L18 10l-1.6-3.2A2 2 0 0014.6 5H9.4a2 2 0 00-1.8 1.1L6 10l-2.5.8C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/>
+            <circle cx="7" cy="17" r="2"/>
+            <circle cx="17" cy="17" r="2"/>
+            <path d="M9 17h6"/>
+        </svg>
+    );
+
     return (
-        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1e3a5f' }}>
-            <div style={{ background: 'white', padding: '40px', width: '100%', maxWidth: '400px', margin: '20px' }}>
-                <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-                    <div style={{ fontSize: '32px', marginBottom: '8px' }}>🚗</div>
-                    <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b', margin: 0 }}>EcoSpark</h1>
-                    <p style={{ fontSize: '13px', color: '#64748b', margin: '4px 0 0' }}>Car Wash Management</p>
+        <div style={{ 
+            minHeight: '100vh', 
+            display: 'flex',
+            background: '#f8fafc'
+        }}>
+            {/* Left Side - Branding */}
+            <div style={{ 
+                flex: '1',
+                background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: '60px',
+                position: 'relative',
+                overflow: 'hidden',
+                minHeight: '100vh'
+            }} className="login-branding">
+                {/* Background Pattern */}
+                <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    opacity: 0.05,
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+                }}></div>
+                
+                {/* Floating elements for visual interest */}
+                <div style={{
+                    position: 'absolute',
+                    top: '10%',
+                    left: '10%',
+                    width: '120px',
+                    height: '120px',
+                    background: 'rgba(59, 130, 246, 0.1)',
+                    borderRadius: '50%',
+                    filter: 'blur(40px)'
+                }}></div>
+                <div style={{
+                    position: 'absolute',
+                    bottom: '20%',
+                    right: '15%',
+                    width: '160px',
+                    height: '160px',
+                    background: 'rgba(16, 185, 129, 0.1)',
+                    borderRadius: '50%',
+                    filter: 'blur(50px)'
+                }}></div>
+
+                {/* Logo and Content */}
+                <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', maxWidth: '400px' }}>
+                    {/* Logo Icon */}
+                    <div style={{
+                        width: '100px',
+                        height: '100px',
+                        margin: '0 auto 32px',
+                        background: 'rgba(255,255,255,0.1)',
+                        borderRadius: '24px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'white',
+                        backdropFilter: 'blur(10px)',
+                        border: '1px solid rgba(255,255,255,0.1)'
+                    }}>
+                        <div style={{ width: '56px', height: '56px' }}>
+                            <CarIcon />
+                        </div>
+                    </div>
+
+                    {/* Brand Name */}
+                    <h1 style={{
+                        fontSize: '42px',
+                        fontWeight: '700',
+                        color: 'white',
+                        margin: '0 0 12px',
+                        letterSpacing: '-1px'
+                    }}>EcoSpark</h1>
+                    
+                    <p style={{
+                        fontSize: '18px',
+                        color: 'rgba(255,255,255,0.7)',
+                        margin: '0 0 48px',
+                        fontWeight: '400'
+                    }}>Car Wash Management System</p>
+
+                    {/* Feature highlights */}
+                    <div style={{ textAlign: 'left' }}>
+                        {[
+                            { icon: '🚗', text: 'Vehicle Intake & Tracking' },
+                            { icon: '💧', text: 'Wash Bay Management' },
+                            { icon: '🔧', text: 'Garage & Service Operations' },
+                            { icon: '📊', text: 'Reports & Analytics' },
+                            { icon: '👥', text: 'Staff & HR Management' }
+                        ].map((feature, i) => (
+                            <div key={i} style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '14px',
+                                padding: '12px 0',
+                                borderBottom: i < 4 ? '1px solid rgba(255,255,255,0.08)' : 'none'
+                            }}>
+                                <span style={{ fontSize: '20px' }}>{feature.icon}</span>
+                                <span style={{ 
+                                    color: 'rgba(255,255,255,0.85)', 
+                                    fontSize: '15px',
+                                    fontWeight: '400'
+                                }}>{feature.text}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
 
-                {error && (
-                    <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', marginBottom: '20px', fontSize: '13px', textAlign: 'center' }}>
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleSubmit}>
-                    <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>Email</label>
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            placeholder="you@example.com"
-                            style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
-                        />
-                    </div>
-
-                    <div style={{ marginBottom: '24px' }}>
-                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>Password</label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Enter password"
-                            style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
-                        />
-                    </div>
-
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        style={{ width: '100%', padding: '12px', background: loading ? '#93c5fd' : '#3b82f6', color: 'white', border: 'none', fontSize: '14px', fontWeight: '600', cursor: loading ? 'wait' : 'pointer' }}
-                    >
-                        {loading ? 'Signing in...' : 'Sign In'}
-                    </button>
-                </form>
-
-                <p style={{ marginTop: '20px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>
-                    Need help? Contact your administrator
-                </p>
+                {/* Footer */}
+                <div style={{
+                    position: 'absolute',
+                    bottom: '30px',
+                    left: '0',
+                    right: '0',
+                    textAlign: 'center',
+                    color: 'rgba(255,255,255,0.4)',
+                    fontSize: '13px'
+                }}>
+                    © 2026 EcoSpark. All rights reserved.
+                </div>
             </div>
+
+            {/* Right Side - Login Form */}
+            <div style={{ 
+                flex: '1',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: '40px',
+                background: 'white',
+                minHeight: '100vh'
+            }}>
+                <div style={{ width: '100%', maxWidth: '400px' }}>
+                    {/* Mobile Logo (hidden on desktop) */}
+                    <div className="mobile-logo" style={{
+                        display: 'none',
+                        textAlign: 'center',
+                        marginBottom: '40px'
+                    }}>
+                        <div style={{
+                            width: '64px',
+                            height: '64px',
+                            margin: '0 auto 16px',
+                            background: '#1e3a5f',
+                            borderRadius: '16px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'white'
+                        }}>
+                            <div style={{ width: '36px', height: '36px' }}>
+                                <CarIcon />
+                            </div>
+                        </div>
+                        <h2 style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b', margin: 0 }}>EcoSpark</h2>
+                    </div>
+
+                    {/* Welcome Text */}
+                    <div style={{ marginBottom: '32px' }}>
+                        <h2 style={{ 
+                            fontSize: '28px', 
+                            fontWeight: '700', 
+                            color: '#1e293b', 
+                            margin: '0 0 8px',
+                            letterSpacing: '-0.5px'
+                        }}>Welcome back</h2>
+                        <p style={{ 
+                            fontSize: '15px', 
+                            color: '#64748b', 
+                            margin: 0 
+                        }}>Sign in to your account to continue</p>
+                    </div>
+
+                    {/* Error Message */}
+                    {error && (
+                        <div style={{ 
+                            background: '#fef2f2', 
+                            border: '1px solid #fecaca', 
+                            color: '#dc2626', 
+                            padding: '14px 16px', 
+                            marginBottom: '24px', 
+                            fontSize: '14px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px'
+                        }}>
+                            <span style={{ fontSize: '18px' }}>⚠️</span>
+                            <span>{error}</span>
+                        </div>
+                    )}
+
+                    {/* Login Form */}
+                    <form onSubmit={handleSubmit}>
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={{ 
+                                display: 'block', 
+                                fontSize: '14px', 
+                                fontWeight: '500', 
+                                color: '#374151', 
+                                marginBottom: '8px' 
+                            }}>Email Address</label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{
+                                    position: 'absolute',
+                                    left: '14px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    color: '#9ca3af',
+                                    fontSize: '18px'
+                                }}>📧</span>
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    placeholder="you@example.com"
+                                    style={{ 
+                                        width: '100%', 
+                                        padding: '14px 14px 14px 46px', 
+                                        border: '1px solid #e2e8f0', 
+                                        fontSize: '15px', 
+                                        outline: 'none', 
+                                        boxSizing: 'border-box',
+                                        transition: 'border-color 0.2s, box-shadow 0.2s'
+                                    }}
+                                    onFocus={(e) => {
+                                        e.target.style.borderColor = '#3b82f6';
+                                        e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+                                    }}
+                                    onBlur={(e) => {
+                                        e.target.style.borderColor = '#e2e8f0';
+                                        e.target.style.boxShadow = 'none';
+                                    }}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '28px' }}>
+                            <label style={{ 
+                                display: 'block', 
+                                fontSize: '14px', 
+                                fontWeight: '500', 
+                                color: '#374151', 
+                                marginBottom: '8px' 
+                            }}>Password</label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{
+                                    position: 'absolute',
+                                    left: '14px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    color: '#9ca3af',
+                                    fontSize: '18px'
+                                }}>🔒</span>
+                                <input
+                                    type={showPassword ? 'text' : 'password'}
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    placeholder="Enter your password"
+                                    style={{ 
+                                        width: '100%', 
+                                        padding: '14px 46px 14px 46px', 
+                                        border: '1px solid #e2e8f0', 
+                                        fontSize: '15px', 
+                                        outline: 'none', 
+                                        boxSizing: 'border-box',
+                                        transition: 'border-color 0.2s, box-shadow 0.2s'
+                                    }}
+                                    onFocus={(e) => {
+                                        e.target.style.borderColor = '#3b82f6';
+                                        e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+                                    }}
+                                    onBlur={(e) => {
+                                        e.target.style.borderColor = '#e2e8f0';
+                                        e.target.style.boxShadow = 'none';
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    style={{
+                                        position: 'absolute',
+                                        right: '14px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        background: 'none',
+                                        border: 'none',
+                                        color: '#9ca3af',
+                                        cursor: 'pointer',
+                                        fontSize: '16px',
+                                        padding: '0'
+                                    }}
+                                >
+                                    {showPassword ? '👁️' : '👁️‍🗨️'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            style={{ 
+                                width: '100%', 
+                                padding: '14px', 
+                                background: loading ? '#93c5fd' : '#3b82f6', 
+                                color: 'white', 
+                                border: 'none', 
+                                fontSize: '15px', 
+                                fontWeight: '600', 
+                                cursor: loading ? 'wait' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '10px',
+                                transition: 'background 0.2s'
+                            }}
+                            onMouseOver={(e) => !loading && (e.target.style.background = '#2563eb')}
+                            onMouseOut={(e) => !loading && (e.target.style.background = '#3b82f6')}
+                        >
+                            {loading ? (
+                                <>
+                                    <span style={{
+                                        width: '18px',
+                                        height: '18px',
+                                        border: '2px solid rgba(255,255,255,0.3)',
+                                        borderTopColor: 'white',
+                                        borderRadius: '50%',
+                                        animation: 'spin 0.8s linear infinite'
+                                    }}></span>
+                                    Signing in...
+                                </>
+                            ) : 'Sign In'}
+                        </button>
+                    </form>
+
+                    {/* Help text */}
+                    <div style={{ 
+                        marginTop: '32px', 
+                        textAlign: 'center',
+                        padding: '20px',
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0'
+                    }}>
+                        <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>
+                            <span style={{ marginRight: '6px' }}>🔐</span>
+                            Need help? Contact your system administrator
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Responsive CSS */}
+            <style>{`
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                @media (max-width: 900px) {
+                    .login-branding {
+                        display: none !important;
+                    }
+                    .mobile-logo {
+                        display: block !important;
+                    }
+                }
+            `}</style>
         </div>
     );
 }
