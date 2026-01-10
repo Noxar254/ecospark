@@ -373,6 +373,100 @@ export const customerService = {
       console.error('Error finding customer:', error);
       return { success: false, error: error.message };
     }
+  },
+
+  // Award loyalty points for a visit (called automatically from intake)
+  async awardVisitPoints(customerId, vehiclePlate = null) {
+    try {
+      // Get loyalty settings first
+      const settingsResult = await loyaltySettingsService.getSettings();
+      const settings = settingsResult.success ? settingsResult.data : { pointsPerVisit: 1, enabled: true };
+      
+      if (!settings.enabled) {
+        console.log('Loyalty program disabled, skipping points');
+        return { success: true, pointsAwarded: 0 };
+      }
+
+      const customerRef = doc(db, 'customers', customerId);
+      const customerSnap = await getDoc(customerRef);
+      
+      if (!customerSnap.exists()) {
+        return { success: false, error: 'Customer not found' };
+      }
+      
+      const customer = customerSnap.data();
+      const pointsToAward = settings.pointsPerVisit || 1;
+      const currentPoints = customer.loyaltyPoints || 0;
+      const currentVisits = customer.totalVisits || 0;
+      const newPoints = currentPoints + pointsToAward;
+      const newVisits = currentVisits + 1;
+      
+      // Update customer with new points and visit count
+      await updateDoc(customerRef, {
+        loyaltyPoints: newPoints,
+        totalVisits: newVisits,
+        lastVisit: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      
+      console.log(`🎯 Awarded ${pointsToAward} points to customer ${customerId}. New total: ${newPoints} points, ${newVisits} visits`);
+      
+      // Check if customer now qualifies for reward
+      const rewardThreshold = settings.rewardThreshold || 20;
+      const qualifiesForReward = newPoints >= rewardThreshold && !customer.pendingReward;
+      
+      return { 
+        success: true, 
+        pointsAwarded: pointsToAward,
+        newPointsTotal: newPoints,
+        newVisitsTotal: newVisits,
+        qualifiesForReward,
+        rewardThreshold
+      };
+    } catch (error) {
+      console.error('Error awarding visit points:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Find customer by phone or plate and award points
+  async findAndAwardPoints(phoneNumber, plateNumber) {
+    try {
+      let customer = null;
+      
+      // Try to find by phone first
+      if (phoneNumber) {
+        const phoneResult = await this.findCustomerByPhone(phoneNumber);
+        if (phoneResult.success && phoneResult.data) {
+          customer = phoneResult.data;
+        }
+      }
+      
+      // If not found by phone, try by plate number
+      if (!customer && plateNumber) {
+        const plateResult = await this.findByPlateNumber(plateNumber);
+        if (plateResult.success && plateResult.data) {
+          customer = plateResult.data;
+        }
+      }
+      
+      if (!customer) {
+        console.log('No customer found for phone:', phoneNumber, 'or plate:', plateNumber);
+        return { success: false, customerFound: false };
+      }
+      
+      // Award points to found customer
+      const result = await this.awardVisitPoints(customer.id, plateNumber);
+      return {
+        ...result,
+        customerFound: true,
+        customerId: customer.id,
+        customerName: customer.name
+      };
+    } catch (error) {
+      console.error('Error in findAndAwardPoints:', error);
+      return { success: false, error: error.message };
+    }
   }
 };
 
@@ -395,7 +489,11 @@ export const loyaltySettingsService = {
           redeemRate: 10, // Points needed for KSh 1 discount
           welcomeBonus: 5,
           birthdayBonus: 10,
-          enabled: true
+          enabled: true,
+          rewardThreshold: 20,
+          rewardType: 'Free Basic Wash',
+          rewardMessage: 'Congratulations! You have earned {points} points and qualify for a FREE wash! Present this message at our car wash to redeem your reward.',
+          rewardEnabled: true
         };
       }
       return { success: true, data: settings };
@@ -433,7 +531,11 @@ export const loyaltySettingsService = {
             redeemRate: 10,
             welcomeBonus: 5,
             birthdayBonus: 10,
-            enabled: true
+            enabled: true,
+            rewardThreshold: 20,
+            rewardType: 'Free Basic Wash',
+            rewardMessage: 'Congratulations! You have earned {points} points and qualify for a FREE wash! Present this message at our car wash to redeem your reward.',
+            rewardEnabled: true
           });
         }
       },
@@ -1702,12 +1804,31 @@ export const intakeRecordsService = {
         await this.updateRecord(existingRecord.id, updateData);
         console.log('✅ RETURNING: Updated existing record', existingRecord.id, 'Visit #' + newVisitNumber);
         
+        // AUTO-AWARD LOYALTY POINTS for returning customer
+        let loyaltyResult = null;
+        const customerPhone = vehicleData.customerPhone || existingRecord.customerPhone;
+        if (customerPhone || normalizedPlate) {
+          console.log('🎯 Attempting to award loyalty points for returning customer...');
+          loyaltyResult = await customerService.findAndAwardPoints(customerPhone, normalizedPlate);
+          if (loyaltyResult.success && loyaltyResult.customerFound) {
+            console.log(`✅ Loyalty points awarded to ${loyaltyResult.customerName}: +${loyaltyResult.pointsAwarded} pts (Total: ${loyaltyResult.newPointsTotal})`);
+            if (loyaltyResult.qualifiesForReward) {
+              console.log(`🎁 Customer ${loyaltyResult.customerName} now qualifies for a reward! (${loyaltyResult.newPointsTotal} >= ${loyaltyResult.rewardThreshold})`);
+            }
+          } else {
+            console.log('ℹ️ No matching customer found in loyalty program for this vehicle');
+          }
+        }
+        
         return { 
           success: true, 
           id: existingRecord.id, 
           isReturning: true, 
           visitNumber: newVisitNumber,
-          previousVisits: currentVisitNumber
+          previousVisits: currentVisitNumber,
+          loyaltyPointsAwarded: loyaltyResult?.success ? loyaltyResult.pointsAwarded : 0,
+          customerFound: loyaltyResult?.customerFound || false,
+          qualifiesForReward: loyaltyResult?.qualifiesForReward || false
         };
       } else {
         // NEW VEHICLE - Create first record
@@ -1725,12 +1846,25 @@ export const intakeRecordsService = {
         const docRef = await addDoc(collection(db, 'vehicleIntake'), newRecord);
         console.log('✅ NEW: Created first record', docRef.id, 'Visit #1');
         
+        // For first-time vehicles, also check if customer exists and award first visit points
+        let loyaltyResult = null;
+        const customerPhone = vehicleData.customerPhone;
+        if (customerPhone || normalizedPlate) {
+          console.log('🎯 Checking if new vehicle belongs to existing customer...');
+          loyaltyResult = await customerService.findAndAwardPoints(customerPhone, normalizedPlate);
+          if (loyaltyResult.success && loyaltyResult.customerFound) {
+            console.log(`✅ First visit points awarded to ${loyaltyResult.customerName}: +${loyaltyResult.pointsAwarded} pts`);
+          }
+        }
+        
         return { 
           success: true, 
           id: docRef.id, 
           isReturning: false, 
           visitNumber: 1,
-          previousVisits: 0
+          previousVisits: 0,
+          loyaltyPointsAwarded: loyaltyResult?.success ? loyaltyResult.pointsAwarded : 0,
+          customerFound: loyaltyResult?.customerFound || false
         };
       }
     } catch (error) {

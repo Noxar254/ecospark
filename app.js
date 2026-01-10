@@ -2069,6 +2069,14 @@ function VehicleIntake() {
                 ? `✅ RETURNING vehicle updated - Visit #${result.visitNumber}` 
                 : `✅ NEW vehicle created - Visit #1`
             );
+            
+            // Show loyalty points notification if awarded
+            if (result.loyaltyPointsAwarded > 0 && result.customerFound) {
+                const rewardMsg = result.qualifiesForReward 
+                    ? ` 🎁 Customer now qualifies for a reward!` 
+                    : '';
+                alert(`🎯 Loyalty Points Awarded!\n\n+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`);
+            }
 
             // Update bay status
             await services.intakeBaysService.updateBay(bayId, 'occupied', {
@@ -2130,6 +2138,14 @@ function VehicleIntake() {
                 ? `✅ RETURNING vehicle sent to garage - Visit #${result.visitNumber}` 
                 : `✅ NEW vehicle sent to garage - Visit #1`
             );
+            
+            // Show loyalty points notification if awarded
+            if (result.loyaltyPointsAwarded > 0 && result.customerFound) {
+                const rewardMsg = result.qualifiesForReward 
+                    ? ` 🎁 Customer now qualifies for a reward!` 
+                    : '';
+                alert(`🎯 Loyalty Points Awarded!\n\n+${result.loyaltyPointsAwarded} points added to customer account.${rewardMsg}`);
+            }
         } catch (err) {
             console.error('Error sending to garage:', err);
             setError('Failed to send to garage: ' + err.message);
@@ -3408,25 +3424,115 @@ function VehicleIntake() {
                             </button>
                         </div>
                         <div className="modal-body">
-                            <p className="assign-vehicle-info">
-                                <strong>{selectedVehicle.plateNumber}</strong> - {selectedVehicle.service?.name || 'No Service'}
+                            <p className="assign-vehicle-info" style={{ marginBottom: '16px', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
+                                <strong style={{ fontSize: '16px', fontFamily: 'monospace' }}>{selectedVehicle.plateNumber}</strong>
+                                <span style={{ display: 'block', fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                    {selectedVehicle.service?.name || 'No Service'} • {selectedVehicle.customerName || 'Walk-in'}
+                                </span>
                             </p>
-                            <div className="bay-grid">
-                                {bays.map(bay => (
-                                    <button 
-                                        key={bay.id}
-                                        className={`bay-option ${bay.status !== 'available' ? 'bay-occupied' : ''}`}
-                                        onClick={() => bay.status === 'available' && handleAssignBay(bay.id)}
-                                        disabled={bay.status !== 'available'}
-                                    >
-                                        <span className="bay-name">{bay.name}</span>
-                                        <span className="bay-status">{bay.status}</span>
-                                        {bay.currentVehicle && (
-                                            <span className="bay-vehicle">{bay.currentVehicle.plateNumber}</span>
-                                        )}
-                                    </button>
-                                ))}
+                            
+                            {/* Available Bays Count */}
+                            <div style={{ marginBottom: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                <span style={{ color: bays.filter(b => b.status === 'available').length > 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
+                                    {bays.filter(b => b.status === 'available').length}
+                                </span> of {bays.length} bays available
                             </div>
+                            
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                                {bays.map(bay => {
+                                    const isAvailable = bay.status === 'available';
+                                    const isOccupied = bay.status === 'occupied';
+                                    const isMaintenance = bay.status === 'maintenance';
+                                    
+                                    return (
+                                        <button 
+                                            key={bay.id}
+                                            onClick={() => isAvailable && handleAssignBay(bay.id)}
+                                            disabled={!isAvailable}
+                                            style={{
+                                                padding: '16px',
+                                                border: isAvailable ? '2px solid #22c55e' : isOccupied ? '2px solid #3b82f6' : '2px solid #f59e0b',
+                                                borderRadius: '10px',
+                                                background: isAvailable 
+                                                    ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' 
+                                                    : isOccupied 
+                                                        ? 'linear-gradient(135deg, #eff6ff, #dbeafe)'
+                                                        : 'linear-gradient(135deg, #fefce8, #fef9c3)',
+                                                cursor: isAvailable ? 'pointer' : 'not-allowed',
+                                                opacity: isAvailable ? 1 : 0.85,
+                                                textAlign: 'left',
+                                                transition: 'all 0.2s ease',
+                                                position: 'relative',
+                                                overflow: 'hidden'
+                                            }}
+                                        >
+                                            {/* Lock icon for occupied bays */}
+                                            {!isAvailable && (
+                                                <span style={{ 
+                                                    position: 'absolute', 
+                                                    top: '8px', 
+                                                    right: '8px', 
+                                                    fontSize: '14px' 
+                                                }}>
+                                                    {isOccupied ? '🔄' : '🔧'}
+                                                </span>
+                                            )}
+                                            
+                                            <span style={{ 
+                                                display: 'block', 
+                                                fontSize: '15px', 
+                                                fontWeight: '600', 
+                                                color: isAvailable ? '#166534' : isOccupied ? '#1e40af' : '#854d0e',
+                                                marginBottom: '4px'
+                                            }}>
+                                                {bay.name}
+                                            </span>
+                                            
+                                            <span style={{ 
+                                                display: 'inline-block',
+                                                padding: '2px 8px',
+                                                borderRadius: '4px',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
+                                                textTransform: 'uppercase',
+                                                background: isAvailable ? '#22c55e' : isOccupied ? '#3b82f6' : '#f59e0b',
+                                                color: 'white'
+                                            }}>
+                                                {bay.status === 'available' ? '✓ AVAILABLE' : bay.status === 'occupied' ? '🔄 IN PROGRESS' : '🔧 MAINTENANCE'}
+                                            </span>
+                                            
+                                            {bay.currentVehicle && (
+                                                <span style={{ 
+                                                    display: 'block', 
+                                                    marginTop: '8px', 
+                                                    fontSize: '12px', 
+                                                    color: '#1e40af',
+                                                    fontFamily: 'monospace',
+                                                    fontWeight: '500'
+                                                }}>
+                                                    🚗 {bay.currentVehicle.plateNumber}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            
+                            {bays.filter(b => b.status === 'available').length === 0 && (
+                                <div style={{ 
+                                    marginTop: '16px', 
+                                    padding: '16px', 
+                                    background: '#fef2f2', 
+                                    borderRadius: '8px', 
+                                    textAlign: 'center',
+                                    border: '1px solid #fecaca'
+                                }}>
+                                    <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>⚠️</span>
+                                    <span style={{ color: '#991b1b', fontSize: '14px', fontWeight: '500' }}>
+                                        All bays are currently occupied. Please wait for a bay to become available.
+                                    </span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -6563,18 +6669,27 @@ function CustomerManagement() {
     const [showAddVehicleModal, setShowAddVehicleModal] = useState(false);
     const [showLoyaltySettingsModal, setShowLoyaltySettingsModal] = useState(false);
     const [showReceiptModal, setShowReceiptModal] = useState(false);
+    const [showImportModal, setShowImportModal] = useState(false);
+    const [intakeRecords, setIntakeRecords] = useState([]);
+    const [selectedIntakeClient, setSelectedIntakeClient] = useState(null);
     const [receiptData, setReceiptData] = useState(null);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [activeTab, setActiveTab] = useState('customers'); // 'customers' or 'reminders'
+    const [activeTab, setActiveTab] = useState('customers'); // 'customers', 'reminders', or 'rewards'
+    const [showRewardModal, setShowRewardModal] = useState(false);
+    const [rewardCustomer, setRewardCustomer] = useState(null);
     const [loyaltySettings, setLoyaltySettings] = useState({
         pointsPerVisit: 1,
         pointsPerRand: 0.1,
         redeemRate: 0.1,
         welcomeBonus: 10,
         birthdayBonus: 50,
-        enabled: true
+        enabled: true,
+        rewardThreshold: 20,
+        rewardType: 'Free Basic Wash',
+        rewardMessage: 'Congratulations! You have earned {points} points and qualify for a FREE wash! Present this message at our car wash to redeem your reward.',
+        rewardEnabled: true
     });
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
 
@@ -6646,7 +6761,11 @@ function CustomerManagement() {
         redeemRate: 0.1,
         welcomeBonus: 10,
         birthdayBonus: 50,
-        enabled: true
+        enabled: true,
+        rewardThreshold: 20,
+        rewardType: 'Free Basic Wash',
+        rewardMessage: 'Congratulations! You have earned {points} points and qualify for a FREE wash! Present this message at our car wash to redeem your reward.',
+        rewardEnabled: true
     });
 
     // Subscribe to customers data
@@ -6661,6 +6780,51 @@ function CustomerManagement() {
             (err) => {
                 setError('Failed to load customers');
                 setLoading(false);
+            }
+        );
+        return () => unsubscribe();
+    }, []);
+
+    // Subscribe to intake records for import feature
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) return;
+        const unsubscribe = services.intakeRecordsService.subscribeToRecords(
+            (data) => {
+                // Group by customer phone to get unique clients with their total visits
+                const clientsMap = {};
+                data.forEach(record => {
+                    const phone = record.customerPhone || '';
+                    const name = record.customerName || '';
+                    if (phone || name) {
+                        const key = phone || name;
+                        if (!clientsMap[key]) {
+                            clientsMap[key] = {
+                                name: name,
+                                phone: phone,
+                                vehicles: [],
+                                totalVisits: 0,
+                                records: []
+                            };
+                        }
+                        clientsMap[key].totalVisits += (record.visitNumber || 1);
+                        clientsMap[key].records.push(record);
+                        // Add vehicle if not already added
+                        if (record.plateNumber && !clientsMap[key].vehicles.find(v => v.plateNumber === record.plateNumber)) {
+                            clientsMap[key].vehicles.push({
+                                plateNumber: record.plateNumber,
+                                vehicleType: record.vehicleType || '',
+                                make: record.make || '',
+                                model: record.model || '',
+                                color: record.color || ''
+                            });
+                        }
+                    }
+                });
+                setIntakeRecords(Object.values(clientsMap));
+            },
+            (err) => {
+                console.error('Failed to load intake records', err);
             }
         );
         return () => unsubscribe();
@@ -6730,9 +6894,116 @@ function CustomerManagement() {
         return reminders.sort((a, b) => a.dueDate - b.dueDate);
     };
 
+    // Get customers eligible for rewards (points >= threshold)
+    const getRewardEligibleCustomers = () => {
+        if (!loyaltySettings.rewardEnabled) return [];
+        const threshold = loyaltySettings.rewardThreshold || 20;
+        return customers.filter(customer => {
+            const points = customer.loyaltyPoints || 0;
+            const pendingReward = customer.pendingReward;
+            const lastRewardAt = customer.lastRewardDeliveredAt ? new Date(customer.lastRewardDeliveredAt) : null;
+            const pointsSinceLastReward = lastRewardAt ? points : points;
+            // Customer is eligible if they have enough points and no pending reward
+            return points >= threshold && !pendingReward;
+        }).map(customer => ({
+            ...customer,
+            pointsOverThreshold: (customer.loyaltyPoints || 0) - threshold
+        }));
+    };
+
+    // Get customers with pending rewards (not yet delivered)
+    const getPendingRewards = () => {
+        return customers.filter(customer => customer.pendingReward && !customer.pendingReward.deliveredAt);
+    };
+
+    // Get customers with delivered rewards (history)
+    const getDeliveredRewards = () => {
+        return customers.filter(customer => customer.rewardHistory && customer.rewardHistory.length > 0);
+    };
+
+    // Issue reward to customer
+    const handleIssueReward = async (customer) => {
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const rewardData = {
+                pendingReward: {
+                    type: loyaltySettings.rewardType,
+                    pointsAtIssue: customer.loyaltyPoints,
+                    issuedAt: new Date().toISOString(),
+                    message: loyaltySettings.rewardMessage.replace('{points}', customer.loyaltyPoints),
+                    deliveredAt: null
+                }
+            };
+            await services.customerService.updateCustomer(customer.id, rewardData);
+            setError(null);
+        } catch (err) {
+            setError('Failed to issue reward');
+        }
+        setActionLoading(false);
+    };
+
+    // Mark reward as delivered
+    const handleDeliverReward = async (customer) => {
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const rewardHistory = customer.rewardHistory || [];
+            rewardHistory.push({
+                ...customer.pendingReward,
+                deliveredAt: new Date().toISOString(),
+                deliveredBy: 'Staff' // Could be enhanced to track actual staff
+            });
+            
+            // Deduct points used for reward
+            const newPoints = Math.max(0, (customer.loyaltyPoints || 0) - (loyaltySettings.rewardThreshold || 20));
+            
+            await services.customerService.updateCustomer(customer.id, {
+                pendingReward: null,
+                rewardHistory,
+                loyaltyPoints: newPoints,
+                lastRewardDeliveredAt: new Date().toISOString()
+            });
+            setShowRewardModal(false);
+            setRewardCustomer(null);
+        } catch (err) {
+            setError('Failed to mark reward as delivered');
+        }
+        setActionLoading(false);
+    };
+
+    // Cancel pending reward
+    const handleCancelReward = async (customer) => {
+        if (!confirm('Are you sure you want to cancel this pending reward?')) return;
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.customerService.updateCustomer(customer.id, {
+                pendingReward: null
+            });
+        } catch (err) {
+            setError('Failed to cancel reward');
+        }
+        setActionLoading(false);
+    };
+
+    // Get formatted reward message for customer
+    const getRewardMessage = (customer) => {
+        return loyaltySettings.rewardMessage
+            .replace('{points}', customer.loyaltyPoints || 0)
+            .replace('{name}', customer.name || 'Valued Customer')
+            .replace('{reward}', loyaltySettings.rewardType || 'Free Wash');
+    };
+
     // Generate receipt for a service
     const generateReceipt = (customer, vehicle, service) => {
         const receiptNumber = 'RCP-' + Date.now().toString(36).toUpperCase();
+        const currentPoints = customer.loyaltyPoints || 0;
+        const pointsPerVisit = loyaltySettings.enabled ? loyaltySettings.pointsPerVisit : 0;
+        const rewardThreshold = loyaltySettings.rewardThreshold || 20;
+        const pointsToNextReward = Math.max(0, rewardThreshold - currentPoints);
+        const qualifiesForReward = currentPoints >= rewardThreshold;
+        
         const receipt = {
             receiptNumber,
             date: new Date().toISOString(),
@@ -6748,8 +7019,17 @@ function CustomerManagement() {
                 color: vehicle?.color || ''
             },
             service: service || { name: 'Car Wash Service', price: 0 },
-            pointsEarned: loyaltySettings.enabled ? loyaltySettings.pointsPerVisit : 0,
-            totalPoints: (customer.loyaltyPoints || 0) + (loyaltySettings.enabled ? loyaltySettings.pointsPerVisit : 0)
+            // Actual loyalty data
+            loyaltyEnabled: loyaltySettings.enabled,
+            currentPoints: currentPoints,
+            pointsEarned: pointsPerVisit,
+            totalPoints: currentPoints + pointsPerVisit,
+            totalVisits: customer.totalVisits || 0,
+            rewardThreshold: rewardThreshold,
+            pointsToNextReward: pointsToNextReward,
+            qualifiesForReward: qualifiesForReward,
+            pendingReward: customer.pendingReward || null,
+            rewardType: loyaltySettings.rewardType || 'Free Wash'
         };
         setReceiptData(receipt);
         setShowReceiptModal(true);
@@ -6814,6 +7094,63 @@ function CustomerManagement() {
             setError('Failed to add customer');
         }
         setActionLoading(false);
+    };
+
+    // Handle import customer from intake records
+    const handleImportFromIntake = async () => {
+        if (!selectedIntakeClient) {
+            setError('Please select a client to import');
+            return;
+        }
+        
+        // Check if customer already exists by phone
+        const existingCustomer = customers.find(c => 
+            c.phone && selectedIntakeClient.phone && 
+            c.phone.replace(/\s/g, '') === selectedIntakeClient.phone.replace(/\s/g, '')
+        );
+        
+        if (existingCustomer) {
+            setError('A customer with this phone number already exists');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            // Calculate loyalty points based on visits
+            const pointsFromVisits = loyaltySettings.enabled 
+                ? (selectedIntakeClient.totalVisits * loyaltySettings.pointsPerVisit) + loyaltySettings.welcomeBonus
+                : 0;
+            
+            await services.customerService.addCustomer({
+                name: selectedIntakeClient.name || '',
+                phone: selectedIntakeClient.phone || '',
+                email: '',
+                address: '',
+                notes: `Imported from Vehicle Intake. Previous visits: ${selectedIntakeClient.totalVisits}`,
+                vehicles: selectedIntakeClient.vehicles || [],
+                loyaltyPoints: pointsFromVisits,
+                totalVisits: selectedIntakeClient.totalVisits || 0,
+                totalSpent: 0
+            });
+            setShowImportModal(false);
+            setSelectedIntakeClient(null);
+        } catch (err) {
+            setError('Failed to import customer');
+        }
+        setActionLoading(false);
+    };
+
+    // Get intake clients not yet in customers list
+    const getAvailableIntakeClients = () => {
+        return intakeRecords.filter(client => {
+            // Filter out clients already in customers by phone number
+            const phoneMatch = customers.some(c => 
+                c.phone && client.phone && 
+                c.phone.replace(/\s/g, '') === client.phone.replace(/\s/g, '')
+            );
+            return !phoneMatch && (client.phone || client.name);
+        });
     };
 
     // Handle edit customer
@@ -6979,6 +7316,15 @@ function CustomerManagement() {
                         <span style={{ backgroundColor: '#ef4444', color: 'white', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getServiceReminders().length}</span>
                     )}
                 </button>
+                <button
+                    onClick={() => setActiveTab('rewards')}
+                    style={{ padding: '12px 24px', backgroundColor: 'transparent', color: activeTab === 'rewards' ? '#3b82f6' : theme.textSecondary, border: 'none', borderBottom: activeTab === 'rewards' ? '2px solid #3b82f6' : '2px solid transparent', marginBottom: '-2px', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                    🎁 Loyalty Rewards
+                    {(getRewardEligibleCustomers().length + getPendingRewards().length) > 0 && (
+                        <span style={{ backgroundColor: '#f59e0b', color: 'white', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getRewardEligibleCustomers().length + getPendingRewards().length}</span>
+                    )}
+                </button>
             </div>
 
             {/* Header with search and actions */}
@@ -6997,6 +7343,12 @@ function CustomerManagement() {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                        onClick={() => { setSelectedIntakeClient(null); setShowImportModal(true); }}
+                        style={{ padding: '10px 16px', backgroundColor: theme.btnAddVehicleBg, color: theme.btnAddVehicleText, border: `1px solid ${theme.btnAddVehicleBorder}`, cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                        📥 Import from Intake {getAvailableIntakeClients().length > 0 && <span style={{ backgroundColor: '#7c3aed', color: 'white', padding: '2px 6px', fontSize: '11px', borderRadius: '10px' }}>{getAvailableIntakeClients().length}</span>}
+                    </button>
                     <button
                         onClick={() => setShowLoyaltySettingsModal(true)}
                         style={{ padding: '10px 16px', backgroundColor: theme.btnLoyaltyBg, color: theme.btnLoyaltyText, border: `1px solid ${theme.btnLoyaltyBorder}`, cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
@@ -7046,13 +7398,14 @@ function CustomerManagement() {
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Vehicles</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Visits</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Points</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Reward</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             {filteredCustomers.length === 0 ? (
                                 <tr>
-                                    <td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: theme.textMuted }}>
+                                    <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textMuted }}>
                                         {searchQuery ? 'No customers found matching your search' : 'No customers yet. Add your first customer!'}
                                     </td>
                                 </tr>
@@ -7082,6 +7435,33 @@ function CustomerManagement() {
                                             <span style={{ padding: '4px 10px', backgroundColor: '#fef3c7', color: '#d97706', fontSize: '13px', fontWeight: '600' }}>
                                                 {customer.loyaltyPoints || 0} pts
                                             </span>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            {customer.pendingReward ? (
+                                                <span 
+                                                    onClick={() => { setRewardCustomer(customer); setShowRewardModal(true); }}
+                                                    style={{ padding: '4px 10px', backgroundColor: '#dbeafe', color: '#2563eb', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}
+                                                    title="Click to deliver reward"
+                                                >
+                                                    ⏳ PENDING
+                                                </span>
+                                            ) : (customer.loyaltyPoints || 0) >= (loyaltySettings.rewardThreshold || 20) ? (
+                                                <span 
+                                                    onClick={() => { setRewardCustomer(customer); setShowRewardModal(true); }}
+                                                    style={{ padding: '4px 10px', backgroundColor: '#fef3c7', color: '#d97706', fontSize: '11px', fontWeight: '600', cursor: 'pointer', animation: 'pulse 2s infinite' }}
+                                                    title="Eligible for reward! Click to issue"
+                                                >
+                                                    🎁 ELIGIBLE
+                                                </span>
+                                            ) : customer.rewardHistory?.length > 0 ? (
+                                                <span style={{ padding: '4px 10px', backgroundColor: '#d1fae5', color: '#059669', fontSize: '11px', fontWeight: '500' }} title={`${customer.rewardHistory.length} reward(s) delivered`}>
+                                                    ✅ {customer.rewardHistory.length}x
+                                                </span>
+                                            ) : (
+                                                <span style={{ fontSize: '11px', color: theme.textMuted }}>
+                                                    {Math.max(0, (loyaltySettings.rewardThreshold || 20) - (customer.loyaltyPoints || 0))} to go
+                                                </span>
+                                            )}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -7143,6 +7523,147 @@ function CustomerManagement() {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Loyalty Rewards Tab */}
+            {activeTab === 'rewards' && (
+                <div>
+                    {/* Reward Settings Summary */}
+                    <div style={{ backgroundColor: theme.bg, padding: '16px 20px', marginBottom: '20px', border: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
+                        <div>
+                            <div style={{ fontSize: '14px', fontWeight: '600', color: theme.text, marginBottom: '4px' }}>🎁 Current Reward: {loyaltySettings.rewardType || 'Free Basic Wash'}</div>
+                            <div style={{ fontSize: '13px', color: theme.textMuted }}>Customers earn reward at <strong style={{ color: '#f59e0b' }}>{loyaltySettings.rewardThreshold || 20} points</strong></div>
+                        </div>
+                        <button onClick={() => setShowLoyaltySettingsModal(true)} style={{ padding: '8px 16px', backgroundColor: theme.btnLoyaltyBg, color: theme.btnLoyaltyText, border: `1px solid ${theme.btnLoyaltyBorder}`, cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>⚙️ Configure</button>
+                    </div>
+
+                    {/* Stats */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '15px', marginBottom: '20px' }}>
+                        <div style={{ backgroundColor: '#fef3c7', padding: '16px', border: '1px solid #fde68a' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#d97706' }}>{getRewardEligibleCustomers().length}</div>
+                            <div style={{ fontSize: '12px', color: '#92400e' }}>Eligible for Reward</div>
+                        </div>
+                        <div style={{ backgroundColor: '#dbeafe', padding: '16px', border: '1px solid #bfdbfe' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#2563eb' }}>{getPendingRewards().length}</div>
+                            <div style={{ fontSize: '12px', color: '#1e40af' }}>Pending Delivery</div>
+                        </div>
+                        <div style={{ backgroundColor: '#d1fae5', padding: '16px', border: '1px solid #a7f3d0' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#059669' }}>{getDeliveredRewards().length}</div>
+                            <div style={{ fontSize: '12px', color: '#065f46' }}>Rewards Delivered</div>
+                        </div>
+                    </div>
+
+                    {/* Eligible Customers Section */}
+                    {getRewardEligibleCustomers().length > 0 && (
+                        <div style={{ marginBottom: '24px' }}>
+                            <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                🌟 Customers Eligible for Reward
+                                <span style={{ backgroundColor: '#fef3c7', color: '#d97706', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getRewardEligibleCustomers().length}</span>
+                            </h3>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {getRewardEligibleCustomers().map((customer) => (
+                                    <div key={customer.id} style={{ backgroundColor: theme.bg, padding: '16px', border: `1px solid ${theme.border}`, borderLeft: '4px solid #f59e0b' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontWeight: '600', fontSize: '15px', color: theme.text }}>{customer.name}</div>
+                                                <div style={{ fontSize: '13px', color: theme.textMuted }}>{customer.phone}</div>
+                                            </div>
+                                            <div style={{ textAlign: 'center', padding: '8px 16px', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
+                                                <div style={{ fontSize: '18px', fontWeight: '700', color: '#d97706' }}>{customer.loyaltyPoints || 0}</div>
+                                                <div style={{ fontSize: '10px', color: '#92400e' }}>POINTS</div>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button onClick={() => { setRewardCustomer(customer); setShowRewardModal(true); }} style={{ padding: '8px 16px', backgroundColor: '#f59e0b', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>🎁 Issue Reward</button>
+                                                <button onClick={() => { window.location.href = `sms:${customer.phone}?body=${encodeURIComponent(getRewardMessage(customer))}`; }} style={{ padding: '8px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>📱 Send SMS</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Pending Rewards Section */}
+                    {getPendingRewards().length > 0 && (
+                        <div style={{ marginBottom: '24px' }}>
+                            <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                ⏳ Pending Reward Delivery
+                                <span style={{ backgroundColor: '#dbeafe', color: '#2563eb', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getPendingRewards().length}</span>
+                            </h3>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {getPendingRewards().map((customer) => (
+                                    <div key={customer.id} style={{ backgroundColor: theme.bg, padding: '16px', border: `1px solid ${theme.border}`, borderLeft: '4px solid #3b82f6' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontWeight: '600', fontSize: '15px', color: theme.text }}>{customer.name}</div>
+                                                <div style={{ fontSize: '13px', color: theme.textMuted, marginBottom: '8px' }}>{customer.phone}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                                    <strong>Reward:</strong> {customer.pendingReward?.type || loyaltySettings.rewardType}
+                                                </div>
+                                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
+                                                    Issued: {customer.pendingReward?.issuedAt ? new Date(customer.pendingReward.issuedAt).toLocaleDateString() : 'N/A'}
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button onClick={() => { setRewardCustomer(customer); setShowRewardModal(true); }} style={{ padding: '8px 16px', backgroundColor: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>✅ Mark Delivered</button>
+                                                <button onClick={() => handleCancelReward(customer)} style={{ padding: '8px 16px', backgroundColor: theme.btnDeleteBg, color: theme.btnDeleteText, border: `1px solid ${theme.btnDeleteBorder}`, cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>Cancel</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Delivered Rewards History */}
+                    {getDeliveredRewards().length > 0 && (
+                        <div>
+                            <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                ✅ Reward History
+                            </h3>
+                            <div style={{ backgroundColor: theme.bg, border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: theme.bgTertiary }}>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Customer</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Reward</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Points Used</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Delivered</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {getDeliveredRewards().flatMap(customer => 
+                                            (customer.rewardHistory || []).map((reward, idx) => (
+                                                <tr key={`${customer.id}-${idx}`} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                                    <td style={{ padding: '12px 16px' }}>
+                                                        <div style={{ fontWeight: '500', color: theme.text }}>{customer.name}</div>
+                                                        <div style={{ fontSize: '12px', color: theme.textMuted }}>{customer.phone}</div>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px', color: theme.text }}>{reward.type || 'Reward'}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                        <span style={{ padding: '2px 8px', backgroundColor: '#fef3c7', color: '#d97706', fontSize: '12px', fontWeight: '500' }}>{loyaltySettings.rewardThreshold || 20} pts</span>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px', fontSize: '13px', color: theme.textSecondary }}>
+                                                        {reward.deliveredAt ? new Date(reward.deliveredAt).toLocaleDateString() : 'N/A'}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Empty State */}
+                    {getRewardEligibleCustomers().length === 0 && getPendingRewards().length === 0 && getDeliveredRewards().length === 0 && (
+                        <div style={{ backgroundColor: theme.bg, padding: '60px 20px', textAlign: 'center', border: `1px solid ${theme.border}` }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎁</div>
+                            <div style={{ fontSize: '16px', fontWeight: '500', color: theme.text, marginBottom: '8px' }}>No Rewards Yet</div>
+                            <div style={{ fontSize: '13px', color: theme.textMuted }}>Customers will appear here when they reach {loyaltySettings.rewardThreshold || 20} loyalty points</div>
                         </div>
                     )}
                 </div>
@@ -7385,12 +7906,13 @@ function CustomerManagement() {
             {/* Loyalty Settings Modal */}
             {showLoyaltySettingsModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '450px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '550px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
                         <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>⚙️ Loyalty Settings</h2>
                             <button onClick={() => setShowLoyaltySettingsModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textMuted }}>×</button>
                         </div>
                         <div style={{ padding: '20px' }}>
+                            {/* General Settings */}
                             <div style={{ marginBottom: '20px', padding: '14px', backgroundColor: theme.bgTertiary, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
                                     <div style={{ fontWeight: '500', color: theme.text }}>Enable Loyalty Program</div>
@@ -7403,30 +7925,108 @@ function CustomerManagement() {
                                     <span style={{ position: 'absolute', width: '20px', height: '20px', backgroundColor: 'white', top: '3px', left: settingsFormData.enabled ? '27px' : '3px', transition: 'left 0.2s' }}></span>
                                 </button>
                             </div>
-                            <div style={{ marginBottom: '16px' }}>
-                                <label style={labelStyle}>Points Per Visit</label>
-                                <input type="number" min="0" step="1" value={settingsFormData.pointsPerVisit} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerVisit: Number(e.target.value)})} style={inputStyle} />
-                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Points awarded for each visit</div>
+
+                            {/* Points Earning Section */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: '600', color: theme.textSecondary, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📊 Points Earning</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={labelStyle}>Points Per Visit</label>
+                                        <input type="number" min="0" step="1" value={settingsFormData.pointsPerVisit} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerVisit: Number(e.target.value)})} style={inputStyle} />
+                                    </div>
+                                    <div>
+                                        <label style={labelStyle}>Points Per KSh Spent</label>
+                                        <input type="number" min="0" step="0.01" value={settingsFormData.pointsPerRand} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerRand: Number(e.target.value)})} style={inputStyle} />
+                                    </div>
+                                </div>
                             </div>
-                            <div style={{ marginBottom: '16px' }}>
-                                <label style={labelStyle}>Points Per KSh Spent</label>
-                                <input type="number" min="0" step="0.01" value={settingsFormData.pointsPerRand} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerRand: Number(e.target.value)})} style={inputStyle} />
-                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Additional points earned per KSh 1 spent</div>
+
+                            {/* Bonuses Section */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: '600', color: theme.textSecondary, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🎉 Bonuses</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={labelStyle}>Welcome Bonus</label>
+                                        <input type="number" min="0" step="1" value={settingsFormData.welcomeBonus} onChange={(e) => setSettingsFormData({...settingsFormData, welcomeBonus: Number(e.target.value)})} style={inputStyle} />
+                                        <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>For new customers</div>
+                                    </div>
+                                    <div>
+                                        <label style={labelStyle}>Birthday Bonus</label>
+                                        <input type="number" min="0" step="1" value={settingsFormData.birthdayBonus} onChange={(e) => setSettingsFormData({...settingsFormData, birthdayBonus: Number(e.target.value)})} style={inputStyle} />
+                                        <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>On customer's birthday</div>
+                                    </div>
+                                </div>
                             </div>
-                            <div style={{ marginBottom: '16px' }}>
-                                <label style={labelStyle}>Redeem Rate (KSh per Point)</label>
-                                <input type="number" min="0" step="0.01" value={settingsFormData.redeemRate} onChange={(e) => setSettingsFormData({...settingsFormData, redeemRate: Number(e.target.value)})} style={inputStyle} />
-                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Value of each point when redeemed (e.g., 0.1 = KSh 0.10 per point)</div>
+
+                            {/* Redemption */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: '600', color: theme.textSecondary, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>💰 Redemption</div>
+                                <div>
+                                    <label style={labelStyle}>Redeem Rate (KSh per Point)</label>
+                                    <input type="number" min="0" step="0.01" value={settingsFormData.redeemRate} onChange={(e) => setSettingsFormData({...settingsFormData, redeemRate: Number(e.target.value)})} style={inputStyle} />
+                                    <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>Value of each point when redeemed (e.g., 0.1 = KSh 0.10 per point)</div>
+                                </div>
                             </div>
-                            <div style={{ marginBottom: '16px' }}>
-                                <label style={labelStyle}>Welcome Bonus Points</label>
-                                <input type="number" min="0" step="1" value={settingsFormData.welcomeBonus} onChange={(e) => setSettingsFormData({...settingsFormData, welcomeBonus: Number(e.target.value)})} style={inputStyle} />
-                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Points given to new customers</div>
-                            </div>
-                            <div style={{ marginBottom: '16px' }}>
-                                <label style={labelStyle}>Birthday Bonus Points</label>
-                                <input type="number" min="0" step="1" value={settingsFormData.birthdayBonus} onChange={(e) => setSettingsFormData({...settingsFormData, birthdayBonus: Number(e.target.value)})} style={inputStyle} />
-                                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Bonus points on customer's birthday</div>
+
+                            {/* Reward Settings Section */}
+                            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '20px' }}>
+                                <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: '#fef3c7', border: '1px solid #fde68a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <div style={{ fontWeight: '500', color: '#92400e' }}>🎁 Enable Reward System</div>
+                                        <div style={{ fontSize: '12px', color: '#a16207' }}>Auto-reward customers at threshold</div>
+                                    </div>
+                                    <button
+                                        onClick={() => setSettingsFormData({...settingsFormData, rewardEnabled: !settingsFormData.rewardEnabled})}
+                                        style={{ width: '50px', height: '26px', backgroundColor: settingsFormData.rewardEnabled ? '#f59e0b' : theme.border, border: 'none', cursor: 'pointer', position: 'relative' }}
+                                    >
+                                        <span style={{ position: 'absolute', width: '20px', height: '20px', backgroundColor: 'white', top: '3px', left: settingsFormData.rewardEnabled ? '27px' : '3px', transition: 'left 0.2s' }}></span>
+                                    </button>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                                    <div>
+                                        <label style={labelStyle}>Reward Threshold (Points)</label>
+                                        <input type="number" min="1" step="1" value={settingsFormData.rewardThreshold || 20} onChange={(e) => setSettingsFormData({...settingsFormData, rewardThreshold: Number(e.target.value)})} style={inputStyle} />
+                                        <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>Points needed for reward</div>
+                                    </div>
+                                    <div>
+                                        <label style={labelStyle}>Reward Type</label>
+                                        <select 
+                                            value={settingsFormData.rewardType || 'Free Basic Wash'} 
+                                            onChange={(e) => setSettingsFormData({...settingsFormData, rewardType: e.target.value})} 
+                                            style={inputStyle}
+                                        >
+                                            <option value="Free Basic Wash">Free Basic Wash</option>
+                                            <option value="Free Premium Wash">Free Premium Wash</option>
+                                            <option value="Free Interior Clean">Free Interior Clean</option>
+                                            <option value="50% Off Next Wash">50% Off Next Wash</option>
+                                            <option value="Free Wax Treatment">Free Wax Treatment</option>
+                                            <option value="Free Air Freshener">Free Air Freshener</option>
+                                            <option value="KSh 500 Voucher">KSh 500 Voucher</option>
+                                            <option value="KSh 1000 Voucher">KSh 1000 Voucher</option>
+                                            <option value="Custom Reward">Custom Reward</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ marginBottom: '16px' }}>
+                                    <label style={labelStyle}>Reward Message (SMS/Notification)</label>
+                                    <textarea 
+                                        value={settingsFormData.rewardMessage || ''} 
+                                        onChange={(e) => setSettingsFormData({...settingsFormData, rewardMessage: e.target.value})} 
+                                        style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }} 
+                                        placeholder="Congratulations! You have earned {points} points..."
+                                    />
+                                    <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
+                                        Use <code style={{ backgroundColor: theme.bgTertiary, padding: '1px 4px' }}>{'{points}'}</code> for points, 
+                                        <code style={{ backgroundColor: theme.bgTertiary, padding: '1px 4px', marginLeft: '4px' }}>{'{name}'}</code> for customer name,
+                                        <code style={{ backgroundColor: theme.bgTertiary, padding: '1px 4px', marginLeft: '4px' }}>{'{reward}'}</code> for reward type
+                                    </div>
+                                </div>
+
+                                <div style={{ padding: '12px', backgroundColor: theme.bgTertiary, fontSize: '12px', color: theme.textSecondary }}>
+                                    <strong>How it works:</strong> When a customer reaches {settingsFormData.rewardThreshold || 20} points, they appear in the "Loyalty Rewards" tab. You can then issue a "{settingsFormData.rewardType || 'Free Basic Wash'}" and track when it's delivered. Points are deducted after delivery.
+                                </div>
                             </div>
                         </div>
                         <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
@@ -7434,6 +8034,87 @@ function CustomerManagement() {
                             <button onClick={handleSaveLoyaltySettings} disabled={actionLoading} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: actionLoading ? 0.7 : 1 }}>
                                 {actionLoading ? 'Saving...' : 'Save Settings'}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Reward Issue/Deliver Modal */}
+            {showRewardModal && rewardCustomer && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '450px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>
+                                {rewardCustomer.pendingReward ? '✅ Deliver Reward' : '🎁 Issue Reward'}
+                            </h2>
+                            <button onClick={() => { setShowRewardModal(false); setRewardCustomer(null); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textMuted }}>×</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            {/* Customer Info */}
+                            <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: theme.bgTertiary, border: `1px solid ${theme.border}` }}>
+                                <div style={{ fontWeight: '600', fontSize: '16px', color: theme.text, marginBottom: '4px' }}>{rewardCustomer.name}</div>
+                                <div style={{ fontSize: '13px', color: theme.textMuted, marginBottom: '12px' }}>{rewardCustomer.phone}</div>
+                                <div style={{ display: 'flex', gap: '12px' }}>
+                                    <div style={{ flex: 1, textAlign: 'center', padding: '10px', backgroundColor: theme.bg, border: `1px solid ${theme.border}` }}>
+                                        <div style={{ fontSize: '20px', fontWeight: '700', color: '#f59e0b' }}>{rewardCustomer.loyaltyPoints || 0}</div>
+                                        <div style={{ fontSize: '10px', color: theme.textMuted }}>Current Points</div>
+                                    </div>
+                                    <div style={{ flex: 1, textAlign: 'center', padding: '10px', backgroundColor: theme.bg, border: `1px solid ${theme.border}` }}>
+                                        <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text }}>{rewardCustomer.totalVisits || 0}</div>
+                                        <div style={{ fontSize: '10px', color: theme.textMuted }}>Total Visits</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Reward Details */}
+                            <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#fef3c7', border: '1px solid #fde68a' }}>
+                                <div style={{ fontSize: '12px', color: '#92400e', marginBottom: '8px', fontWeight: '600' }}>REWARD</div>
+                                <div style={{ fontSize: '18px', fontWeight: '600', color: '#78350f', marginBottom: '8px' }}>
+                                    🎁 {rewardCustomer.pendingReward?.type || loyaltySettings.rewardType}
+                                </div>
+                                {rewardCustomer.pendingReward && (
+                                    <div style={{ fontSize: '12px', color: '#92400e' }}>
+                                        Issued: {new Date(rewardCustomer.pendingReward.issuedAt).toLocaleDateString()}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Message Preview */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '12px', color: theme.textMuted, marginBottom: '8px' }}>Message to Customer:</div>
+                                <div style={{ padding: '12px', backgroundColor: theme.bgTertiary, border: `1px solid ${theme.border}`, fontSize: '13px', color: theme.text, lineHeight: '1.5' }}>
+                                    {getRewardMessage(rewardCustomer)}
+                                </div>
+                            </div>
+
+                            {!rewardCustomer.pendingReward && (
+                                <div style={{ padding: '12px', backgroundColor: '#dbeafe', border: '1px solid #bfdbfe', fontSize: '12px', color: '#1e40af' }}>
+                                    <strong>Note:</strong> Issuing this reward will mark it as pending. You can then send an SMS to notify the customer and mark it as delivered when they redeem it.
+                                </div>
+                            )}
+
+                            {rewardCustomer.pendingReward && (
+                                <div style={{ padding: '12px', backgroundColor: '#d1fae5', border: '1px solid #a7f3d0', fontSize: '12px', color: '#065f46' }}>
+                                    <strong>Note:</strong> Marking as delivered will deduct <strong>{loyaltySettings.rewardThreshold || 20} points</strong> from the customer's balance and record this reward in their history.
+                                </div>
+                            )}
+                        </div>
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                            <button onClick={() => { window.location.href = `sms:${rewardCustomer.phone}?body=${encodeURIComponent(getRewardMessage(rewardCustomer))}`; }} style={{ padding: '10px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>
+                                📱 Send SMS
+                            </button>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <button onClick={() => { setShowRewardModal(false); setRewardCustomer(null); }} style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px' }}>Cancel</button>
+                                {!rewardCustomer.pendingReward ? (
+                                    <button onClick={() => handleIssueReward(rewardCustomer)} disabled={actionLoading} style={{ padding: '10px 20px', backgroundColor: '#f59e0b', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: actionLoading ? 0.7 : 1 }}>
+                                        {actionLoading ? 'Issuing...' : '🎁 Issue Reward'}
+                                    </button>
+                                ) : (
+                                    <button onClick={() => handleDeliverReward(rewardCustomer)} disabled={actionLoading} style={{ padding: '10px 20px', backgroundColor: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: actionLoading ? 0.7 : 1 }}>
+                                        {actionLoading ? 'Processing...' : '✅ Mark Delivered'}
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -7487,11 +8168,76 @@ function CustomerManagement() {
                                 <span style={{ color: theme.text }}>KSh {(receiptData.service.price || 0).toFixed(2)}</span>
                             </div>
                             
-                            {receiptData.pointsEarned > 0 && (
-                                <div className="points" style={{ backgroundColor: theme.bgTertiary, padding: '12px', textAlign: 'center', marginTop: '15px' }}>
-                                    <div style={{ fontSize: '13px', color: theme.textSecondary }}>Points Earned This Visit</div>
-                                    <div style={{ fontSize: '24px', fontWeight: '600', color: '#f59e0b' }}>+{receiptData.pointsEarned}</div>
-                                    <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '4px' }}>Total Points: {receiptData.totalPoints}</div>
+                            {/* Loyalty Points Section */}
+                            {receiptData.loyaltyEnabled && (
+                                <div style={{ marginTop: '15px', borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px', textAlign: 'center' }}>⭐ Loyalty Program</div>
+                                    
+                                    {/* Points Summary */}
+                                    <div style={{ backgroundColor: theme.bgTertiary, padding: '12px', marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                            <span style={{ fontSize: '12px', color: theme.textSecondary }}>Current Balance:</span>
+                                            <span style={{ fontSize: '14px', fontWeight: '600', color: theme.text }}>{receiptData.currentPoints} pts</span>
+                                        </div>
+                                        {receiptData.pointsEarned > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Points This Visit:</span>
+                                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#22c55e' }}>+{receiptData.pointsEarned} pts</span>
+                                            </div>
+                                        )}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
+                                            <span style={{ fontSize: '12px', color: theme.textSecondary }}>New Balance:</span>
+                                            <span style={{ fontSize: '16px', fontWeight: '700', color: '#f59e0b' }}>{receiptData.totalPoints} pts</span>
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Total Visits */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '8px', padding: '0 4px' }}>
+                                        <span style={{ color: theme.textMuted }}>Total Visits:</span>
+                                        <span style={{ color: theme.text, fontWeight: '500' }}>{receiptData.totalVisits + 1}</span>
+                                    </div>
+                                    
+                                    {/* Progress to Reward */}
+                                    {!receiptData.qualifiesForReward && receiptData.pointsToNextReward > 0 && (
+                                        <div style={{ backgroundColor: '#fef3c7', padding: '10px', textAlign: 'center', marginTop: '10px' }}>
+                                            <div style={{ fontSize: '11px', color: '#92400e' }}>
+                                                🎯 {Math.max(0, receiptData.pointsToNextReward - receiptData.pointsEarned)} more point{Math.max(0, receiptData.pointsToNextReward - receiptData.pointsEarned) !== 1 ? 's' : ''} to earn a reward!
+                                            </div>
+                                            <div style={{ marginTop: '6px', backgroundColor: '#fde68a', height: '8px', overflow: 'hidden' }}>
+                                                <div style={{ 
+                                                    width: `${Math.min(100, (receiptData.totalPoints / receiptData.rewardThreshold) * 100)}%`, 
+                                                    height: '100%', 
+                                                    backgroundColor: '#f59e0b',
+                                                    transition: 'width 0.3s'
+                                                }}></div>
+                                            </div>
+                                            <div style={{ fontSize: '10px', color: '#92400e', marginTop: '4px' }}>{receiptData.totalPoints} / {receiptData.rewardThreshold} points</div>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Qualifies for Reward */}
+                                    {receiptData.qualifiesForReward && !receiptData.pendingReward && (
+                                        <div style={{ backgroundColor: '#dcfce7', padding: '12px', textAlign: 'center', marginTop: '10px' }}>
+                                            <div style={{ fontSize: '24px', marginBottom: '4px' }}>🎁</div>
+                                            <div style={{ fontSize: '14px', fontWeight: '600', color: '#166534' }}>Congratulations!</div>
+                                            <div style={{ fontSize: '12px', color: '#15803d' }}>You qualify for a <strong>{receiptData.rewardType}</strong>!</div>
+                                            <div style={{ fontSize: '11px', color: '#166534', marginTop: '4px' }}>Please ask staff to redeem your reward.</div>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Pending Reward Status */}
+                                    {receiptData.pendingReward && (
+                                        <div style={{ backgroundColor: '#dbeafe', padding: '12px', textAlign: 'center', marginTop: '10px' }}>
+                                            <div style={{ fontSize: '24px', marginBottom: '4px' }}>🎉</div>
+                                            <div style={{ fontSize: '14px', fontWeight: '600', color: '#1e40af' }}>Reward Pending</div>
+                                            <div style={{ fontSize: '12px', color: '#1d4ed8' }}>
+                                                {receiptData.pendingReward.rewardType} - Issued {new Date(receiptData.pendingReward.issuedAt).toLocaleDateString()}
+                                            </div>
+                                            <div style={{ fontSize: '11px', color: '#1e40af', marginTop: '4px' }}>
+                                                Status: {receiptData.pendingReward.delivered ? '✅ Delivered' : '⏳ Awaiting Delivery'}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             
@@ -7506,6 +8252,108 @@ function CustomerManagement() {
                             <button onClick={handlePrintReceipt} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 🖨️ Print Receipt
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Import from Intake Modal */}
+            {showImportModal && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '550px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>📥 Import from Vehicle Intake</h2>
+                                <div style={{ fontSize: '13px', color: theme.textMuted, marginTop: '4px' }}>Add clients from intake records as customers with loyalty points</div>
+                            </div>
+                            <button onClick={() => setShowImportModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textMuted }}>×</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            {getAvailableIntakeClients().length === 0 ? (
+                                <div style={{ padding: '40px 20px', textAlign: 'center', color: theme.textMuted }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
+                                    <div style={{ fontSize: '16px', fontWeight: '500', color: theme.text, marginBottom: '8px' }}>All Caught Up!</div>
+                                    <div style={{ fontSize: '13px' }}>All clients from vehicle intake have been imported as customers.</div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Select Client to Import</label>
+                                        <select
+                                            value={selectedIntakeClient ? JSON.stringify(selectedIntakeClient) : ''}
+                                            onChange={(e) => setSelectedIntakeClient(e.target.value ? JSON.parse(e.target.value) : null)}
+                                            style={{ width: '100%', padding: '12px', border: `1px solid ${theme.border}`, fontSize: '14px', backgroundColor: theme.inputBg, color: theme.text, cursor: 'pointer' }}
+                                        >
+                                            <option value="">-- Select a client --</option>
+                                            {getAvailableIntakeClients().map((client, idx) => (
+                                                <option key={idx} value={JSON.stringify(client)}>
+                                                    {client.name || 'Unknown'} - {client.phone || 'No phone'} ({client.totalVisits} visit{client.totalVisits !== 1 ? 's' : ''})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {selectedIntakeClient && (
+                                        <div style={{ backgroundColor: theme.bgTertiary, padding: '16px', marginBottom: '16px', border: `1px solid ${theme.border}` }}>
+                                            <div style={{ fontSize: '14px', fontWeight: '600', color: theme.text, marginBottom: '12px' }}>Client Preview</div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                                <div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Name</div>
+                                                    <div style={{ fontSize: '14px', color: theme.text, fontWeight: '500' }}>{selectedIntakeClient.name || '-'}</div>
+                                                </div>
+                                                <div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Phone</div>
+                                                    <div style={{ fontSize: '14px', color: theme.text }}>{selectedIntakeClient.phone || '-'}</div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                                <div style={{ backgroundColor: theme.bg, padding: '12px', textAlign: 'center', border: `1px solid ${theme.border}` }}>
+                                                    <div style={{ fontSize: '20px', fontWeight: '600', color: '#3b82f6' }}>{selectedIntakeClient.totalVisits}</div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted }}>Total Visits</div>
+                                                </div>
+                                                <div style={{ backgroundColor: theme.bg, padding: '12px', textAlign: 'center', border: `1px solid ${theme.border}` }}>
+                                                    <div style={{ fontSize: '20px', fontWeight: '600', color: '#f59e0b' }}>
+                                                        {loyaltySettings.enabled ? (selectedIntakeClient.totalVisits * loyaltySettings.pointsPerVisit) + loyaltySettings.welcomeBonus : 0}
+                                                    </div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted }}>Points to Award</div>
+                                                </div>
+                                            </div>
+
+                                            {selectedIntakeClient.vehicles?.length > 0 && (
+                                                <div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '6px' }}>Vehicles ({selectedIntakeClient.vehicles.length})</div>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                        {selectedIntakeClient.vehicles.map((v, idx) => (
+                                                            <span key={idx} style={{ padding: '4px 8px', backgroundColor: theme.bg, fontSize: '12px', fontWeight: '500', color: theme.text, border: `1px solid ${theme.border}` }}>
+                                                                🚗 {v.plateNumber}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {loyaltySettings.enabled && (
+                                                <div style={{ marginTop: '12px', padding: '10px', backgroundColor: '#fef3c7', fontSize: '12px', color: '#92400e' }}>
+                                                    💡 <strong>Points calculation:</strong> {selectedIntakeClient.totalVisits} visits × {loyaltySettings.pointsPerVisit} pts/visit + {loyaltySettings.welcomeBonus} welcome bonus = <strong>{(selectedIntakeClient.totalVisits * loyaltySettings.pointsPerVisit) + loyaltySettings.welcomeBonus} points</strong>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button onClick={() => setShowImportModal(false)} style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px' }}>Cancel</button>
+                            {getAvailableIntakeClients().length > 0 && (
+                                <button 
+                                    onClick={handleImportFromIntake} 
+                                    disabled={actionLoading || !selectedIntakeClient} 
+                                    style={{ padding: '10px 20px', backgroundColor: selectedIntakeClient ? '#7c3aed' : theme.bgTertiary, color: selectedIntakeClient ? 'white' : theme.textMuted, border: 'none', cursor: selectedIntakeClient ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: '500', opacity: actionLoading ? 0.7 : 1 }}
+                                >
+                                    {actionLoading ? 'Importing...' : '📥 Import as Customer'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -10324,17 +11172,45 @@ function WashBaysContent() {
             return;
         }
         
-        // Validate service selection
-        if (!assignForm.service) {
+        // For new vehicles, validate service selection
+        if (assignMode === 'new' && !assignForm.service) {
             setError('Please select a service');
             return;
         }
         
-        // Get selected service package info
-        const selectedPackage = servicePackages.find(p => p.id === assignForm.service);
-        const serviceInfo = selectedPackage 
-            ? { id: selectedPackage.id, name: selectedPackage.name, price: selectedPackage.price }
-            : { name: assignForm.service, price: 0 };
+        // Get service info based on mode
+        let serviceInfo;
+        
+        if (assignMode === 'select' && selectedVehicleId) {
+            // Get service from queue vehicle
+            const queueVehicle = intakeQueue.find(v => v.id === selectedVehicleId);
+            if (queueVehicle?.service && typeof queueVehicle.service === 'object') {
+                serviceInfo = queueVehicle.service;
+            } else {
+                // Fallback to form service or default
+                const selectedPackage = servicePackages.find(p => p.id === assignForm.service);
+                serviceInfo = selectedPackage 
+                    ? { id: selectedPackage.id, name: selectedPackage.name, price: selectedPackage.price }
+                    : { name: 'Car Wash', price: 0 };
+            }
+        } else if (assignMode === 'assigned' && selectedVehicleId) {
+            // Get service from assigned vehicle
+            const assignedVehicle = intakeRecords.find(v => v.id === selectedVehicleId);
+            if (assignedVehicle?.service && typeof assignedVehicle.service === 'object') {
+                serviceInfo = assignedVehicle.service;
+            } else {
+                const selectedPackage = servicePackages.find(p => p.id === assignForm.service);
+                serviceInfo = selectedPackage 
+                    ? { id: selectedPackage.id, name: selectedPackage.name, price: selectedPackage.price }
+                    : { name: 'Car Wash', price: 0 };
+            }
+        } else {
+            // New vehicle - use form selection
+            const selectedPackage = servicePackages.find(p => p.id === assignForm.service);
+            serviceInfo = selectedPackage 
+                ? { id: selectedPackage.id, name: selectedPackage.name, price: selectedPackage.price }
+                : { name: assignForm.service, price: 0 };
+        }
         
         setActionLoading(true);
         setError(null);
@@ -11623,7 +12499,9 @@ function WashBaysContent() {
                                                 Select Vehicle from Queue
                                             </label>
                                             <div style={{ maxHeight: '200px', overflowY: 'auto', border: `1px solid ${theme.border}`, borderRadius: '2px' }}>
-                                                {intakeQueue.map(vehicle => (
+                                                {intakeQueue.map(vehicle => {
+                                                    const vehicleService = typeof vehicle.service === 'object' ? vehicle.service : null;
+                                                    return (
                                                     <div
                                                         key={vehicle.id}
                                                         onClick={() => setSelectedVehicleId(vehicle.id)}
@@ -11661,6 +12539,27 @@ function WashBaysContent() {
                                                             <div style={{ fontSize: '12px', color: theme.textSecondary }}>
                                                                 {vehicle.customerName || vehicle.ownerName || 'Walk-in'} • {vehicle.vehicleType || 'Vehicle'}
                                                             </div>
+                                                            {vehicleService && (
+                                                                <div style={{ 
+                                                                    fontSize: '12px', 
+                                                                    color: '#059669', 
+                                                                    fontWeight: '600',
+                                                                    marginTop: '4px',
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '6px'
+                                                                }}>
+                                                                    <span>🚿 {vehicleService.name}</span>
+                                                                    <span style={{ 
+                                                                        backgroundColor: '#d1fae5', 
+                                                                        padding: '2px 6px', 
+                                                                        borderRadius: '4px',
+                                                                        fontSize: '11px'
+                                                                    }}>
+                                                                        KES {vehicleService.price?.toLocaleString()}
+                                                                    </span>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                         <div style={{ 
                                                             fontSize: '11px', 
@@ -11670,7 +12569,8 @@ function WashBaysContent() {
                                                             {new Date(vehicle.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                         </div>
                                                     </div>
-                                                ))}
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     )}
@@ -11849,7 +12749,8 @@ function WashBaysContent() {
                                 </>
                             )}
 
-                            {/* Service Selection (always shown) */}
+                            {/* Service Selection - only for new vehicles */}
+                            {assignMode === 'new' && (
                             <div style={{ marginBottom: '16px' }}>
                                 <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', color: theme.text }}>Service</label>
                                 <select
@@ -11871,6 +12772,51 @@ function WashBaysContent() {
                                     ))}
                                 </select>
                             </div>
+                            )}
+                            
+                            {/* Service Info Display - for queue/assigned vehicles */}
+                            {(assignMode === 'select' || assignMode === 'assigned') && selectedVehicleId && (() => {
+                                const selectedVehicle = assignMode === 'select' 
+                                    ? intakeQueue.find(v => v.id === selectedVehicleId)
+                                    : intakeRecords.find(v => v.id === selectedVehicleId);
+                                const vehicleService = typeof selectedVehicle?.service === 'object' ? selectedVehicle?.service : null;
+                                
+                                if (!vehicleService) return null;
+                                
+                                return (
+                                    <div style={{ 
+                                        marginBottom: '16px', 
+                                        padding: '16px', 
+                                        backgroundColor: '#f0fdf4', 
+                                        borderRadius: '4px',
+                                        border: '1px solid #bbf7d0'
+                                    }}>
+                                        <div style={{ fontSize: '11px', color: '#166534', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px', fontWeight: '600' }}>
+                                            Service from Intake
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <div style={{ fontSize: '16px', fontWeight: '600', color: '#166534' }}>
+                                                    🚿 {vehicleService.name}
+                                                </div>
+                                            </div>
+                                            <div style={{ 
+                                                fontSize: '18px', 
+                                                fontWeight: '700', 
+                                                color: '#166534',
+                                                backgroundColor: '#dcfce7',
+                                                padding: '8px 16px',
+                                                borderRadius: '4px'
+                                            }}>
+                                                KES {vehicleService.price?.toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div style={{ fontSize: '11px', color: '#15803d', marginTop: '8px' }}>
+                                            ✓ This service will be applied automatically
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             {/* Staff Assignment (always shown) */}
                             <div style={{ marginBottom: '20px' }}>
@@ -15111,21 +16057,105 @@ function BillingModule() {
             `<tr><td style="padding:8px 0;border-bottom:1px dashed #ddd;">${s.name}</td><td style="padding:8px 0;border-bottom:1px dashed #ddd;text-align:right;">KES ${parseFloat(s.price).toLocaleString()}</td></tr>`
         ).join('') || '<tr><td colspan="2">-</td></tr>';
         
-        // Fetch customer loyalty points
-        let loyaltyPoints = 0;
-        let pointsEarned = 0;
+        // Fetch customer loyalty data
+        let loyaltyData = null;
         if (invoice.customerPhone) {
             try {
                 const services = window.FirebaseServices;
                 const customerResult = await services.customerService.findCustomerByPhone(invoice.customerPhone);
                 if (customerResult.success && customerResult.data) {
-                    loyaltyPoints = customerResult.data.loyaltyPoints || 0;
-                    // Points earned from this transaction (1 point per 100 KES spent)
-                    pointsEarned = invoice.pointsEarned || Math.floor((invoice.totalAmount || 0) / 100);
+                    const customer = customerResult.data;
+                    // Fetch loyalty settings
+                    let loyaltySettings = { enabled: true, pointsPerVisit: 1, rewardThreshold: 20 };
+                    try {
+                        const settingsResult = await services.loyaltySettingsService.getSettings();
+                        if (settingsResult.success && settingsResult.data) {
+                            loyaltySettings = settingsResult.data;
+                        }
+                    } catch (e) { console.log('Using default loyalty settings'); }
+                    
+                    const currentPoints = customer.loyaltyPoints || 0;
+                    const pointsEarned = invoice.pointsEarned || loyaltySettings.pointsPerVisit || 1;
+                    const newBalance = currentPoints + pointsEarned;
+                    const totalVisits = (customer.totalVisits || 0) + 1;
+                    const rewardThreshold = loyaltySettings.rewardThreshold || 20;
+                    const pointsToReward = Math.max(0, rewardThreshold - newBalance);
+                    
+                    loyaltyData = {
+                        enabled: loyaltySettings.enabled !== false,
+                        currentPoints,
+                        pointsEarned,
+                        newBalance,
+                        totalVisits,
+                        rewardThreshold,
+                        pointsToReward,
+                        qualifiesForReward: newBalance >= rewardThreshold,
+                        pendingReward: customer.pendingReward || null
+                    };
                 }
             } catch (e) {
-                console.log('Could not fetch loyalty points:', e);
+                console.log('Could not fetch loyalty data:', e);
             }
+        }
+        
+        // Build loyalty section HTML
+        let loyaltySection = '';
+        if (loyaltyData && loyaltyData.enabled) {
+            const progressPercent = Math.min(100, (loyaltyData.newBalance / loyaltyData.rewardThreshold) * 100);
+            
+            loyaltySection = `
+                <div style="border-top:2px dashed #ccc; margin-top:15px; padding-top:15px;">
+                    <div style="font-size:11px; color:#666; text-align:center; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">⭐ Loyalty Program</div>
+                    
+                    <div style="background:#f5f5f5; padding:10px; margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                            <span style="font-size:12px; color:#666;">Current Balance:</span>
+                            <span style="font-size:13px; font-weight:600;">${loyaltyData.currentPoints} pts</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                            <span style="font-size:12px; color:#666;">Points This Visit:</span>
+                            <span style="font-size:13px; font-weight:600; color:#22c55e;">+${loyaltyData.pointsEarned} pts</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; border-top:1px solid #ddd; padding-top:6px;">
+                            <span style="font-size:12px; color:#666;">New Balance:</span>
+                            <span style="font-size:15px; font-weight:700; color:#f59e0b;">${loyaltyData.newBalance} pts</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:8px; padding:0 4px;">
+                        <span style="color:#666;">Total Visits:</span>
+                        <span style="font-weight:500;">${loyaltyData.totalVisits}</span>
+                    </div>
+                    
+                    ${!loyaltyData.qualifiesForReward && loyaltyData.pointsToReward > 0 ? `
+                    <div style="background:#fef3c7; padding:10px; text-align:center; margin-top:10px;">
+                        <div style="font-size:11px; color:#92400e;">🎯 ${loyaltyData.pointsToReward} more point${loyaltyData.pointsToReward !== 1 ? 's' : ''} to earn a reward!</div>
+                        <div style="margin-top:6px; background:#fde68a; height:8px; overflow:hidden;">
+                            <div style="width:${progressPercent}%; height:100%; background:#f59e0b;"></div>
+                        </div>
+                        <div style="font-size:10px; color:#92400e; margin-top:4px;">${loyaltyData.newBalance} / ${loyaltyData.rewardThreshold} points</div>
+                    </div>
+                    ` : ''}
+                    
+                    ${loyaltyData.qualifiesForReward && !loyaltyData.pendingReward ? `
+                    <div style="background:#dcfce7; padding:12px; text-align:center; margin-top:10px;">
+                        <div style="font-size:20px; margin-bottom:4px;">🎁</div>
+                        <div style="font-size:13px; font-weight:600; color:#166534;">Congratulations!</div>
+                        <div style="font-size:11px; color:#15803d;">You qualify for a reward!</div>
+                        <div style="font-size:10px; color:#166534; margin-top:4px;">Please ask staff to redeem.</div>
+                    </div>
+                    ` : ''}
+                    
+                    ${loyaltyData.pendingReward ? `
+                    <div style="background:#dbeafe; padding:12px; text-align:center; margin-top:10px;">
+                        <div style="font-size:20px; margin-bottom:4px;">🎉</div>
+                        <div style="font-size:13px; font-weight:600; color:#1e40af;">Reward Pending</div>
+                        <div style="font-size:11px; color:#1d4ed8;">${loyaltyData.pendingReward.rewardType || 'Reward'}</div>
+                        <div style="font-size:10px; color:#1e40af; margin-top:4px;">Status: ${loyaltyData.pendingReward.delivered ? '✅ Delivered' : '⏳ Awaiting Delivery'}</div>
+                    </div>
+                    ` : ''}
+                </div>
+            `;
         }
         
         receiptWindow.document.write(`
@@ -15170,13 +16200,7 @@ function BillingModule() {
                 ${invoice.mpesaCode ? `<div class="info-row"><span>M-Pesa Code:</span><span>${invoice.mpesaCode}</span></div>` : ''}
                 <div class="info-row"><span>Paid At:</span><span>${invoice.paidAt ? new Date(invoice.paidAt).toLocaleString() : '-'}</span></div>
                 
-                ${invoice.customerPhone && invoice.customerPhone !== '-' ? `
-                <div style="border:2px dashed #f59e0b; padding:12px; margin:15px 0; text-align:center; background:#fffbeb;">
-                    <div style="font-size:11px; color:#92400e; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">⭐ Loyalty Program</div>
-                    <div style="font-size:14px; font-weight:bold; color:#d97706;">Points Earned: +${pointsEarned}</div>
-                    <div style="font-size:16px; font-weight:bold; color:#b45309; margin-top:4px;">Total Points: ${loyaltyPoints}</div>
-                </div>
-                ` : ''}
+                ${loyaltySection}
                 
                 <div class="footer">
                     <p>Thank you for your business!</p>
