@@ -102,180 +102,101 @@ function LoginPage({ onLoginSuccess }) {
         <div style={{ 
             minHeight: '100vh', 
             display: 'flex',
-            background: '#f8fafc'
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            background: '#1e3a5f',
+            padding: '20px',
+            position: 'relative',
+            overflow: 'hidden'
         }}>
-            {/* Left Side - Branding */}
-            <div style={{ 
-                flex: '1',
-                background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                padding: '60px',
-                position: 'relative',
-                overflow: 'hidden',
-                minHeight: '100vh'
-            }} className="login-branding">
-                {/* Background Pattern */}
-                <div style={{
-                    position: 'absolute',
-                    inset: 0,
-                    opacity: 0.05,
-                    backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
-                }}></div>
-                
-                {/* Floating elements for visual interest */}
-                <div style={{
-                    position: 'absolute',
-                    top: '10%',
-                    left: '10%',
-                    width: '120px',
-                    height: '120px',
-                    background: 'rgba(59, 130, 246, 0.1)',
-                    borderRadius: '50%',
-                    filter: 'blur(40px)'
-                }}></div>
-                <div style={{
-                    position: 'absolute',
-                    bottom: '20%',
-                    right: '15%',
-                    width: '160px',
-                    height: '160px',
-                    background: 'rgba(16, 185, 129, 0.1)',
-                    borderRadius: '50%',
-                    filter: 'blur(50px)'
-                }}></div>
+            {/* Background Pattern */}
+            <div style={{
+                position: 'absolute',
+                inset: 0,
+                opacity: 0.05,
+                backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            }}></div>
+            
+            {/* Floating elements for visual interest */}
+            <div style={{
+                position: 'absolute',
+                top: '10%',
+                left: '10%',
+                width: '120px',
+                height: '120px',
+                background: 'rgba(59, 130, 246, 0.1)',
+                borderRadius: '50%',
+                filter: 'blur(40px)'
+            }}></div>
+            <div style={{
+                position: 'absolute',
+                bottom: '20%',
+                right: '15%',
+                width: '160px',
+                height: '160px',
+                background: 'rgba(16, 185, 129, 0.1)',
+                borderRadius: '50%',
+                filter: 'blur(50px)'
+            }}></div>
 
-                {/* Logo and Content */}
-                <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', maxWidth: '400px' }}>
-                    {/* Logo Icon */}
+            {/* Centered Login Card */}
+            <div style={{ 
+                position: 'relative',
+                zIndex: 1,
+                width: '100%',
+                maxWidth: '420px',
+                background: 'white',
+                padding: '48px 40px',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+            }}>
+                {/* Logo */}
+                <div style={{
+                    textAlign: 'center',
+                    marginBottom: '32px'
+                }}>
                     <div style={{
-                        width: '100px',
-                        height: '100px',
-                        margin: '0 auto 32px',
-                        background: 'rgba(255,255,255,0.1)',
-                        borderRadius: '24px',
+                        width: '72px',
+                        height: '72px',
+                        margin: '0 auto 16px',
+                        background: '#1e3a5f',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: 'white',
-                        backdropFilter: 'blur(10px)',
-                        border: '1px solid rgba(255,255,255,0.1)'
+                        color: 'white'
                     }}>
-                        <div style={{ width: '56px', height: '56px' }}>
+                        <div style={{ width: '42px', height: '42px' }}>
                             <CarIcon />
                         </div>
                     </div>
-
-                    {/* Brand Name */}
-                    <h1 style={{
-                        fontSize: '42px',
-                        fontWeight: '700',
-                        color: 'white',
-                        margin: '0 0 12px',
-                        letterSpacing: '-1px'
+                    <h1 style={{ 
+                        fontSize: '28px', 
+                        fontWeight: '700', 
+                        color: '#1e293b', 
+                        margin: '0 0 4px',
+                        letterSpacing: '-0.5px'
                     }}>EcoSpark</h1>
-                    
-                    <p style={{
-                        fontSize: '18px',
-                        color: 'rgba(255,255,255,0.7)',
-                        margin: '0 0 48px',
-                        fontWeight: '400'
+                    <p style={{ 
+                        fontSize: '14px', 
+                        color: '#64748b', 
+                        margin: 0 
                     }}>Car Wash Management System</p>
-
-                    {/* Feature highlights */}
-                    <div style={{ textAlign: 'left' }}>
-                        {[
-                            { icon: '🚗', text: 'Vehicle Intake & Tracking' },
-                            { icon: '💧', text: 'Wash Bay Management' },
-                            { icon: '🔧', text: 'Garage & Service Operations' },
-                            { icon: '📊', text: 'Reports & Analytics' },
-                            { icon: '👥', text: 'Staff & HR Management' }
-                        ].map((feature, i) => (
-                            <div key={i} style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '14px',
-                                padding: '12px 0',
-                                borderBottom: i < 4 ? '1px solid rgba(255,255,255,0.08)' : 'none'
-                            }}>
-                                <span style={{ fontSize: '20px' }}>{feature.icon}</span>
-                                <span style={{ 
-                                    color: 'rgba(255,255,255,0.85)', 
-                                    fontSize: '15px',
-                                    fontWeight: '400'
-                                }}>{feature.text}</span>
-                            </div>
-                        ))}
-                    </div>
                 </div>
 
-                {/* Footer */}
-                <div style={{
-                    position: 'absolute',
-                    bottom: '30px',
-                    left: '0',
-                    right: '0',
-                    textAlign: 'center',
-                    color: 'rgba(255,255,255,0.4)',
-                    fontSize: '13px'
-                }}>
-                    © 2026 EcoSpark. All rights reserved.
+                {/* Welcome Text */}
+                <div style={{ marginBottom: '24px', textAlign: 'center' }}>
+                    <h2 style={{ 
+                        fontSize: '20px', 
+                        fontWeight: '600', 
+                        color: '#1e293b', 
+                        margin: '0 0 4px'
+                    }}>Welcome back</h2>
+                    <p style={{ 
+                        fontSize: '14px', 
+                        color: '#64748b', 
+                        margin: 0 
+                    }}>Sign in to your account to continue</p>
                 </div>
-            </div>
-
-            {/* Right Side - Login Form */}
-            <div style={{ 
-                flex: '1',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                padding: '40px',
-                background: 'white',
-                minHeight: '100vh'
-            }}>
-                <div style={{ width: '100%', maxWidth: '400px' }}>
-                    {/* Mobile Logo (hidden on desktop) */}
-                    <div className="mobile-logo" style={{
-                        display: 'none',
-                        textAlign: 'center',
-                        marginBottom: '40px'
-                    }}>
-                        <div style={{
-                            width: '64px',
-                            height: '64px',
-                            margin: '0 auto 16px',
-                            background: '#1e3a5f',
-                            borderRadius: '16px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'white'
-                        }}>
-                            <div style={{ width: '36px', height: '36px' }}>
-                                <CarIcon />
-                            </div>
-                        </div>
-                        <h2 style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b', margin: 0 }}>EcoSpark</h2>
-                    </div>
-
-                    {/* Welcome Text */}
-                    <div style={{ marginBottom: '32px' }}>
-                        <h2 style={{ 
-                            fontSize: '28px', 
-                            fontWeight: '700', 
-                            color: '#1e293b', 
-                            margin: '0 0 8px',
-                            letterSpacing: '-0.5px'
-                        }}>Welcome back</h2>
-                        <p style={{ 
-                            fontSize: '15px', 
-                            color: '#64748b', 
-                            margin: 0 
-                        }}>Sign in to your account to continue</p>
-                    </div>
 
                     {/* Error Message */}
                     {error && (
@@ -440,32 +361,36 @@ function LoginPage({ onLoginSuccess }) {
 
                     {/* Help text */}
                     <div style={{ 
-                        marginTop: '32px', 
+                        marginTop: '24px', 
                         textAlign: 'center',
-                        padding: '20px',
-                        background: '#f8fafc',
-                        border: '1px solid #e2e8f0'
+                        padding: '16px',
+                        background: '#f8fafc'
                     }}>
-                        <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>
+                        <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>
                             <span style={{ marginRight: '6px' }}>🔐</span>
                             Need help? Contact your system administrator
                         </p>
                     </div>
                 </div>
+
+            {/* Footer */}
+            <div style={{
+                position: 'absolute',
+                bottom: '20px',
+                left: '0',
+                right: '0',
+                textAlign: 'center',
+                color: 'rgba(255,255,255,0.5)',
+                fontSize: '13px',
+                zIndex: 1
+            }}>
+                © 2026 EcoSpark. All rights reserved.
             </div>
 
-            {/* Responsive CSS */}
+            {/* CSS */}
             <style>{`
                 @keyframes spin {
                     to { transform: rotate(360deg); }
-                }
-                @media (max-width: 900px) {
-                    .login-branding {
-                        display: none !important;
-                    }
-                    .mobile-logo {
-                        display: block !important;
-                    }
                 }
             `}</style>
         </div>
