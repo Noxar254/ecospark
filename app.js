@@ -612,217 +612,36 @@ function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasMod
 }
 
 // Notification Dropdown Component - Real-time Global Notifications
-function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
-    const [notifications, setNotifications] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [readNotifications, setReadNotifications] = useState(() => {
-        // Load read notifications from localStorage
-        try {
-            const saved = localStorage.getItem('ecospark_read_notifications');
-            return saved ? JSON.parse(saved) : [];
-        } catch { return []; }
-    });
-
-    // Save read notifications to localStorage
-    const saveReadNotifications = (ids) => {
-        try {
-            localStorage.setItem('ecospark_read_notifications', JSON.stringify(ids));
-        } catch (e) { console.log('Error saving read notifications:', e); }
-    };
-
-    useEffect(() => {
-        if (!isOpen) return;
-        
-        let cancelled = false;
-        const allNotifications = [];
-
-        const loadNotifications = async () => {
-            setLoading(true);
-            const svc = window.FirebaseServices;
-            if (!svc) {
-                setLoading(false);
-                return;
-            }
-
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const todayStr = today.toISOString().split('T')[0];
-
-            // Get activities (recent ones)
-            if (svc.activityService?.getRecentActivities) {
-                try {
-                    const activities = await svc.activityService.getRecentActivities(10);
-                    activities.forEach(a => {
-                        allNotifications.push({
-                            id: `activity-${a.id}`,
-                            type: 'activity',
-                            icon: a.type === 'intake' ? '🚗' : a.type === 'billing' ? '💳' : a.type === 'wash' ? '🚿' : a.type === 'garage' ? '🔧' : '📋',
-                            title: a.description,
-                            subtitle: a.user || 'System',
-                            timestamp: a.timestamp,
-                            module: a.type === 'intake' ? 'vehicle-intake' : a.type === 'billing' ? 'billing' : a.type === 'wash' ? 'wash-bays' : a.type === 'garage' ? 'garage' : 'activities',
-                            color: '#3b82f6'
-                        });
-                    });
-                } catch (e) { console.log('Activities fetch error:', e); }
-            }
-
-            // Get low stock items
-            if (svc.inventoryService?.getItems) {
-                try {
-                    const items = await svc.inventoryService.getItems();
-                    items.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).forEach(i => {
-                        allNotifications.push({
-                            id: `lowstock-${i.id}`,
-                            type: 'alert',
-                            icon: '⚠️',
-                            title: `Low Stock: ${i.name}`,
-                            subtitle: `Only ${i.quantity || 0} ${i.unit || 'units'} remaining`,
-                            timestamp: new Date().toISOString(),
-                            module: 'inventory',
-                            color: '#ef4444',
-                            priority: 'high'
-                        });
-                    });
-                } catch (e) { console.log('Inventory fetch error:', e); }
-            }
-
-            // Get pending invoices
-            if (svc.billingService?.getInvoices) {
-                try {
-                    const invoices = await svc.billingService.getInvoices();
-                    const pendingInvoices = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial');
-                    if (pendingInvoices.length > 0) {
-                        const totalPending = pendingInvoices.reduce((sum, i) => sum + (i.totalAmount || i.total || 0), 0);
-                        allNotifications.push({
-                            id: 'pending-invoices',
-                            type: 'payment',
-                            icon: '💰',
-                            title: `${pendingInvoices.length} Pending Payments`,
-                            subtitle: `Total: KSh ${totalPending.toLocaleString()}`,
-                            timestamp: new Date().toISOString(),
-                            module: 'billing',
-                            color: '#f59e0b'
-                        });
-                    }
-                } catch (e) { console.log('Billing fetch error:', e); }
-            }
-
-            // Get equipment in maintenance
-            if (svc.equipmentService?.getEquipment) {
-                try {
-                    const equipment = await svc.equipmentService.getEquipment();
-                    const maintenanceEquip = equipment.filter(e => e.status === 'maintenance' || e.status === 'repair');
-                    maintenanceEquip.forEach(eq => {
-                        allNotifications.push({
-                            id: `equip-${eq.id}`,
-                            type: 'maintenance',
-                            icon: '🔧',
-                            title: `${eq.name} under maintenance`,
-                            subtitle: eq.notes || 'Requires attention',
-                            timestamp: eq.lastMaintenance || new Date().toISOString(),
-                            module: 'equipment',
-                            color: '#8b5cf6'
-                        });
-                    });
-                } catch (e) { console.log('Equipment fetch error:', e); }
-            }
-
-            // Get vehicles in queue (waiting)
-            if (svc.intakeQueueService?.getQueue) {
-                try {
-                    const queue = await svc.intakeQueueService.getQueue();
-                    if (queue.length > 0) {
-                        allNotifications.push({
-                            id: 'queue-alert',
-                            type: 'queue',
-                            icon: '🚗',
-                            title: `${queue.length} vehicles in queue`,
-                            subtitle: 'Waiting for service',
-                            timestamp: new Date().toISOString(),
-                            module: 'vehicle-intake',
-                            color: '#10b981'
-                        });
-                    }
-                } catch (e) { console.log('Queue fetch error:', e); }
-            }
-
-            // Sort by timestamp (newest first)
-            allNotifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-            
-            if (!cancelled) {
-                setNotifications(allNotifications);
-                setLoading(false);
-            }
-        };
-
-        loadNotifications();
-        return () => { cancelled = true; };
-    }, [isOpen]);
-
+function NotificationDropdown({ isOpen, onClose, onModuleClick, notifications, unreadCount, onMarkAsRead, onMarkAllRead, onClearAll }) {
     const formatTime = (timestamp) => {
         if (!timestamp) return '';
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diff = now - date;
-        const mins = Math.floor(diff / 60000);
-        const hours = Math.floor(diff / 3600000);
-        const days = Math.floor(diff / 86400000);
-        
-        if (mins < 1) return 'Just now';
-        if (mins < 60) return `${mins}m ago`;
-        if (hours < 24) return `${hours}h ago`;
-        if (days === 1) return 'Yesterday';
-        return date.toLocaleDateString();
+        try {
+            let date;
+            if (timestamp.toDate) date = timestamp.toDate();
+            else if (timestamp.seconds) date = new Date(timestamp.seconds * 1000);
+            else date = new Date(timestamp);
+            
+            const now = new Date();
+            const diff = now - date;
+            const mins = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            
+            if (mins < 1) return 'Just now';
+            if (mins < 60) return `${mins}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            if (days === 1) return 'Yesterday';
+            return date.toLocaleDateString();
+        } catch { return ''; }
     };
 
     const handleNotificationClick = (notification) => {
-        // Mark as read
-        if (!readNotifications.includes(notification.id)) {
-            const newRead = [...readNotifications, notification.id];
-            setReadNotifications(newRead);
-            saveReadNotifications(newRead);
-        }
+        onMarkAsRead(notification.id);
         if (onModuleClick && notification.module) {
             onModuleClick(notification.module);
         }
         onClose();
     };
-
-    const markAsRead = (notifId, e) => {
-        e.stopPropagation();
-        if (!readNotifications.includes(notifId)) {
-            const newRead = [...readNotifications, notifId];
-            setReadNotifications(newRead);
-            saveReadNotifications(newRead);
-        }
-    };
-
-    const markAllAsRead = () => {
-        const allIds = notifications.map(n => n.id);
-        setReadNotifications(allIds);
-        saveReadNotifications(allIds);
-    };
-
-    const clearNotification = (notifId, e) => {
-        e.stopPropagation();
-        setNotifications(prev => prev.filter(n => n.id !== notifId));
-        // Also mark as read
-        if (!readNotifications.includes(notifId)) {
-            const newRead = [...readNotifications, notifId];
-            setReadNotifications(newRead);
-            saveReadNotifications(newRead);
-        }
-    };
-
-    const clearAllNotifications = () => {
-        const allIds = notifications.map(n => n.id);
-        setReadNotifications(allIds);
-        saveReadNotifications(allIds);
-        setNotifications([]);
-    };
-
-    const unreadCount = notifications.filter(n => !readNotifications.includes(n.id)).length;
 
     if (!isOpen) return null;
 
@@ -859,7 +678,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                     <div style={{ display: 'flex', gap: '8px' }}>
                         {unreadCount > 0 && (
                             <button 
-                                onClick={markAllAsRead}
+                                onClick={onMarkAllRead}
                                 style={{
                                     background: 'none',
                                     border: 'none',
@@ -876,7 +695,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                         )}
                         {notifications.length > 0 && (
                             <button 
-                                onClick={clearAllNotifications}
+                                onClick={onClearAll}
                                 style={{
                                     background: 'none',
                                     border: 'none',
@@ -898,12 +717,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                     overflowY: 'auto',
                     padding: 0
                 }}>
-                    {loading ? (
-                        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                            <div style={{ fontSize: '24px', marginBottom: '8px', animation: 'spin 1s linear infinite' }}>⏳</div>
-                            <div>Loading notifications...</div>
-                        </div>
-                    ) : notifications.length === 0 ? (
+                    {notifications.length === 0 ? (
                         <div className="empty-state" style={{ padding: '40px', textAlign: 'center' }}>
                             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)', marginBottom: '12px' }}>
                                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -912,9 +726,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                             <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No notifications</p>
                         </div>
                     ) : (
-                        notifications.map((notif, idx) => {
-                            const isRead = readNotifications.includes(notif.id);
-                            return (
+                        notifications.map((notif, idx) => (
                             <div 
                                 key={notif.id} 
                                 onClick={() => handleNotificationClick(notif)}
@@ -925,13 +737,14 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                     cursor: 'pointer',
                                     borderBottom: idx < notifications.length - 1 ? '1px solid var(--border-color)' : 'none',
                                     transition: 'background 0.15s',
-                                    background: notif.priority === 'high' ? 'rgba(239, 68, 68, 0.05)' : isRead ? 'transparent' : 'rgba(59, 130, 246, 0.03)',
-                                    opacity: isRead ? 0.7 : 1
+                                    background: notif.priority === 'high' ? 'rgba(239, 68, 68, 0.05)' : notif.isRead ? 'transparent' : 'rgba(59, 130, 246, 0.03)',
+                                    opacity: notif.isRead ? 0.7 : 1,
+                                    position: 'relative'
                                 }}
                                 className="notification-item"
                             >
                                 {/* Unread indicator */}
-                                {!isRead && (
+                                {!notif.isRead && (
                                     <div style={{
                                         position: 'absolute',
                                         left: '8px',
@@ -939,7 +752,8 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                         height: '6px',
                                         borderRadius: '50%',
                                         background: '#3b82f6',
-                                        alignSelf: 'center'
+                                        top: '50%',
+                                        transform: 'translateY(-50%)'
                                     }}></div>
                                 )}
                                 <div style={{
@@ -958,7 +772,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ 
                                         fontSize: '14px', 
-                                        fontWeight: isRead ? '400' : '600', 
+                                        fontWeight: notif.isRead ? '400' : '600', 
                                         color: 'var(--text-primary)',
                                         marginBottom: '4px',
                                         overflow: 'hidden',
@@ -979,9 +793,9 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
-                                    {!isRead && (
+                                    {!notif.isRead && (
                                         <button
-                                            onClick={(e) => markAsRead(notif.id, e)}
+                                            onClick={(e) => { e.stopPropagation(); onMarkAsRead(notif.id); }}
                                             style={{
                                                 background: 'none',
                                                 border: 'none',
@@ -999,24 +813,6 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                             ✓
                                         </button>
                                     )}
-                                    <button
-                                        onClick={(e) => clearNotification(notif.id, e)}
-                                        style={{
-                                            background: 'none',
-                                            border: 'none',
-                                            color: 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            padding: '4px',
-                                            fontSize: '12px',
-                                            opacity: 0.6,
-                                            transition: 'opacity 0.15s'
-                                        }}
-                                        title="Clear notification"
-                                        onMouseEnter={(e) => e.target.style.opacity = 1}
-                                        onMouseLeave={(e) => e.target.style.opacity = 0.6}
-                                    >
-                                        ✕
-                                    </button>
                                     {notif.priority === 'high' && (
                                         <div style={{
                                             width: '8px',
@@ -1027,7 +823,7 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick }) {
                                     )}
                                 </div>
                             </div>
-                        )})
+                        ))
                     )}
                 </div>
                 {notifications.length > 0 && (
@@ -1106,57 +902,228 @@ function ProfileDropdown({ isOpen, onClose }) {
 function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLogout, onModuleClick }) {
     const [notificationOpen, setNotificationOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
-    const [notificationCount, setNotificationCount] = useState(0);
+    const [notifications, setNotifications] = useState([]);
+    const [readNotifications, setReadNotifications] = useState(() => {
+        try {
+            const saved = localStorage.getItem('ecospark_read_notifications');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
 
-    // Get notification count on mount
+    // Real-time notification subscriptions
     useEffect(() => {
-        const loadNotificationCount = async () => {
-            const svc = window.FirebaseServices;
-            if (!svc) return;
-            
-            let count = 0;
-            
-            // Count low stock items
-            if (svc.inventoryService?.getItems) {
-                try {
-                    const items = await svc.inventoryService.getItems();
-                    count += items.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).length;
-                } catch (e) {}
-            }
-            
-            // Count pending invoices
-            if (svc.billingService?.getInvoices) {
-                try {
-                    const invoices = await svc.billingService.getInvoices();
-                    const pending = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial').length;
-                    if (pending > 0) count += 1;
-                } catch (e) {}
-            }
-            
-            // Count equipment in maintenance
-            if (svc.equipmentService?.getEquipment) {
-                try {
-                    const equipment = await svc.equipmentService.getEquipment();
-                    count += equipment.filter(e => e.status === 'maintenance' || e.status === 'repair').length;
-                } catch (e) {}
-            }
-            
-            // Count vehicles in queue
-            if (svc.intakeQueueService?.getQueue) {
-                try {
-                    const queue = await svc.intakeQueueService.getQueue();
-                    if (queue.length > 0) count += 1;
-                } catch (e) {}
-            }
+        const unsubs = [];
+        let allNotifications = [];
 
-            setNotificationCount(count);
+        const updateNotifications = (type, items) => {
+            // Remove old notifications of this type
+            allNotifications = allNotifications.filter(n => !n.id.startsWith(type));
+            // Add new ones
+            allNotifications = [...allNotifications, ...items];
+            // Sort by timestamp
+            allNotifications.sort((a, b) => {
+                try {
+                    const dateA = a.timestamp?.toDate ? a.timestamp.toDate() : new Date(a.timestamp || 0);
+                    const dateB = b.timestamp?.toDate ? b.timestamp.toDate() : new Date(b.timestamp || 0);
+                    return dateB - dateA;
+                } catch { return 0; }
+            });
+            // Limit to 50 and update state
+            setNotifications([...allNotifications.slice(0, 50)]);
         };
 
-        loadNotificationCount();
-        // Refresh count every 30 seconds
-        const interval = setInterval(loadNotificationCount, 30000);
-        return () => clearInterval(interval);
+        const initSubscriptions = async () => {
+            let svc = window.FirebaseServices;
+            let attempts = 0;
+            while (!svc && attempts < 30) {
+                await new Promise(r => setTimeout(r, 100));
+                svc = window.FirebaseServices;
+                attempts++;
+            }
+            if (!svc) return;
+
+            // Subscribe to inventory for low stock alerts
+            if (svc.inventoryService?.subscribeToItems) {
+                unsubs.push(svc.inventoryService.subscribeToItems((items) => {
+                    const alerts = [];
+                    items.filter(i => (i.quantity || 0) <= (i.minStock || i.reorderLevel || 5)).forEach(i => {
+                        const isOutOfStock = (i.quantity || 0) === 0;
+                        alerts.push({
+                            id: `inventory-${i.id}`,
+                            type: 'alert',
+                            icon: isOutOfStock ? '🚫' : '⚠️',
+                            title: isOutOfStock ? `Out of Stock: ${i.name}` : `Low Stock: ${i.name}`,
+                            subtitle: `${i.quantity || 0} ${i.unit || 'units'} remaining`,
+                            timestamp: i.updatedAt || new Date().toISOString(),
+                            module: 'inventory',
+                            color: '#ef4444',
+                            priority: isOutOfStock ? 'high' : 'medium'
+                        });
+                    });
+                    updateNotifications('inventory-', alerts);
+                }));
+            }
+
+            // Subscribe to billing for pending payments
+            if (svc.billingService?.subscribeToInvoices) {
+                unsubs.push(svc.billingService.subscribeToInvoices((invoices) => {
+                    const alerts = [];
+                    const pendingInvoices = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial');
+                    if (pendingInvoices.length > 0) {
+                        const totalPending = pendingInvoices.reduce((sum, i) => sum + (i.totalAmount || i.total || 0), 0);
+                        alerts.push({
+                            id: 'billing-pending',
+                            type: 'payment',
+                            icon: '💰',
+                            title: `${pendingInvoices.length} Pending Payment${pendingInvoices.length > 1 ? 's' : ''}`,
+                            subtitle: `Total: KSh ${totalPending.toLocaleString()}`,
+                            timestamp: new Date().toISOString(),
+                            module: 'billing',
+                            color: '#f59e0b'
+                        });
+                    }
+                    // Also add recent paid invoices as notifications
+                    const recentPaid = invoices.filter(i => i.paymentStatus === 'paid').slice(0, 3);
+                    recentPaid.forEach(inv => {
+                        alerts.push({
+                            id: `billing-paid-${inv.id}`,
+                            type: 'success',
+                            icon: '✅',
+                            title: `Payment Received: ${inv.customerName || 'Customer'}`,
+                            subtitle: `KSh ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
+                            timestamp: inv.paidAt || inv.updatedAt || inv.createdAt,
+                            module: 'billing',
+                            color: '#10b981'
+                        });
+                    });
+                    updateNotifications('billing-', alerts);
+                }));
+            }
+
+            // Subscribe to equipment for maintenance alerts
+            if (svc.equipmentService?.subscribeToEquipment) {
+                unsubs.push(svc.equipmentService.subscribeToEquipment((equipment) => {
+                    const alerts = [];
+                    equipment.filter(e => e.status === 'maintenance' || e.status === 'repair').forEach(eq => {
+                        alerts.push({
+                            id: `equipment-${eq.id}`,
+                            type: 'maintenance',
+                            icon: '🔧',
+                            title: `${eq.name} under ${eq.status}`,
+                            subtitle: eq.notes || 'Requires attention',
+                            timestamp: eq.lastMaintenance || eq.updatedAt || new Date().toISOString(),
+                            module: 'equipment',
+                            color: '#8b5cf6'
+                        });
+                    });
+                    updateNotifications('equipment-', alerts);
+                }));
+            }
+
+            // Subscribe to intake queue
+            if (svc.intakeQueueService?.subscribeToQueue) {
+                unsubs.push(svc.intakeQueueService.subscribeToQueue((queue) => {
+                    const alerts = [];
+                    if (queue.length > 0) {
+                        alerts.push({
+                            id: 'queue-count',
+                            type: 'queue',
+                            icon: '🚗',
+                            title: `${queue.length} vehicle${queue.length > 1 ? 's' : ''} in queue`,
+                            subtitle: 'Waiting for service',
+                            timestamp: new Date().toISOString(),
+                            module: 'vehicle-intake',
+                            color: '#10b981'
+                        });
+                        // Add individual vehicle alerts for new arrivals
+                        queue.slice(0, 3).forEach(v => {
+                            alerts.push({
+                                id: `queue-${v.id}`,
+                                type: 'arrival',
+                                icon: '🚙',
+                                title: `New Arrival: ${v.plateNumber || v.vehicleNumber || 'Vehicle'}`,
+                                subtitle: v.customerName || v.service || 'Awaiting assignment',
+                                timestamp: v.createdAt || v.arrivalTime || new Date().toISOString(),
+                                module: 'vehicle-intake',
+                                color: '#3b82f6'
+                            });
+                        });
+                    }
+                    updateNotifications('queue-', alerts);
+                }));
+            }
+
+            // Subscribe to activities
+            if (svc.activityService?.subscribeToActivities) {
+                unsubs.push(svc.activityService.subscribeToActivities((activities) => {
+                    const alerts = activities.slice(0, 10).map(a => ({
+                        id: `activity-${a.id}`,
+                        type: 'activity',
+                        icon: a.type === 'intake' ? '🚗' : a.type === 'billing' ? '💳' : a.type === 'wash' ? '🚿' : a.type === 'garage' ? '🔧' : '📋',
+                        title: a.description || a.action || 'Activity',
+                        subtitle: a.user || 'System',
+                        timestamp: a.timestamp || a.createdAt,
+                        module: a.type === 'intake' ? 'vehicle-intake' : a.type === 'billing' ? 'billing' : a.type === 'wash' ? 'wash-bays' : a.type === 'garage' ? 'garage' : 'activities',
+                        color: '#3b82f6'
+                    }));
+                    updateNotifications('activity-', alerts);
+                }));
+            }
+
+            // Subscribe to garage jobs
+            if (svc.garageService?.subscribeToActiveJobs) {
+                unsubs.push(svc.garageService.subscribeToActiveJobs((jobs) => {
+                    const alerts = [];
+                    jobs.filter(j => j.status === 'in-progress' || j.status === 'pending').slice(0, 5).forEach(job => {
+                        alerts.push({
+                            id: `garage-${job.id}`,
+                            type: 'job',
+                            icon: '🔧',
+                            title: `Garage: ${job.vehiclePlate || job.plateNumber || 'Vehicle'}`,
+                            subtitle: job.services?.join(', ') || job.description || job.status,
+                            timestamp: job.createdAt || job.startTime,
+                            module: 'garage',
+                            color: '#f59e0b'
+                        });
+                    });
+                    updateNotifications('garage-', alerts);
+                }));
+            }
+        };
+
+        initSubscriptions();
+        return () => unsubs.forEach(unsub => unsub && unsub());
     }, []);
+
+    // Add isRead status to notifications
+    const notificationsWithReadStatus = notifications.map(n => ({
+        ...n,
+        isRead: readNotifications.includes(n.id)
+    }));
+
+    const unreadCount = notificationsWithReadStatus.filter(n => !n.isRead).length;
+
+    const handleMarkAsRead = (notifId) => {
+        if (!readNotifications.includes(notifId)) {
+            const newRead = [...readNotifications, notifId];
+            setReadNotifications(newRead);
+            try {
+                localStorage.setItem('ecospark_read_notifications', JSON.stringify(newRead));
+            } catch {}
+        }
+    };
+
+    const handleMarkAllRead = () => {
+        const allIds = notifications.map(n => n.id);
+        setReadNotifications(allIds);
+        try {
+            localStorage.setItem('ecospark_read_notifications', JSON.stringify(allIds));
+        } catch {}
+    };
+
+    const handleClearAll = () => {
+        handleMarkAllRead();
+    };
 
     const handleNotificationClick = () => {
         setNotificationOpen(!notificationOpen);
@@ -1198,7 +1165,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                             <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
                         </svg>
-                        {notificationCount > 0 && (
+                        {unreadCount > 0 && (
                             <span style={{
                                 position: 'absolute',
                                 top: '2px',
@@ -1213,9 +1180,10 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                padding: '0 4px'
+                                padding: '0 4px',
+                                animation: unreadCount > 0 ? 'pulse 2s infinite' : 'none'
                             }}>
-                                {notificationCount > 9 ? '9+' : notificationCount}
+                                {unreadCount > 9 ? '9+' : unreadCount}
                             </span>
                         )}
                     </button>
@@ -1223,6 +1191,11 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                         isOpen={notificationOpen} 
                         onClose={() => setNotificationOpen(false)} 
                         onModuleClick={onModuleClick}
+                        notifications={notificationsWithReadStatus}
+                        unreadCount={unreadCount}
+                        onMarkAsRead={handleMarkAsRead}
+                        onMarkAllRead={handleMarkAllRead}
+                        onClearAll={handleClearAll}
                     />
                 </div>
                 <button className="topbar-button" onClick={onToggleTheme} title="Toggle Theme">
@@ -18177,7 +18150,6 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: theme.bg, borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ display: 'flex', gap: '0' }}>
                     <button onClick={() => setActiveTab('overview')} style={tabStyle(activeTab === 'overview')}>Overview</button>
-                    <button onClick={() => setActiveTab('revenue')} style={tabStyle(activeTab === 'revenue')}>Revenue</button>
                     <button onClick={() => setActiveTab('expenses')} style={tabStyle(activeTab === 'expenses')}>Expenses</button>
                     <button onClick={() => setActiveTab('operations')} style={tabStyle(activeTab === 'operations')}>Operations</button>
                     <button onClick={() => setActiveTab('generate')} style={tabStyle(activeTab === 'generate')}>Generate Reports</button>
@@ -18312,59 +18284,6 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
                 </div>
             )}
 
-            {/* Revenue Tab */}
-            {activeTab === 'revenue' && (
-                <div style={{ padding: '20px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '24px' }}>
-                        {metricCard(formatCurrency(totalRevenue), 'Total Revenue', '#10b981')}
-                        {metricCard(formatCurrency(paidRevenue), 'Paid', '#3b82f6')}
-                        {metricCard(formatCurrency(unpaidRevenue), 'Unpaid', '#f59e0b')}
-                        {metricCard(totalServices.toString(), 'Invoices', '#8b5cf6')}
-                        {metricCard(formatCurrency(avgTicket), 'Avg Ticket', '#06b6d4')}
-                    </div>
-                    <div style={cardStyle}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                            <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Recent Transactions (Real-time)</h4>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: '#10b981', color: 'white', fontSize: '11px', fontWeight: '600' }}>
-                                <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%' }}></span>
-                                LIVE
-                            </div>
-                        </div>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                                <tr style={{ background: theme.bgTertiary }}>
-                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Date</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Invoice</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Customer</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Service</th>
-                                    <th style={{ padding: '12px', textAlign: 'center', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Status</th>
-                                    <th style={{ padding: '12px', textAlign: 'right', fontSize: '11px', color: theme.textSecondary, fontWeight: '700', textTransform: 'uppercase' }}>Amount</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredBilling.slice(0, 20).map((b, i) => (
-                                    <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                                        <td style={{ padding: '12px', color: theme.textSecondary, fontSize: '13px' }}>{new Date(b.createdAt || b.date).toLocaleDateString()}</td>
-                                        <td style={{ padding: '12px', color: '#3b82f6', fontWeight: '600', fontFamily: 'monospace', fontSize: '12px' }}>{b.invoiceNumber || '-'}</td>
-                                        <td style={{ padding: '12px', color: theme.text }}>{b.customerName || 'Walk-in'}</td>
-                                        <td style={{ padding: '12px', color: theme.text, fontWeight: '500' }}>{b.services?.[0]?.name || b.source || '-'}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center' }}>
-                                            <span style={{ padding: '4px 10px', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', background: b.paymentStatus === 'paid' ? '#dcfce7' : '#fef3c7', color: b.paymentStatus === 'paid' ? '#166534' : '#92400e' }}>
-                                                {b.paymentStatus || 'pending'}
-                                            </span>
-                                        </td>
-                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#10b981' }}>{formatCurrency(b.totalAmount || b.total || b.amount)}</td>
-                                    </tr>
-                                ))}
-                                {filteredBilling.length === 0 && (
-                                    <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>No transactions found for this period</td></tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
-
             {/* Expenses Tab */}
             {activeTab === 'expenses' && (
                 <div style={{ padding: '20px' }}>
@@ -18377,17 +18296,17 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
                         <div style={cardStyle}>
                             <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>By Category</h4>
-                            {topExpenseCategories.map(([cat, amt], i) => (
+                            {topExpenseCategories.length > 0 ? topExpenseCategories.map(([cat, amt], i) => (
                                 <div key={i} style={{ marginBottom: '12px' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                                         <span style={{ color: theme.text, fontSize: '13px' }}>{cat}</span>
                                         <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '13px' }}>{formatCurrency(amt)}</span>
                                     </div>
                                     <div style={{ height: '8px', background: theme.bgTertiary }}>
-                                        <div style={{ height: '100%', background: '#ef4444', width: `${(amt / totalExpenses) * 100}%` }}></div>
+                                        <div style={{ height: '100%', background: '#ef4444', width: `${totalExpenses > 0 ? (amt / totalExpenses) * 100 : 0}%` }}></div>
                                     </div>
                                 </div>
-                            ))}
+                            )) : <div style={{ color: theme.textSecondary, padding: '20px', textAlign: 'center' }}>No expenses</div>}
                         </div>
                         <div style={cardStyle}>
                             <h4 style={{ margin: '0 0 16px', color: theme.text, fontWeight: '700' }}>Recent Expenses</h4>
