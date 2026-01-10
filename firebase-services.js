@@ -576,8 +576,13 @@ export const billingService = {
   // Mark invoice as paid
   async markAsPaid(invoiceId, paymentData) {
     try {
-      const docRef = doc(db, 'invoices', invoiceId);
-      await updateDoc(docRef, {
+      // First get the invoice to find the linked record
+      const invoiceRef = doc(db, 'invoices', invoiceId);
+      const invoiceSnap = await getDoc(invoiceRef);
+      const invoiceData = invoiceSnap.exists() ? invoiceSnap.data() : null;
+      
+      // Update the invoice as paid
+      await updateDoc(invoiceRef, {
         paymentStatus: 'paid',
         paymentMethod: paymentData.method || 'cash',
         paidAt: new Date().toISOString(),
@@ -586,6 +591,163 @@ export const billingService = {
         mpesaPhone: paymentData.mpesaPhone || null,
         updatedAt: new Date().toISOString()
       });
+      
+      // Auto-update Vehicle Intake record status to 'completed' upon payment
+      let intakeRecordData = null;
+      if (invoiceData) {
+        const recordId = invoiceData.washRecordId || invoiceData.garageRecordId || invoiceData.recordId;
+        
+        if (recordId) {
+          // Get and update the intake record directly
+          try {
+            const recordRef = doc(db, 'vehicleIntake', recordId);
+            const recordSnap = await getDoc(recordRef);
+            if (recordSnap.exists()) {
+              intakeRecordData = { id: recordSnap.id, ...recordSnap.data() };
+            }
+            await updateDoc(recordRef, {
+              status: 'completed',
+              paymentStatus: 'paid',
+              paidAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            });
+            console.log('Auto-updated intake record to completed:', recordId);
+          } catch (recordErr) {
+            console.warn('Could not auto-update intake record:', recordErr);
+          }
+        } else if (invoiceData.plateNumber) {
+          // Try to find and update by plate number if no direct recordId
+          try {
+            const q = query(
+              collection(db, 'vehicleIntake'),
+              where('plateNumber', '==', invoiceData.plateNumber),
+              where('status', '!=', 'completed')
+            );
+            const snapshot = await getDocs(q);
+            if (!snapshot.empty) {
+              // Update the most recent matching record
+              const recordDoc = snapshot.docs[0];
+              intakeRecordData = { id: recordDoc.id, ...recordDoc.data() };
+              await updateDoc(recordDoc.ref, {
+                status: 'completed',
+                paymentStatus: 'paid',
+                paidAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+              console.log('Auto-updated intake record by plate:', invoiceData.plateNumber);
+            }
+          } catch (plateErr) {
+            console.warn('Could not find intake record by plate:', plateErr);
+          }
+        }
+        
+        // Record visit in vehicle history upon payment
+        // Only record if not already recorded for this intake record
+        if (invoiceData.plateNumber && (invoiceData.source === 'wash' || invoiceData.source === 'garage')) {
+          try {
+            const normalizedPlate = invoiceData.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+            
+            // Get or create vehicle profile
+            const profileQuery = query(collection(db, 'vehicleProfiles'), where('plateNumber', '==', normalizedPlate));
+            const profileSnapshot = await getDocs(profileQuery);
+            
+            let profileRef;
+            let existingProfile = null;
+            let isNewProfile = false;
+            
+            if (!profileSnapshot.empty) {
+              profileRef = profileSnapshot.docs[0].ref;
+              existingProfile = profileSnapshot.docs[0].data();
+              
+              // Check if visit for this record/invoice already exists (prevent duplicates)
+              const existingVisits = existingProfile.visitHistory || [];
+              const recordId = invoiceData.washRecordId || invoiceData.garageRecordId || invoiceData.recordId;
+              const alreadyRecorded = existingVisits.some(v => 
+                v.invoiceId === invoiceId || 
+                (recordId && v.recordId === recordId)
+              );
+              
+              if (alreadyRecorded) {
+                console.log('⏭️ Visit already recorded for this invoice/record, skipping');
+              } else {
+                // Record the visit
+                const visit = {
+                  id: `visit-${Date.now()}`,
+                  date: new Date().toISOString(),
+                  service: invoiceData.services?.[0] || { name: invoiceData.source === 'wash' ? 'Car Wash' : 'Garage Service' },
+                  amount: invoiceData.totalAmount || paymentData.amount || 0,
+                  vehicleType: invoiceData.vehicleType || intakeRecordData?.vehicleType || null,
+                  category: intakeRecordData?.category || 'vehicle',
+                  status: 'completed',
+                  bay: intakeRecordData?.assignedBay || invoiceData.bayName || null,
+                  timeIn: intakeRecordData?.timeIn || invoiceData.startTime || null,
+                  timeOut: new Date().toISOString(),
+                  customerName: invoiceData.customerName || intakeRecordData?.customerName || null,
+                  customerPhone: invoiceData.customerPhone || intakeRecordData?.customerPhone || null,
+                  recordId: recordId || intakeRecordData?.id || null,
+                  invoiceId: invoiceId,
+                  paymentMethod: paymentData.method || 'cash'
+                };
+                
+                existingVisits.unshift(visit);
+                
+                await updateDoc(profileRef, {
+                  totalVisits: (existingProfile.totalVisits || 0) + 1,
+                  totalSpent: (existingProfile.totalSpent || 0) + (visit.amount || 0),
+                  visitHistory: existingVisits,
+                  lastVisit: new Date().toISOString(),
+                  lastService: visit.service?.name || null,
+                  vehicleType: invoiceData.vehicleType || existingProfile.vehicleType,
+                  customerName: invoiceData.customerName || existingProfile.customerName,
+                  customerPhone: invoiceData.customerPhone || existingProfile.customerPhone,
+                  updatedAt: new Date().toISOString()
+                });
+                
+                console.log('✅ Visit recorded upon payment for:', normalizedPlate, 'Total visits:', (existingProfile.totalVisits || 0) + 1);
+              }
+            } else {
+              // Create new profile with the first visit
+              isNewProfile = true;
+              const visit = {
+                id: `visit-${Date.now()}`,
+                date: new Date().toISOString(),
+                service: invoiceData.services?.[0] || { name: invoiceData.source === 'wash' ? 'Car Wash' : 'Garage Service' },
+                amount: invoiceData.totalAmount || paymentData.amount || 0,
+                vehicleType: invoiceData.vehicleType || intakeRecordData?.vehicleType || null,
+                category: intakeRecordData?.category || 'vehicle',
+                status: 'completed',
+                bay: intakeRecordData?.assignedBay || invoiceData.bayName || null,
+                timeIn: intakeRecordData?.timeIn || invoiceData.startTime || null,
+                timeOut: new Date().toISOString(),
+                customerName: invoiceData.customerName || intakeRecordData?.customerName || null,
+                customerPhone: invoiceData.customerPhone || intakeRecordData?.customerPhone || null,
+                recordId: invoiceData.washRecordId || invoiceData.garageRecordId || invoiceData.recordId || intakeRecordData?.id || null,
+                invoiceId: invoiceId,
+                paymentMethod: paymentData.method || 'cash'
+              };
+              
+              await addDoc(collection(db, 'vehicleProfiles'), {
+                plateNumber: normalizedPlate,
+                totalVisits: 1,
+                totalSpent: visit.amount || 0,
+                visitHistory: [visit],
+                lastVisit: new Date().toISOString(),
+                lastService: visit.service?.name || null,
+                vehicleType: visit.vehicleType,
+                customerName: visit.customerName,
+                customerPhone: visit.customerPhone,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+              
+              console.log('✅ New profile created with first visit for:', normalizedPlate);
+            }
+          } catch (visitErr) {
+            console.warn('Could not record visit on payment:', visitErr);
+          }
+        }
+      }
+      
       return { success: true };
     } catch (error) {
       console.error('Error marking invoice as paid:', error);
@@ -1433,7 +1595,7 @@ export const intakeQueueService = {
  * For permanent vehicle records storage
  */
 export const intakeRecordsService = {
-  // Add vehicle to records (when assigned from queue)
+  // Add vehicle to records (when assigned from queue) - Only for NEW vehicles
   async addRecord(vehicleData) {
     try {
       const docRef = await addDoc(collection(db, 'vehicleIntake'), {
@@ -1445,6 +1607,134 @@ export const intakeRecordsService = {
       return { success: true, id: docRef.id };
     } catch (error) {
       console.error('Error adding vehicle record:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Find existing record by plate number (for returning vehicles)
+  async findByPlateNumber(plateNumber) {
+    try {
+      const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      
+      // Simple query without orderBy to avoid index issues
+      const q = query(
+        collection(db, 'vehicleIntake'),
+        where('plateNumber', '==', normalizedPlate)
+      );
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        console.log('🔍 No existing record found for plate:', normalizedPlate);
+        return { success: true, data: null, exists: false };
+      }
+      
+      // Find the most recent record (sort manually)
+      let mostRecent = null;
+      let mostRecentTime = null;
+      
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const createdAt = data.createdAt ? new Date(data.createdAt) : new Date(0);
+        if (!mostRecentTime || createdAt > mostRecentTime) {
+          mostRecentTime = createdAt;
+          mostRecent = { id: docSnap.id, ...data };
+        }
+      });
+      
+      console.log('🔍 Found existing record for plate:', normalizedPlate, 'ID:', mostRecent?.id);
+      return { success: true, data: mostRecent, exists: true };
+    } catch (error) {
+      console.error('Error finding record by plate:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Add or Update record - MAIN METHOD for handling returning vehicles
+  async addOrUpdateRecord(plateNumber, vehicleData, visitHistory = null) {
+    try {
+      const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      
+      // Check if record already exists for this plate
+      const existingResult = await this.findByPlateNumber(normalizedPlate);
+      
+      if (existingResult.success && existingResult.exists && existingResult.data) {
+        // RETURNING VEHICLE - Update existing record
+        const existingRecord = existingResult.data;
+        const currentVisitNumber = existingRecord.visitNumber || 1;
+        const newVisitNumber = currentVisitNumber + 1;
+        
+        // Ensure visitHistoryLog is an array (handle old records)
+        const existingHistory = Array.isArray(existingRecord.visitHistoryLog) 
+          ? [...existingRecord.visitHistoryLog] 
+          : [];
+        
+        // Save previous visit to history before updating
+        const previousVisit = {
+          visitNumber: currentVisitNumber,
+          service: existingRecord.service,
+          price: existingRecord.service?.price || 0,
+          status: existingRecord.status,
+          timeIn: existingRecord.timeIn,
+          timeOut: existingRecord.timeOut,
+          assignedBay: existingRecord.assignedBay,
+          completedAt: existingRecord.timeOut || existingRecord.updatedAt,
+          recordedAt: new Date().toISOString()
+        };
+        
+        existingHistory.push(previousVisit);
+        
+        console.log('📜 Visit History for', normalizedPlate, ':', existingHistory.length, 'previous visits');
+        
+        // Update the existing record with new visit info
+        const updateData = {
+          ...vehicleData,
+          plateNumber: normalizedPlate,
+          visitNumber: newVisitNumber,
+          isReturningVehicle: true,
+          visitHistoryLog: existingHistory,
+          previousVisits: existingHistory.length,
+          // Reset for new visit
+          timeOut: null,
+          paymentStatus: 'pending',
+          updatedAt: new Date().toISOString()
+        };
+        
+        await this.updateRecord(existingRecord.id, updateData);
+        console.log('✅ RETURNING: Updated existing record', existingRecord.id, 'Visit #' + newVisitNumber);
+        
+        return { 
+          success: true, 
+          id: existingRecord.id, 
+          isReturning: true, 
+          visitNumber: newVisitNumber,
+          previousVisits: currentVisitNumber
+        };
+      } else {
+        // NEW VEHICLE - Create first record
+        const newRecord = {
+          ...vehicleData,
+          plateNumber: normalizedPlate,
+          visitNumber: 1,
+          isReturningVehicle: false,
+          visitHistoryLog: [],
+          previousVisits: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        
+        const docRef = await addDoc(collection(db, 'vehicleIntake'), newRecord);
+        console.log('✅ NEW: Created first record', docRef.id, 'Visit #1');
+        
+        return { 
+          success: true, 
+          id: docRef.id, 
+          isReturning: false, 
+          visitNumber: 1,
+          previousVisits: 0
+        };
+      }
+    } catch (error) {
+      console.error('Error in addOrUpdateRecord:', error);
       return { success: false, error: error.message };
     }
   },
@@ -1461,6 +1751,39 @@ export const intakeRecordsService = {
       return { success: true };
     } catch (error) {
       console.error('Error updating vehicle record:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Search intake records by plate number (partial match)
+  async searchByPlate(searchTerm) {
+    try {
+      if (!searchTerm || searchTerm.length < 2) return { success: true, data: [] };
+      
+      const normalizedSearch = searchTerm.toUpperCase().trim();
+      const q = query(collection(db, 'vehicleIntake'));
+      const querySnapshot = await getDocs(q);
+      
+      const matches = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.plateNumber && data.plateNumber.toUpperCase().includes(normalizedSearch)) {
+          matches.push({ id: docSnap.id, ...data });
+        }
+      });
+      
+      // Sort by most recent first and remove duplicates (keep only one record per plate)
+      const uniquePlates = {};
+      matches.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      matches.forEach(record => {
+        if (!uniquePlates[record.plateNumber]) {
+          uniquePlates[record.plateNumber] = record;
+        }
+      });
+      
+      return { success: true, data: Object.values(uniquePlates) };
+    } catch (error) {
+      console.error('Error searching records by plate:', error);
       return { success: false, error: error.message };
     }
   },
@@ -1487,8 +1810,16 @@ export const intakeRecordsService = {
       const records = [];
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        // Always use Firestore doc.id, ignore any 'id' field in the data
-        records.push({ ...data, id: docSnap.id });
+        // Ensure visitNumber is always set (default to 1 for old records)
+        const vehicleData = { 
+          ...data, 
+          id: docSnap.id,
+          visitNumber: data.visitNumber || 1 
+        };
+        records.push(vehicleData);
+        
+        // Debug log for all vehicles (remove after testing)
+        console.log(`📊 ${data.plateNumber}: Visit #${data.visitNumber || 1}`);
       });
       callback(records);
     }, (error) => {
@@ -1744,6 +2075,211 @@ export const intakeStatsService = {
       if (onError) onError(error);
     });
     return unsubscribe;
+  }
+};
+
+/**
+ * Vehicle History Service - Firestore
+ * For tracking vehicle visit history and visit counts
+ */
+export const vehicleHistoryService = {
+  // Get or create vehicle profile by plate number
+  async getOrCreateVehicleProfile(plateNumber) {
+    try {
+      const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      const q = query(collection(db, 'vehicleProfiles'), where('plateNumber', '==', normalizedPlate));
+      const querySnapshot = await getDocs(q);
+      
+      if (!querySnapshot.empty) {
+        const doc = querySnapshot.docs[0];
+        return { success: true, data: { id: doc.id, ...doc.data() }, exists: true };
+      }
+      
+      // Create new vehicle profile
+      const docRef = await addDoc(collection(db, 'vehicleProfiles'), {
+        plateNumber: normalizedPlate,
+        totalVisits: 0,
+        totalSpent: 0,
+        visitHistory: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      
+      return { 
+        success: true, 
+        data: { 
+          id: docRef.id, 
+          plateNumber: normalizedPlate, 
+          totalVisits: 0, 
+          totalSpent: 0, 
+          visitHistory: [] 
+        }, 
+        exists: false 
+      };
+    } catch (error) {
+      console.error('Error getting/creating vehicle profile:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Search vehicles by plate number
+  async searchVehiclesByPlate(searchTerm) {
+    try {
+      if (!searchTerm || searchTerm.length < 2) return { success: true, data: [] };
+      
+      const normalizedSearch = searchTerm.toUpperCase().trim();
+      const q = query(collection(db, 'vehicleProfiles'), orderBy('plateNumber'));
+      const querySnapshot = await getDocs(q);
+      
+      const matches = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.plateNumber && data.plateNumber.includes(normalizedSearch)) {
+          matches.push({ id: doc.id, ...data });
+        }
+      });
+      
+      return { success: true, data: matches };
+    } catch (error) {
+      console.error('Error searching vehicles:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Record a visit for a vehicle
+  async recordVehicleVisit(plateNumber, visitData) {
+    try {
+      const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      
+      // Get or create vehicle profile
+      const profileResult = await this.getOrCreateVehicleProfile(normalizedPlate);
+      if (!profileResult.success) throw new Error(profileResult.error);
+      
+      const profile = profileResult.data;
+      const visitHistory = profile.visitHistory || [];
+      
+      // Check for duplicate visit (same recordId or same day + same service price)
+      const recordId = visitData.recordId;
+      const today = new Date().toISOString().split('T')[0];
+      const isDuplicate = visitHistory.some(v => {
+        // Check by recordId if available
+        if (recordId && v.recordId === recordId) return true;
+        // Check by invoiceId if available
+        if (visitData.invoiceId && v.invoiceId === visitData.invoiceId) return true;
+        return false;
+      });
+      
+      if (isDuplicate) {
+        console.log('⏭️ Visit already recorded for this record, skipping duplicate');
+        return { success: true, totalVisits: profile.totalVisits || 0, skipped: true };
+      }
+      
+      // Create visit record
+      const visit = {
+        id: `visit-${Date.now()}`,
+        date: new Date().toISOString(),
+        service: visitData.service || null,
+        amount: visitData.amount || 0,
+        vehicleType: visitData.vehicleType || null,
+        category: visitData.category || 'vehicle',
+        status: visitData.status || 'completed',
+        bay: visitData.assignedBay || null,
+        timeIn: visitData.timeIn || new Date().toISOString(),
+        timeOut: visitData.timeOut || null,
+        customerName: visitData.customerName || null,
+        customerPhone: visitData.customerPhone || null,
+        recordId: visitData.recordId || null,
+        invoiceId: visitData.invoiceId || null
+      };
+      
+      visitHistory.unshift(visit); // Add to beginning (most recent first)
+      
+      // Update profile
+      const profileRef = doc(db, 'vehicleProfiles', profile.id);
+      await updateDoc(profileRef, {
+        totalVisits: (profile.totalVisits || 0) + 1,
+        totalSpent: (profile.totalSpent || 0) + (visitData.amount || 0),
+        visitHistory: visitHistory,
+        lastVisit: new Date().toISOString(),
+        lastService: visitData.service?.name || null,
+        vehicleType: visitData.vehicleType || profile.vehicleType,
+        customerName: visitData.customerName || profile.customerName,
+        customerPhone: visitData.customerPhone || profile.customerPhone,
+        updatedAt: new Date().toISOString()
+      });
+      
+      console.log('✅ Visit recorded for:', normalizedPlate, 'Total visits:', (profile.totalVisits || 0) + 1);
+      return { success: true, totalVisits: (profile.totalVisits || 0) + 1 };
+    } catch (error) {
+      console.error('Error recording vehicle visit:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get vehicle visit history
+  async getVehicleHistory(plateNumber) {
+    try {
+      const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      const q = query(collection(db, 'vehicleProfiles'), where('plateNumber', '==', normalizedPlate));
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        return { success: true, data: null };
+      }
+      
+      const doc = querySnapshot.docs[0];
+      return { success: true, data: { id: doc.id, ...doc.data() } };
+    } catch (error) {
+      console.error('Error getting vehicle history:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all vehicle profiles
+  async getAllVehicleProfiles() {
+    try {
+      const q = query(collection(db, 'vehicleProfiles'), orderBy('lastVisit', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const profiles = [];
+      querySnapshot.forEach((doc) => {
+        profiles.push({ id: doc.id, ...doc.data() });
+      });
+      return { success: true, data: profiles };
+    } catch (error) {
+      console.error('Error getting all vehicle profiles:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to vehicle profiles (real-time)
+  subscribeToVehicleProfiles(callback, onError) {
+    const q = query(collection(db, 'vehicleProfiles'), orderBy('lastVisit', 'desc'));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const profiles = [];
+      querySnapshot.forEach((doc) => {
+        profiles.push({ id: doc.id, ...doc.data() });
+      });
+      callback(profiles);
+    }, (error) => {
+      console.error('Vehicle profiles subscription error:', error);
+      if (onError) onError(error);
+    });
+    return unsubscribe;
+  },
+
+  // Update vehicle profile
+  async updateVehicleProfile(profileId, updateData) {
+    try {
+      const profileRef = doc(db, 'vehicleProfiles', profileId);
+      await updateDoc(profileRef, {
+        ...updateData,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating vehicle profile:', error);
+      return { success: false, error: error.message };
+    }
   }
 };
 
@@ -3498,6 +4034,8 @@ if (typeof window !== 'undefined') {
     intakeRecordsService,
     intakeBaysService,
     intakeStatsService,
+    // Vehicle History Service
+    vehicleHistoryService,
     // Service Packages
     packagesService,
     // Equipment Management

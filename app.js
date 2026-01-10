@@ -1536,6 +1536,7 @@ function VehicleIntake() {
     const [vehicles, setVehicles] = useState([]);
     const [bays, setBays] = useState(DEFAULT_BAYS);
     const [servicePackages, setServicePackages] = useState([]);
+    const [vehicleProfiles, setVehicleProfiles] = useState([]); // Track all vehicle profiles
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
@@ -1544,7 +1545,9 @@ function VehicleIntake() {
     const [showViewModal, setShowViewModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+    const [showHistoryModal, setShowHistoryModal] = useState(false); // Visit history modal
     const [selectedVehicle, setSelectedVehicle] = useState(null);
+    const [selectedVehicleHistory, setSelectedVehicleHistory] = useState(null); // For visit history
     const [editFormData, setEditFormData] = useState({});
     const [formData, setFormData] = useState({
         plateNumber: '',
@@ -1557,6 +1560,11 @@ function VehicleIntake() {
     });
     const [searchQuery, setSearchQuery] = useState('');
     const [dateFilter, setDateFilter] = useState('all');
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [plateSearchResults, setPlateSearchResults] = useState([]); // Search results for existing vehicles
+    const [showPlateSearchResults, setShowPlateSearchResults] = useState(false);
+    const [selectedExistingVehicle, setSelectedExistingVehicle] = useState(null);
 
     // Generate next auto-ID for non-vehicle categories
     const generateNextId = (category) => {
@@ -1635,6 +1643,17 @@ function VehicleIntake() {
     };
 
     const filteredVehicles = getFilteredVehicles();
+    
+    // Pagination calculations
+    const totalPages = Math.ceil(filteredVehicles.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const paginatedVehicles = filteredVehicles.slice(startIndex, endIndex);
+    
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, dateFilter, vehicles.length]);
 
     // Initialize Firebase subscriptions - using refs for proper cleanup
     const subscriptionsRef = React.useRef({
@@ -1642,6 +1661,7 @@ function VehicleIntake() {
         records: null,
         bays: null,
         packages: null,
+        vehicleProfiles: null,
         mounted: true
     });
 
@@ -1763,6 +1783,21 @@ function VehicleIntake() {
                     );
                 }
 
+                // Subscribe to vehicle profiles (for visit history)
+                if (services.vehicleHistoryService) {
+                    subscriptionsRef.current.vehicleProfiles = services.vehicleHistoryService.subscribeToVehicleProfiles(
+                        (profilesData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                console.log('📥 Vehicle profiles updated:', profilesData.length, 'profiles');
+                                setVehicleProfiles(profilesData);
+                            }
+                        },
+                        (err) => {
+                            console.error('Vehicle profiles subscription error:', err);
+                        }
+                    );
+                }
+
                 if (subscriptionsRef.current.mounted) {
                     setLoading(false);
                     console.log('✅ VehicleIntake: Subscriptions active');
@@ -1787,6 +1822,7 @@ function VehicleIntake() {
             if (subscriptionsRef.current.records) subscriptionsRef.current.records();
             if (subscriptionsRef.current.bays) subscriptionsRef.current.bays();
             if (subscriptionsRef.current.packages) subscriptionsRef.current.packages();
+            if (subscriptionsRef.current.vehicleProfiles) subscriptionsRef.current.vehicleProfiles();
         };
     }, []);
 
@@ -1801,6 +1837,99 @@ function VehicleIntake() {
                 return acc + (new Date() - timeIn) / 1000 / 60;
             }, 0) / queue.length) 
             : 0
+    };
+
+    // Get visit count for a plate number from vehicle profiles
+    const getVehicleVisitCount = (plateNumber) => {
+        if (!plateNumber) return 0;
+        const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+        const profile = vehicleProfiles.find(p => p.plateNumber === normalizedPlate);
+        return profile?.totalVisits || 0;
+    };
+
+    // Get vehicle profile by plate
+    const getVehicleProfile = (plateNumber) => {
+        if (!plateNumber) return null;
+        const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+        return vehicleProfiles.find(p => p.plateNumber === normalizedPlate) || null;
+    };
+
+    // Open visit history modal
+    const openHistoryModal = async (plateNumber) => {
+        const services = window.FirebaseServices;
+        if (!services?.vehicleHistoryService) {
+            setError('Vehicle history service not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const result = await services.vehicleHistoryService.getVehicleHistory(plateNumber);
+            if (result.success && result.data) {
+                setSelectedVehicleHistory(result.data);
+                setShowHistoryModal(true);
+            } else {
+                setError('No visit history found for this vehicle');
+            }
+        } catch (err) {
+            console.error('Error loading vehicle history:', err);
+            setError('Failed to load vehicle history');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Search for existing vehicles by plate (in intake records)
+    const handlePlateSearch = async (searchTerm) => {
+        if (!searchTerm || searchTerm.length < 2) {
+            setPlateSearchResults([]);
+            setShowPlateSearchResults(false);
+            return;
+        }
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) return;
+        
+        try {
+            // Search intake records for existing vehicles
+            const result = await services.intakeRecordsService.searchByPlate(searchTerm);
+            if (result.success) {
+                setPlateSearchResults(result.data);
+                setShowPlateSearchResults(result.data.length > 0);
+            }
+        } catch (err) {
+            console.error('Error searching vehicles:', err);
+        }
+    };
+
+    // Debounced plate search
+    const plateSearchTimeout = React.useRef(null);
+    const handlePlateInputChange = (value) => {
+        setFormData({ ...formData, plateNumber: value });
+        setSelectedExistingVehicle(null);
+        
+        // Clear previous timeout
+        if (plateSearchTimeout.current) {
+            clearTimeout(plateSearchTimeout.current);
+        }
+        
+        // Debounce the search
+        plateSearchTimeout.current = setTimeout(() => {
+            handlePlateSearch(value);
+        }, 300);
+    };
+
+    // Select an existing vehicle from search results (intake record)
+    const selectExistingVehicle = (record) => {
+        setSelectedExistingVehicle(record);
+        setFormData({
+            ...formData,
+            plateNumber: record.plateNumber,
+            customerName: record.customerName || formData.customerName,
+            customerPhone: record.customerPhone || formData.customerPhone,
+            itemType: record.itemType || record.vehicleType || formData.itemType
+        });
+        setShowPlateSearchResults(false);
     };
 
     // Add item to queue (saves to Realtime Database)
@@ -1823,31 +1952,53 @@ function VehicleIntake() {
         
         setActionLoading(true);
         try {
-            // Find package from dynamic packages list
             const serviceInfo = servicePackages.find(s => s.id === formData.service) || servicePackages[0];
+            const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+            
+            // Check if this plate already has a record in intake (for showing returning info in queue)
+            let existingInfo = null;
+            if (formData.category === 'vehicle' && services.intakeRecordsService?.findByPlateNumber) {
+                try {
+                    const existing = await services.intakeRecordsService.findByPlateNumber(normalizedPlate);
+                    if (existing.success && existing.exists && existing.data) {
+                        existingInfo = {
+                            visitNumber: existing.data.visitNumber || 1,
+                            isReturning: true,
+                            lastService: existing.data.service?.name,
+                            lastVisit: existing.data.updatedAt || existing.data.createdAt
+                        };
+                    }
+                } catch (err) {
+                    console.warn('Could not check existing record:', err);
+                }
+            }
+            
             const vehicleData = {
-                plateNumber: plateNumber.toUpperCase(),
+                plateNumber: normalizedPlate,
                 category: formData.category,
                 itemType: formData.itemType,
-                vehicleType: formData.itemType, // Legacy support
+                vehicleType: formData.itemType,
                 service: serviceInfo ? { id: serviceInfo.id, name: serviceInfo.name, price: serviceInfo.price } : null,
                 priority: formData.priority,
                 customerName: formData.customerName || null,
-                customerPhone: formData.customerPhone || null
+                customerPhone: formData.customerPhone || null,
+                // Info for queue display (actual record handling happens when assigning bay)
+                existingVisits: existingInfo?.visitNumber || 0,
+                isReturningVehicle: existingInfo?.isReturning || false
             };
 
             const result = await services.intakeQueueService.addToQueue(vehicleData);
             
             if (result.success) {
-                console.log('✅ Item added to queue:', result.id);
+                console.log('✅ Added to queue:', normalizedPlate, existingInfo ? `(Returning - Visit #${existingInfo.visitNumber + 1})` : '(New)');
                 
-                // Log activity with user info
+                // Log activity
                 if (services.activityService) {
                     const currentUser = window.currentUserProfile;
                     services.activityService.logActivity({
                         type: 'intake',
-                        action: 'Item Added to Queue',
-                        details: `${INTAKE_CATEGORIES.find(c => c.id === formData.category)?.label || 'Item'}: ${plateNumber.toUpperCase()} - ${serviceInfo?.name || 'No service'}`,
+                        action: 'Vehicle Added to Queue',
+                        details: `${formData.category === 'vehicle' ? 'Vehicle' : INTAKE_CATEGORIES.find(c => c.id === formData.category)?.label}: ${normalizedPlate} - ${serviceInfo?.name || 'No service'}`,
                         status: 'success',
                         loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
                         loggedByEmail: currentUser?.email || null,
@@ -1865,6 +2016,8 @@ function VehicleIntake() {
                     customerPhone: ''
                 });
                 setShowAddModal(false);
+                setShowPlateSearchResults(false);
+                setSelectedExistingVehicle(null);
             } else {
                 setError('Failed to add vehicle: ' + result.error);
             }
@@ -1881,7 +2034,7 @@ function VehicleIntake() {
         if (!selectedVehicle) return;
         
         const services = window.FirebaseServices;
-        if (!services) {
+        if (!services || !services.intakeRecordsService) {
             setError('Firebase not ready. Please wait and try again.');
             return;
         }
@@ -1889,41 +2042,49 @@ function VehicleIntake() {
         setActionLoading(true);
         try {
             const bay = bays.find(b => b.id === bayId);
-            // Remove the queue ID before saving to Firestore
             const { id: queueId, ...vehicleData } = selectedVehicle;
-            const vehicleRecord = {
+            
+            // Prepare vehicle record data
+            const recordData = {
                 ...vehicleData,
-                queueId: queueId, // Store original queue ID for reference
+                queueId: queueId,
                 status: 'in-progress',
                 assignedBay: bay.name,
                 assignedBayId: bayId,
                 assignedTime: new Date().toISOString(),
                 timeIn: new Date().toISOString()
             };
-
-            // 1. Add to Firestore records
-            const recordResult = await services.intakeRecordsService.addRecord(vehicleRecord);
             
-            if (!recordResult.success) {
-                throw new Error('Failed to create vehicle record');
+            // Use addOrUpdateRecord - it handles returning vehicles automatically
+            const result = await services.intakeRecordsService.addOrUpdateRecord(
+                selectedVehicle.plateNumber,
+                recordData
+            );
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to process vehicle record');
             }
+            
+            console.log(result.isReturning 
+                ? `✅ RETURNING vehicle updated - Visit #${result.visitNumber}` 
+                : `✅ NEW vehicle created - Visit #1`
+            );
 
-            // 2. Update bay status in Realtime DB
+            // Update bay status
             await services.intakeBaysService.updateBay(bayId, 'occupied', {
                 plateNumber: selectedVehicle.plateNumber,
-                recordId: recordResult.id
+                recordId: result.id
             });
 
-            // 3. Remove from queue in Realtime DB
+            // Remove from queue
             await services.intakeQueueService.removeFromQueue(selectedVehicle.id);
 
-            console.log('✅ Vehicle assigned to bay:', bay.name);
             setShowAssignModal(false);
             setSelectedVehicle(null);
             
         } catch (err) {
             console.error('Error assigning bay:', err);
-            setError('Failed to assign bay. Please try again.');
+            setError('Failed to assign bay: ' + err.message);
         } finally {
             setActionLoading(false);
         }
@@ -1939,30 +2100,39 @@ function VehicleIntake() {
         
         setActionLoading(true);
         try {
-            // Remove the queue ID before saving to Firestore
             const { id: queueId, ...vehicleData } = vehicle;
-            const vehicleRecord = {
+            
+            // Prepare record data for garage
+            const recordData = {
                 ...vehicleData,
                 queueId: queueId,
                 status: 'garage',
                 assignedBay: 'Garage',
+                assignedBayId: null,
                 assignedTime: new Date().toISOString(),
                 timeIn: new Date().toISOString()
             };
-
-            // Add to Firestore records
-            const result = await services.intakeRecordsService.addRecord(vehicleRecord);
             
-            if (result.success) {
-                // Remove from queue
-                await services.intakeQueueService.removeFromQueue(vehicle.id);
-                console.log('✅ Vehicle sent to garage');
-            } else {
-                throw new Error('Failed to create garage record');
+            // Use addOrUpdateRecord - handles returning vehicles automatically
+            const result = await services.intakeRecordsService.addOrUpdateRecord(
+                vehicle.plateNumber,
+                recordData
+            );
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to process vehicle record');
             }
+            
+            // Remove from queue
+            await services.intakeQueueService.removeFromQueue(vehicle.id);
+            
+            console.log(result.isReturning 
+                ? `✅ RETURNING vehicle sent to garage - Visit #${result.visitNumber}` 
+                : `✅ NEW vehicle sent to garage - Visit #1`
+            );
         } catch (err) {
             console.error('Error sending to garage:', err);
-            setError('Failed to send to garage. Please try again.');
+            setError('Failed to send to garage: ' + err.message);
         } finally {
             setActionLoading(false);
         }
@@ -2006,6 +2176,29 @@ function VehicleIntake() {
                 await svc.intakeBaysService.updateBay(vehicle.assignedBayId, 'available', null);
             }
 
+            // Record visit in vehicle history (for vehicles category)
+            if (vehicle.category === 'vehicle' && vehicle.plateNumber && svc.vehicleHistoryService) {
+                try {
+                    await svc.vehicleHistoryService.recordVehicleVisit(vehicle.plateNumber, {
+                        service: vehicle.service,
+                        amount: vehicle.service?.price || 0,
+                        vehicleType: vehicle.vehicleType || vehicle.itemType,
+                        category: vehicle.category,
+                        status: 'completed',
+                        assignedBay: vehicle.assignedBay,
+                        timeIn: vehicle.timeIn,
+                        timeOut: new Date().toISOString(),
+                        customerName: vehicle.customerName,
+                        customerPhone: vehicle.customerPhone,
+                        recordId: vehicle.id
+                    });
+                    console.log('✅ Visit recorded for:', vehicle.plateNumber);
+                } catch (historyErr) {
+                    console.error('Failed to record visit history:', historyErr);
+                    // Don't fail the completion if history recording fails
+                }
+            }
+
             console.log('SUCCESS: Vehicle completed');
         } catch (err) {
             console.error('FAILED:', err);
@@ -2047,6 +2240,29 @@ function VehicleIntake() {
             // Free bay if completing
             if (newStatus === 'completed' && vehicle.assignedBayId && svc.intakeBaysService) {
                 await svc.intakeBaysService.updateBay(vehicle.assignedBayId, 'available', null);
+            }
+
+            // Record visit in vehicle history when completing (for vehicles category)
+            if (newStatus === 'completed' && vehicle.category === 'vehicle' && vehicle.plateNumber && svc.vehicleHistoryService) {
+                try {
+                    await svc.vehicleHistoryService.recordVehicleVisit(vehicle.plateNumber, {
+                        service: vehicle.service,
+                        amount: vehicle.service?.price || 0,
+                        vehicleType: vehicle.vehicleType || vehicle.itemType,
+                        category: vehicle.category,
+                        status: 'completed',
+                        assignedBay: vehicle.assignedBay,
+                        timeIn: vehicle.timeIn,
+                        timeOut: new Date().toISOString(),
+                        customerName: vehicle.customerName,
+                        customerPhone: vehicle.customerPhone,
+                        recordId: vehicle.id
+                    });
+                    console.log('✅ Visit recorded for:', vehicle.plateNumber);
+                } catch (historyErr) {
+                    console.error('Failed to record visit history:', historyErr);
+                    // Don't fail the status change if history recording fails
+                }
             }
 
             console.log('SUCCESS: Status changed to', newStatus);
@@ -2473,11 +2689,27 @@ function VehicleIntake() {
                             </button>
                         </div>
                     ) : (
-                        queue.map((vehicle, index) => (
-                            <div key={vehicle.id} className="queue-card">
+                        queue.map((vehicle, index) => {
+                            const existingVisits = vehicle.existingVisits || 0;
+                            const isReturning = vehicle.isReturningVehicle || existingVisits >= 1;
+                            return (
+                            <div key={vehicle.id} className="queue-card" style={{ borderLeft: isReturning ? '3px solid #16a34a' : undefined }}>
                                 <div className="queue-card-header">
                                     <span className="queue-card-plate">
                                         {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                        {isReturning && (
+                                            <span style={{
+                                                marginLeft: '6px',
+                                                fontSize: '9px',
+                                                padding: '2px 6px',
+                                                background: '#dcfce7',
+                                                color: '#166534',
+                                                borderRadius: '8px',
+                                                fontWeight: '600'
+                                            }}>
+                                                🔄 RETURNING (Visit #{existingVisits + 1})
+                                            </span>
+                                        )}
                                     </span>
                                     <span 
                                         className="queue-card-priority" 
@@ -2514,7 +2746,7 @@ function VehicleIntake() {
                                     </button>
                                 </div>
                             </div>
-                        ))
+                        );})
                     )}
                 </div>
             </div>
@@ -2599,6 +2831,7 @@ function VehicleIntake() {
                                 <th>ID / Plate</th>
                                 <th>Category</th>
                                 <th>Type</th>
+                                <th>Visit #</th>
                                 <th>Service</th>
                                 <th>Price</th>
                                 <th>Status</th>
@@ -2610,20 +2843,55 @@ function VehicleIntake() {
                         <tbody>
                             {filteredVehicles.length === 0 ? (
                                 <tr>
-                                    <td colSpan="9" className="intake-table-empty">
+                                    <td colSpan="10" className="intake-table-empty">
                                         {vehicles.length === 0 
                                             ? 'No intake records. Add items from the queue above.'
                                             : 'No records match your search or filter.'}
                                     </td>
                                 </tr>
                             ) : (
-                                filteredVehicles.map(vehicle => (
-                                    <tr key={vehicle.id}>
+                                paginatedVehicles.map(vehicle => (
+                                    <tr key={vehicle.id} style={{ backgroundColor: vehicle.isReturningVehicle ? '#f0fdf4' : undefined }}>
                                         <td className="intake-table-plate">
-                                            {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                                {vehicle.isReturningVehicle && (
+                                                    <span style={{
+                                                        fontSize: '9px',
+                                                        padding: '2px 6px',
+                                                        background: '#dcfce7',
+                                                        color: '#166534',
+                                                        borderRadius: '8px',
+                                                        fontWeight: '600'
+                                                    }}>
+                                                        RETURNING
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td>{INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.label || 'Vehicle'}</td>
                                         <td>{vehicle.itemType || vehicle.vehicleType}</td>
+                                        <td>
+                                            <span
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    minWidth: '32px',
+                                                    height: '28px',
+                                                    padding: '4px 10px',
+                                                    background: (vehicle.visitNumber || 1) > 1 ? '#3b82f6' : '#10b981',
+                                                    borderRadius: '14px',
+                                                    fontSize: '13px',
+                                                    fontWeight: '700',
+                                                    color: '#fff',
+                                                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                                                }}
+                                                title={`Visit #${vehicle.visitNumber || 1}`}
+                                            >
+                                                {vehicle.visitNumber || 1}
+                                            </span>
+                                        </td>
                                         <td>{vehicle.service?.name || '-'}</td>
                                         <td style={{ color: '#10b981', fontWeight: '600' }}>KSH {vehicle.service?.price || 0}</td>
                                         <td>
@@ -2668,6 +2936,15 @@ function VehicleIntake() {
                                                 >
                                                     {Icons.edit}
                                                 </button>
+                                                {/* Visit History Button */}
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title={`Visit History (${getVehicleVisitCount(vehicle.plateNumber)} visits)`}
+                                                    onClick={() => openHistoryModal(vehicle.plateNumber)}
+                                                    style={{ color: getVehicleVisitCount(vehicle.plateNumber) > 0 ? '#0284c7' : '#94a3b8' }}
+                                                >
+                                                    {Icons.clock}
+                                                </button>
                                                 <button 
                                                     className="table-action-btn" 
                                                     title="Print Receipt"
@@ -2703,6 +2980,152 @@ function VehicleIntake() {
                         </tbody>
                     </table>
                 </div>
+                
+                {/* Pagination Controls */}
+                {filteredVehicles.length > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '12px 16px',
+                        borderTop: '1px solid #e2e8f0',
+                        backgroundColor: '#f8fafc',
+                        borderRadius: '0 0 8px 8px',
+                        flexWrap: 'wrap',
+                        gap: '12px'
+                    }}>
+                        {/* Left side - showing info */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: '#64748b' }}>
+                            <span>Showing {startIndex + 1}-{Math.min(endIndex, filteredVehicles.length)} of {filteredVehicles.length}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>Per page:</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    style={{
+                                        padding: '4px 8px',
+                                        border: '1px solid #e2e8f0',
+                                        borderRadius: '4px',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        backgroundColor: '#fff'
+                                    }}
+                                >
+                                    <option value={5}>5</option>
+                                    <option value={10}>10</option>
+                                    <option value={20}>20</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        {/* Right side - page navigation */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button
+                                onClick={() => setCurrentPage(1)}
+                                disabled={currentPage === 1}
+                                style={{
+                                    padding: '6px 10px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '4px',
+                                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#fff',
+                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                First
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                style={{
+                                    padding: '6px 12px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '4px',
+                                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#fff',
+                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                ‹
+                            </button>
+                            
+                            {/* Page numbers */}
+                            {(() => {
+                                const pages = [];
+                                const maxVisible = 5;
+                                let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+                                let end = Math.min(totalPages, start + maxVisible - 1);
+                                if (end - start + 1 < maxVisible) {
+                                    start = Math.max(1, end - maxVisible + 1);
+                                }
+                                
+                                for (let i = start; i <= end; i++) {
+                                    pages.push(
+                                        <button
+                                            key={i}
+                                            onClick={() => setCurrentPage(i)}
+                                            style={{
+                                                padding: '6px 12px',
+                                                border: '1px solid',
+                                                borderColor: currentPage === i ? '#3b82f6' : '#e2e8f0',
+                                                borderRadius: '4px',
+                                                backgroundColor: currentPage === i ? '#3b82f6' : '#fff',
+                                                color: currentPage === i ? '#fff' : '#1e293b',
+                                                cursor: 'pointer',
+                                                fontSize: '13px',
+                                                fontWeight: currentPage === i ? '600' : '400',
+                                                minWidth: '36px'
+                                            }}
+                                        >
+                                            {i}
+                                        </button>
+                                    );
+                                }
+                                return pages;
+                            })()}
+                            
+                            <button
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                    padding: '6px 12px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '4px',
+                                    backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#fff',
+                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                ›
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(totalPages)}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                    padding: '6px 10px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '4px',
+                                    backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#fff',
+                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                Last
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Add Item Modal */}
@@ -2711,7 +3134,7 @@ function VehicleIntake() {
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2>Add to Queue</h2>
-                            <button className="modal-close" onClick={() => setShowAddModal(false)}>
+                            <button className="modal-close" onClick={() => { setShowAddModal(false); setShowPlateSearchResults(false); setSelectedExistingVehicle(null); }}>
                                 {Icons.x}
                             </button>
                         </div>
@@ -2732,6 +3155,8 @@ function VehicleIntake() {
                                                     itemType: ITEM_TYPES[newCategory][0],
                                                     plateNumber: autoId
                                                 });
+                                                setSelectedExistingVehicle(null);
+                                                setShowPlateSearchResults(false);
                                             }}
                                             style={{
                                                 padding: '8px 12px',
@@ -2753,15 +3178,126 @@ function VehicleIntake() {
                                 </div>
                             </div>
                             <div className="form-group">
-                                <label>{formData.category === 'vehicle' ? 'Plate Number *' : 'ID (Auto-generated)'}</label>
+                                <label>{formData.category === 'vehicle' ? 'Plate Number * (Search existing)' : 'ID (Auto-generated)'}</label>
                                 {formData.category === 'vehicle' ? (
-                                    <input 
-                                        type="text" 
-                                        value={formData.plateNumber}
-                                        onChange={e => setFormData({...formData, plateNumber: e.target.value})}
-                                        placeholder="e.g., KAA 123A"
-                                        autoFocus
-                                    />
+                                    <div style={{ position: 'relative' }}>
+                                        <div style={{ position: 'relative' }}>
+                                            <input 
+                                                type="text" 
+                                                value={formData.plateNumber}
+                                                onChange={e => handlePlateInputChange(e.target.value.toUpperCase())}
+                                                placeholder="TYPE PLATE NUMBER..."
+                                                autoFocus
+                                                style={{
+                                                    paddingRight: '90px',
+                                                    borderColor: selectedExistingVehicle ? '#10b981' : undefined,
+                                                    backgroundColor: selectedExistingVehicle ? '#f0fdf4' : undefined,
+                                                    textTransform: 'uppercase',
+                                                    fontWeight: '600',
+                                                    letterSpacing: '1px'
+                                                }}
+                                            />
+                                            {selectedExistingVehicle && (
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    right: '10px',
+                                                    top: '50%',
+                                                    transform: 'translateY(-50%)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    fontSize: '11px',
+                                                    color: '#16a34a',
+                                                    fontWeight: '600'
+                                                }}>
+                                                    {Icons.check} Returning
+                                                </div>
+                                            )}
+                                        </div>
+                                        
+                                        {/* Search Results Dropdown */}
+                                        {showPlateSearchResults && plateSearchResults.length > 0 && (
+                                            <div style={{
+                                                position: 'absolute',
+                                                top: '100%',
+                                                left: 0,
+                                                right: 0,
+                                                background: '#fff',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: '8px',
+                                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                                                zIndex: 100,
+                                                maxHeight: '200px',
+                                                overflowY: 'auto',
+                                                marginTop: '4px'
+                                            }}>
+                                                <div style={{ padding: '8px 12px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '11px', color: '#64748b', fontWeight: '600' }}>
+                                                    EXISTING VEHICLES ({plateSearchResults.length})
+                                                </div>
+                                                {plateSearchResults.map(record => (
+                                                    <div
+                                                        key={record.id}
+                                                        onClick={() => selectExistingVehicle(record)}
+                                                        style={{
+                                                            padding: '10px 12px',
+                                                            cursor: 'pointer',
+                                                            borderBottom: '1px solid #f1f5f9',
+                                                            display: 'flex',
+                                                            justifyContent: 'space-between',
+                                                            alignItems: 'center'
+                                                        }}
+                                                        onMouseOver={e => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                                                        onMouseOut={e => e.currentTarget.style.backgroundColor = '#fff'}
+                                                    >
+                                                        <div>
+                                                            <div style={{ fontWeight: '600', color: '#1e293b' }}>{record.plateNumber}</div>
+                                                            <div style={{ fontSize: '11px', color: '#64748b' }}>
+                                                                {record.itemType || record.vehicleType || 'Unknown'} • {record.customerName || 'No name'}
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ textAlign: 'right' }}>
+                                                            <div style={{ fontSize: '12px', fontWeight: '600', color: record.visitNumber >= 1 ? '#16a34a' : '#0284c7' }}>
+                                                                Visit #{record.visitNumber || 1}
+                                                            </div>
+                                                            <div style={{ fontSize: '10px', color: '#64748b' }}>
+                                                                {record.service?.name || 'No service'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {/* Existing Vehicle Info Card */}
+                                        {selectedExistingVehicle && (
+                                            <div style={{
+                                                marginTop: '10px',
+                                                padding: '12px',
+                                                background: (selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 0) >= 1 ? '#f0fdf4' : '#f8fafc',
+                                                border: (selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 0) >= 1 ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+                                                borderRadius: '8px'
+                                            }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                    <span style={{ fontSize: '12px', fontWeight: '600', color: (selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 0) >= 1 ? '#16a34a' : '#64748b' }}>
+                                                        {(selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 0) >= 1 ? '🔄 RETURNING CUSTOMER' : '🆕 NEW CUSTOMER'}
+                                                    </span>
+                                                    <button 
+                                                        onClick={() => { setSelectedExistingVehicle(null); setFormData({...formData, customerName: '', customerPhone: ''}); }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: '11px' }}
+                                                    >
+                                                        Clear
+                                                    </button>
+                                                </div>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+                                                    <div><span style={{ color: '#64748b' }}>Current Visit #:</span> <strong>{selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 1}</strong></div>
+                                                    <div><span style={{ color: '#64748b' }}>Last Service:</span> <strong>{selectedExistingVehicle.service?.name || selectedExistingVehicle.lastService || '-'}</strong></div>
+                                                    <div style={{ gridColumn: 'span 2', color: '#0284c7', fontWeight: '600' }}>
+                                                        📝 This will update to Visit #{(selectedExistingVehicle.visitNumber || selectedExistingVehicle.totalVisits || 0) + 1}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 ) : (
                                     <div style={{ 
                                         display: 'flex', 
@@ -3206,6 +3742,107 @@ function VehicleIntake() {
                                 onClick={() => window.print()}
                             >
                                 Print Invoice
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Visit History Modal */}
+            {showHistoryModal && selectedVehicleHistory && (
+                <div className="modal-overlay" onClick={() => { setShowHistoryModal(false); setSelectedVehicleHistory(null); }}>
+                    <div className="modal" style={{ maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Visit History - {selectedVehicleHistory.plateNumber}</h2>
+                            <button className="modal-close" onClick={() => { setShowHistoryModal(false); setSelectedVehicleHistory(null); }}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            {/* Summary Stats */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                                <div style={{ background: '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#0284c7' }}>{selectedVehicleHistory.totalVisits || 0}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Visits</div>
+                                </div>
+                                <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>KSH {(selectedVehicleHistory.totalSpent || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Spent</div>
+                                </div>
+                                <div style={{ background: '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#7c3aed' }}>{selectedVehicleHistory.lastVisit ? new Date(selectedVehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Last Visit</div>
+                                </div>
+                            </div>
+
+                            {/* Customer Info */}
+                            {(selectedVehicleHistory.customerName || selectedVehicleHistory.customerPhone) && (
+                                <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                                    <div style={{ display: 'flex', gap: '20px', fontSize: '13px' }}>
+                                        {selectedVehicleHistory.customerName && (
+                                            <div><span style={{ color: '#64748b' }}>Customer:</span> <strong>{selectedVehicleHistory.customerName}</strong></div>
+                                        )}
+                                        {selectedVehicleHistory.customerPhone && (
+                                            <div><span style={{ color: '#64748b' }}>Phone:</span> <strong>{selectedVehicleHistory.customerPhone}</strong></div>
+                                        )}
+                                        {selectedVehicleHistory.vehicleType && (
+                                            <div><span style={{ color: '#64748b' }}>Type:</span> <strong>{selectedVehicleHistory.vehicleType}</strong></div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Visit History Table */}
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', marginBottom: '8px' }}>Visit History</div>
+                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                                        <tr>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Date</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Time</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Service</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Bay</th>
+                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Amount</th>
+                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(selectedVehicleHistory.visitHistory || []).length === 0 ? (
+                                            <tr>
+                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>
+                                                    No visit history recorded yet
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            (selectedVehicleHistory.visitHistory || []).map((visit, index) => (
+                                                <tr key={visit.id || index} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '10px' }}>{visit.date ? new Date(visit.date).toLocaleDateString() : '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.timeIn ? new Date(visit.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.service?.name || '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.bay || '-'}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>KSH {(visit.amount || 0).toLocaleString()}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'center' }}>
+                                                        <span style={{
+                                                            padding: '2px 8px',
+                                                            borderRadius: '10px',
+                                                            fontSize: '11px',
+                                                            fontWeight: '500',
+                                                            background: visit.status === 'completed' ? '#dcfce7' : visit.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
+                                                            color: visit.status === 'completed' ? '#166534' : visit.status === 'in-progress' ? '#1e40af' : '#92400e'
+                                                        }}>
+                                                            {visit.status || 'unknown'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="modal-btn modal-btn-primary" onClick={() => { setShowHistoryModal(false); setSelectedVehicleHistory(null); }}>
+                                Close
                             </button>
                         </div>
                     </div>
@@ -7384,6 +8021,26 @@ function GarageManagement() {
             console.log('Complete result:', result);
 
             if (result.success) {
+                // Try to find the intake record for this vehicle
+                let intakeRecordId = null;
+                if (services.intakeRecordsService && job.plateNumber) {
+                    try {
+                        const recordsResult = await services.intakeRecordsService.getRecords();
+                        if (recordsResult.success) {
+                            // Find matching record by plate number that's in garage status
+                            const matchingRecord = recordsResult.data.find(r => 
+                                r.plateNumber === job.plateNumber && 
+                                (r.status === 'garage' || r.status === 'in-progress')
+                            );
+                            if (matchingRecord) {
+                                intakeRecordId = matchingRecord.id;
+                            }
+                        }
+                    } catch (findErr) {
+                        console.warn('Could not find intake record:', findErr);
+                    }
+                }
+                
                 // Create invoice for the completed job
                 if (services.billingService && totalCost > 0) {
                     await services.billingService.createInvoice({
@@ -7395,9 +8052,10 @@ function GarageManagement() {
                         customerPhone: job.customerPhone || '',
                         services: serviceDetails,
                         totalAmount: totalCost,
-                        notes: job.notes || ''
+                        notes: job.notes || '',
+                        garageRecordId: intakeRecordId // Link to intake record for auto-completion
                     });
-                    console.log('Invoice created for garage job:', job.id);
+                    console.log('Invoice created for garage job:', job.id, 'with intake record:', intakeRecordId);
                 }
                 
                 // Wait for Firebase to sync, then switch tab
@@ -9403,7 +10061,9 @@ class WashBaysErrorBoundary extends React.Component {
 function WashBaysContent() {
     const [bays, setBays] = useState([]);
     const [history, setHistory] = useState([]);
+    const [invoices, setInvoices] = useState([]); // Track invoices for payment status
     const [intakeQueue, setIntakeQueue] = useState([]);
+    const [intakeRecords, setIntakeRecords] = useState([]); // All intake records including in-progress
     const [staffList, setStaffList] = useState([]);
     const [servicePackages, setServicePackages] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -9411,6 +10071,8 @@ function WashBaysContent() {
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
     const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [showViewVehicleModal, setShowViewVehicleModal] = useState(false); // View vehicle details
+    const [selectedViewVehicle, setSelectedViewVehicle] = useState(null); // Selected vehicle for viewing
     const [confirmAction, setConfirmAction] = useState(null);
     const [maintenanceNote, setMaintenanceNote] = useState('');
     const [selectedBay, setSelectedBay] = useState(null);
@@ -9497,7 +10159,7 @@ function WashBaysContent() {
             return;
         }
 
-        let unsubBays, unsubHistory, unsubQueue, unsubStaff, unsubPackages;
+        let unsubBays, unsubHistory, unsubQueue, unsubStaff, unsubPackages, unsubRecords, unsubInvoices;
 
         const initializeData = async () => {
             try {
@@ -9526,6 +10188,22 @@ function WashBaysContent() {
                 unsubHistory = services.washBayService.subscribeToHistory((data) => {
                     setHistory(data);
                 });
+
+                // Subscribe to invoices for payment status
+                if (services.billingService?.subscribeToInvoices) {
+                    unsubInvoices = services.billingService.subscribeToInvoices((data) => {
+                        // Filter only wash-related invoices
+                        const washInvoices = data.filter(inv => inv.source === 'wash');
+                        setInvoices(washInvoices);
+                    });
+                }
+
+                // Subscribe to intake records (for View functionality)
+                if (services.intakeRecordsService) {
+                    unsubRecords = services.intakeRecordsService.subscribeToRecords((data) => {
+                        setIntakeRecords(data);
+                    });
+                }
 
                 // Subscribe to intake queue (vehicles waiting)
                 if (services.intakeQueueService) {
@@ -9577,6 +10255,8 @@ function WashBaysContent() {
             if (unsubQueue) unsubQueue();
             if (unsubStaff) unsubStaff();
             if (unsubPackages) unsubPackages();
+            if (unsubRecords) unsubRecords();
+            if (unsubInvoices) unsubInvoices();
         };
     }, []);
 
@@ -9680,6 +10360,23 @@ function WashBaysContent() {
                     assignedBy: assignForm.assignedTo,
                     queueId: queueVehicle.id
                 };
+            } else if (assignMode === 'assigned' && selectedVehicleId) {
+                // Use selected vehicle from already assigned (intake records)
+                const assignedVehicle = intakeRecords.find(v => v.id === selectedVehicleId);
+                if (!assignedVehicle) {
+                    setError('Selected vehicle not found');
+                    setActionLoading(false);
+                    return;
+                }
+                vehicleData = {
+                    plateNumber: assignedVehicle.plateNumber,
+                    customerName: assignedVehicle.customerName || '',
+                    vehicleType: assignedVehicle.vehicleType || 'sedan',
+                    service: serviceInfo,
+                    assignedBy: assignForm.assignedTo,
+                    recordId: assignedVehicle.id, // Keep the existing record ID
+                    previousBay: assignedVehicle.assignedBay // Track where it was
+                };
             } else {
                 // Create new vehicle entry
                 if (!assignForm.plateNumber.trim()) {
@@ -9696,9 +10393,22 @@ function WashBaysContent() {
                 };
             }
 
-            // 1. Create record in Vehicle Intake Records (Firestore) for tracking
-            let recordId = null;
-            if (services.intakeRecordsService) {
+            // 1. Create or update record in Vehicle Intake Records (Firestore) for tracking
+            let recordId = vehicleData.recordId || null;
+            
+            if (assignMode === 'assigned' && recordId) {
+                // Update existing record with new bay assignment
+                if (services.intakeRecordsService) {
+                    await services.intakeRecordsService.updateRecord(recordId, {
+                        assignedBay: selectedBay.name,
+                        assignedBayId: selectedBay.id,
+                        assignedTime: new Date().toISOString(),
+                        service: vehicleData.service,
+                        reassignedFrom: vehicleData.previousBay
+                    });
+                }
+            } else if (!recordId && services.intakeRecordsService) {
+                // Create new record for queue or new vehicles
                 const recordData = {
                     plateNumber: vehicleData.plateNumber,
                     customerName: vehicleData.customerName,
@@ -9741,6 +10451,7 @@ function WashBaysContent() {
                     vehicleData.queueId = queueResult.id;
                 }
             }
+            // Note: 'assigned' mode doesn't need queue updates - vehicle is already tracked in records
 
             // 3. Assign to wash bay (Realtime DB)
             const result = await services.washBayService.assignVehicle(selectedBay.id, vehicleData);
@@ -9807,7 +10518,9 @@ function WashBaysContent() {
             await services.washBayService.completeWash(bay.id);
 
             // 4. Create invoice for the completed wash
-            const washPrice = currentVehicle?.servicePrice || 500; // Default price if not set
+            const washPrice = typeof currentVehicle?.service === 'object' 
+                ? currentVehicle?.service?.price 
+                : (currentVehicle?.servicePrice || 500); // Get price from service object or default
             const serviceName = typeof currentVehicle?.service === 'object' 
                 ? currentVehicle?.service?.name 
                 : currentVehicle?.service || 'Car Wash';
@@ -9822,10 +10535,11 @@ function WashBaysContent() {
                     customerPhone: currentVehicle?.customerPhone || '',
                     services: [{ name: serviceName, price: washPrice }],
                     totalAmount: washPrice,
-                    assignedTo: currentVehicle?.assignedTo || '',
-                    startTime: currentVehicle?.startTime || bay.startTime
+                    assignedTo: currentVehicle?.assignedBy || currentVehicle?.assignedTo || '',
+                    startTime: currentVehicle?.startTime || bay.startTime,
+                    washRecordId: currentVehicle?.recordId || null // Link to intake record for tracking
                 });
-                console.log('Invoice created for wash:', currentVehicle?.plateNumber);
+                console.log('Invoice created for wash:', currentVehicle?.plateNumber, 'Amount:', washPrice);
             }
             
             // Refresh stats
@@ -10264,23 +10978,44 @@ function WashBaysContent() {
                                                     </div>
                                                 </div>
 
-                                                <button
-                                                    onClick={() => handleCompleteWash(bay)}
-                                                    disabled={actionLoading}
-                                                    style={{
-                                                        width: '100%',
-                                                        padding: '12px',
-                                                        borderRadius: '2px',
-                                                        border: 'none',
-                                                        backgroundColor: '#10b981',
-                                                        color: 'white',
-                                                        fontWeight: '600',
-                                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
-                                                        fontSize: '14px'
-                                                    }}
-                                                >
-                                                    ✓ Complete Wash
-                                                </button>
+                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                    <button
+                                                        onClick={() => {
+                                                            setSelectedViewVehicle(bay.currentVehicle);
+                                                            setShowViewVehicleModal(true);
+                                                        }}
+                                                        style={{
+                                                            flex: 1,
+                                                            padding: '12px',
+                                                            borderRadius: '2px',
+                                                            border: `1px solid ${theme.border}`,
+                                                            backgroundColor:theme.bgSecondary,
+                                                            color: theme.text,
+                                                            fontWeight: '600',
+                                                            cursor: 'pointer',
+                                                            fontSize: '14px'
+                                                        }}
+                                                    >
+                                                        View Details
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleCompleteWash(bay)}
+                                                        disabled={actionLoading}
+                                                        style={{
+                                                            flex: 1,
+                                                            padding: '12px',
+                                                            borderRadius: '2px',
+                                                            border: 'none',
+                                                            backgroundColor: '#10b981',
+                                                            color: 'white',
+                                                            fontWeight: '600',
+                                                            cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                                            fontSize: '14px'
+                                                        }}
+                                                    >
+                                                        ✓ Complete
+                                                    </button>
+                                                </div>
                                             </div>
                                         ) : bay.status === 'maintenance' ? (
                                             <div style={{ textAlign: 'center', padding: '20px 0' }}>
@@ -10388,11 +11123,12 @@ function WashBaysContent() {
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Bay</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Vehicle</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Service</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Price</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Washed By</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Started</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Completed</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Payment</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -10406,7 +11142,7 @@ function WashBaysContent() {
                                     if (startedRecords.length === 0) {
                                         return (
                                             <tr>
-                                                <td colSpan="8" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>
+                                                <td colSpan="9" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>
                                                     No wash history yet
                                                 </td>
                                             </tr>
@@ -10423,6 +11159,9 @@ function WashBaysContent() {
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                                 {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
+                                                KES {(typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.price : 0)?.toLocaleString() || '0'}
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                                 {record.vehicle?.assignedBy || '-'}
@@ -10453,7 +11192,21 @@ function WashBaysContent() {
                                 }
                                 
                                 // Show completed records (they have all the info including start time)
-                                return completedRecords.map(record => (
+                                return completedRecords.map(record => {
+                                    const servicePrice = typeof record.vehicle?.service === 'object' 
+                                        ? record.vehicle?.service?.price 
+                                        : (record.vehicle?.servicePrice || 0);
+                                    
+                                    // Find matching invoice by plate number and approximate time
+                                    const matchingInvoice = invoices.find(inv => 
+                                        inv.plateNumber === record.vehicle?.plateNumber &&
+                                        inv.source === 'wash' &&
+                                        // Match within 1 hour of the wash completion
+                                        Math.abs(new Date(inv.createdAt) - new Date(record.timestamp)) < 3600000
+                                    );
+                                    const isPaid = matchingInvoice?.paymentStatus === 'paid';
+                                    
+                                    return (
                                     <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text, fontWeight: '500' }}>
                                             {record.bayName || record.bayId}
@@ -10464,6 +11217,9 @@ function WashBaysContent() {
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                             {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
+                                            KES {servicePrice?.toLocaleString() || '0'}
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                             {record.vehicle?.assignedBy || record.completedBy || '-'}
@@ -10478,22 +11234,147 @@ function WashBaysContent() {
                                             {record.duration ? `${record.duration} min` : '-'}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                            <span style={{
-                                                padding: '4px 10px',
-                                                borderRadius: '12px',
-                                                fontSize: '12px',
-                                                fontWeight: '500',
-                                                backgroundColor: '#d1fae5',
-                                                color: '#059669'
-                                            }}>
-                                                ✓ Done
-                                            </span>
+                                            {isPaid ? (
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#d1fae5',
+                                                    color: '#059669'
+                                                }}>
+                                                    ✓ KES {servicePrice?.toLocaleString() || '0'} Paid
+                                                </span>
+                                            ) : (
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#fef3c7',
+                                                    color: '#d97706'
+                                                }}>
+                                                    💰 KES {servicePrice?.toLocaleString() || '0'} Pending
+                                                </span>
+                                            )}
                                         </td>
                                     </tr>
-                                ));
+                                )});
                             })()}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {/* View Vehicle Modal */}
+            {showViewVehicleModal && selectedViewVehicle && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000
+                }} onClick={() => setShowViewVehicleModal(false)}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '500px',
+                        margin: '20px',
+                        maxHeight: '90vh',
+                        overflow: 'auto',
+                        boxShadow: theme.cardShadow
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ 
+                            padding: '20px', 
+                            borderBottom: `1px solid ${theme.border}`,
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center' 
+                        }}>
+                            <h2 style={{ margin: 0, color: theme.text }}>Vehicle Details</h2>
+                            <button 
+                                onClick={() => setShowViewVehicleModal(false)}
+                                style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}
+                            >
+                                ×
+                            </button>
+                        </div>
+                        
+                        <div style={{ padding: '20px' }}>
+                            {(() => {
+                                const fullRecord = intakeRecords.find(r => r.id === selectedViewVehicle.recordId) || selectedViewVehicle;
+                                return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        <div style={{ textAlign: 'center', padding: '20px', backgroundColor: theme.bgSecondary, borderRadius: '4px' }}>
+                                            <div style={{ fontSize: '32px', fontWeight: 'bold', color: theme.text, letterSpacing: '2px' }}>{fullRecord.plateNumber}</div>
+                                            <div style={{ color: theme.textSecondary, marginTop: '4px' }}>{fullRecord.vehicleType || 'Vehicle'}</div>
+                                        </div>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, textTransform: 'uppercase', marginBottom: '4px' }}>Customer</div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>{fullRecord.customerName || 'Walk-in'}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, textTransform: 'uppercase', marginBottom: '4px' }}>Service</div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>
+                                                    {typeof fullRecord.service === 'object' ? fullRecord.service.name : fullRecord.service}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, textTransform: 'uppercase', marginBottom: '4px' }}>Assigned By</div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>{fullRecord.assignedBy || '-'}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary, textTransform: 'uppercase', marginBottom: '4px' }}>Time In</div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>
+                                                    {fullRecord.timeIn ? new Date(fullRecord.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {fullRecord.notes && (
+                                           <div style={{ padding: '16px', backgroundColor: '#fff7ed', borderRadius: '4px', border: '1px solid #ffedd5' }}>
+                                               <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#c2410c', marginBottom: '8px', textTransform: 'uppercase' }}>Notes</div>
+                                               <div style={{ fontSize: '14px', color: '#9a3412', lineHeight: '1.5' }}>{fullRecord.notes}</div>
+                                           </div>
+                                        )}
+                                        
+                                        <div style={{ padding: '16px', backgroundColor: '#eff6ff', borderRadius: '4px', border: '1px solid #dbeafe', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div style={{ fontSize: '24px' }}>📍</div>
+                                            <div>
+                                                <div style={{ fontSize: '12px', color: '#1e40af', fontWeight: 'bold' }}>Current Location</div>
+                                                <div style={{ fontSize: '14px', color: '#1e3a8a' }}>Assigned to {fullRecord.assignedBay || 'Wash Bay'}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                        
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                             <button
+                                onClick={() => setShowViewVehicleModal(false)}
+                                style={{
+                                    padding: '10px 24px',
+                                    borderRadius: '2px',
+                                    border: 'none',
+                                    background: '#3b82f6',
+                                    color: 'white',
+                                    fontWeight: '600',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -10627,10 +11508,10 @@ function WashBaysContent() {
                         </div>
                         
                         <form onSubmit={handleAssignVehicle} style={{ padding: '20px' }}>
-                            {/* Mode Toggle */}
+                            {/* Mode Toggle - 3 options */}
                             <div style={{ 
                                 display: 'flex', 
-                                gap: '8px', 
+                                gap: '4px', 
                                 marginBottom: '20px',
                                 padding: '4px',
                                 backgroundColor: theme.bgSecondary,
@@ -10641,34 +11522,51 @@ function WashBaysContent() {
                                     onClick={() => { setAssignMode('select'); setSelectedVehicleId(''); }}
                                     style={{
                                         flex: 1,
-                                        padding: '10px 16px',
+                                        padding: '10px 12px',
                                         borderRadius: '2px',
                                         border: 'none',
                                         backgroundColor: assignMode === 'select' ? '#3b82f6' : 'transparent',
                                         color: assignMode === 'select' ? 'white' : theme.textSecondary,
                                         fontWeight: '600',
                                         cursor: 'pointer',
-                                        fontSize: '13px'
+                                        fontSize: '12px'
                                     }}
                                 >
-                                    📋 From Queue ({intakeQueue.length})
+                                    ⏳ Queue ({intakeQueue.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setAssignMode('assigned'); setSelectedVehicleId(''); }}
+                                    style={{
+                                        flex: 1,
+                                        padding: '10px 12px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: assignMode === 'assigned' ? '#10b981' : 'transparent',
+                                        color: assignMode === 'assigned' ? 'white' : theme.textSecondary,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '12px'
+                                    }}
+                                >
+                                    🚗 Assigned ({intakeRecords.filter(r => r.status === 'in-progress' && r.assignedBayId).length})
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setAssignMode('new')}
                                     style={{
                                         flex: 1,
-                                        padding: '10px 16px',
+                                        padding: '10px 12px',
                                         borderRadius: '2px',
                                         border: 'none',
-                                        backgroundColor: assignMode === 'new' ? '#3b82f6' : 'transparent',
+                                        backgroundColor: assignMode === 'new' ? '#8b5cf6' : 'transparent',
                                         color: assignMode === 'new' ? 'white' : theme.textSecondary,
                                         fontWeight: '600',
                                         cursor: 'pointer',
-                                        fontSize: '13px'
+                                        fontSize: '12px'
                                     }}
                                 >
-                                    ➕ New Vehicle
+                                    ➕ New
                                 </button>
                             </div>
 
@@ -10683,8 +11581,25 @@ function WashBaysContent() {
                                             borderRadius: '2px',
                                             border: `1px dashed ${theme.border}`
                                         }}>
-                                            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🚗</div>
+                                            <div style={{ fontSize: '36px', marginBottom: '12px' }}>⏳</div>
                                             <p style={{ color: theme.textSecondary, marginBottom: '12px' }}>No vehicles waiting in queue</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setAssignMode('assigned')}
+                                                style={{
+                                                    padding: '8px 16px',
+                                                    borderRadius: '2px',
+                                                    border: 'none',
+                                                    backgroundColor: '#10b981',
+                                                    color: 'white',
+                                                    fontWeight: '500',
+                                                    cursor: 'pointer',
+                                                    fontSize: '13px',
+                                                    marginRight: '8px'
+                                                }}
+                                            >
+                                                View Assigned
+                                            </button>
                                             <button
                                                 type="button"
                                                 onClick={() => setAssignMode('new')}
@@ -10759,6 +11674,115 @@ function WashBaysContent() {
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            )}
+
+                            {/* Select from Assigned Vehicles (from Intake) */}
+                            {assignMode === 'assigned' && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    {(() => {
+                                        const assignedVehicles = intakeRecords.filter(r => r.status === 'in-progress' && r.assignedBayId);
+                                        if (assignedVehicles.length === 0) {
+                                            return (
+                                                <div style={{ 
+                                                    textAlign: 'center', 
+                                                    padding: '30px 20px',
+                                                    backgroundColor: theme.bgSecondary,
+                                                    borderRadius: '2px',
+                                                    border: `1px dashed ${theme.border}`
+                                                }}>
+                                                    <div style={{ fontSize: '36px', marginBottom: '12px' }}>🚗</div>
+                                                    <p style={{ color: theme.textSecondary, marginBottom: '12px' }}>No vehicles assigned from intake</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setAssignMode('select')}
+                                                        style={{
+                                                            padding: '8px 16px',
+                                                            borderRadius: '2px',
+                                                            border: 'none',
+                                                            backgroundColor: '#3b82f6',
+                                                            color: 'white',
+                                                            fontWeight: '500',
+                                                            cursor: 'pointer',
+                                                            fontSize: '13px'
+                                                        }}
+                                                    >
+                                                        View Queue Instead
+                                                    </button>
+                                                </div>
+                                            );
+                                        }
+                                        return (
+                                            <div>
+                                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: theme.text }}>
+                                                    Vehicles Already Assigned to Bays (from Intake)
+                                                </label>
+                                                <div style={{ maxHeight: '220px', overflowY: 'auto', border: `1px solid ${theme.border}`, borderRadius: '2px' }}>
+                                                    {assignedVehicles.map(vehicle => (
+                                                        <div
+                                                            key={vehicle.id}
+                                                            onClick={() => setSelectedVehicleId(vehicle.id)}
+                                                            style={{
+                                                                padding: '12px 16px',
+                                                                borderBottom: `1px solid ${theme.border}`,
+                                                                cursor: 'pointer',
+                                                                backgroundColor: selectedVehicleId === vehicle.id ? '#d1fae5' : 'transparent',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '12px',
+                                                                transition: 'background-color 0.15s'
+                                                            }}
+                                                        >
+                                                            <div style={{
+                                                                width: '20px',
+                                                                height: '20px',
+                                                                borderRadius: '50%',
+                                                                border: `2px solid ${selectedVehicleId === vehicle.id ? '#10b981' : theme.border}`,
+                                                                backgroundColor: selectedVehicleId === vehicle.id ? '#10b981' : 'transparent',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center'
+                                                            }}>
+                                                                {selectedVehicleId === vehicle.id && (
+                                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
+                                                                        <polyline points="20 6 9 17 4 12"/>
+                                                                    </svg>
+                                                                )}
+                                                            </div>
+                                                            <div style={{ flex: 1 }}>
+                                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    {vehicle.plateNumber}
+                                                                    <span style={{
+                                                                        padding: '2px 8px',
+                                                                        backgroundColor: '#dbeafe',
+                                                                        color: '#1d4ed8',
+                                                                        borderRadius: '10px',
+                                                                        fontSize: '10px',
+                                                                        fontWeight: '600'
+                                                                    }}>
+                                                                        {vehicle.assignedBay || 'Bay'}
+                                                                    </span>
+                                                                </div>
+                                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                                                    {vehicle.customerName || 'Walk-in'} • {typeof vehicle.service === 'object' ? vehicle.service.name : vehicle.service || 'Service'}
+                                                                </div>
+                                                            </div>
+                                                            <div style={{ 
+                                                                fontSize: '11px', 
+                                                                color: theme.textSecondary,
+                                                                textAlign: 'right'
+                                                            }}>
+                                                                {vehicle.timeIn ? new Date(vehicle.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div style={{ marginTop: '8px', fontSize: '12px', color: theme.textSecondary, padding: '8px', backgroundColor: '#eff6ff', borderRadius: '4px' }}>
+                                                    💡 These vehicles were sent from Vehicle Intake and already have a bay assigned. Select one to view or reassign.
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             )}
 
@@ -10910,16 +11934,16 @@ function WashBaysContent() {
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={actionLoading || (assignMode === 'select' && !selectedVehicleId)}
+                                    disabled={actionLoading || ((assignMode === 'select' || assignMode === 'assigned') && !selectedVehicleId)}
                                     style={{
                                         flex: 1,
                                         padding: '12px',
                                         borderRadius: '2px',
                                         border: 'none',
-                                        backgroundColor: (assignMode === 'select' && !selectedVehicleId) ? '#94a3b8' : '#3b82f6',
+                                        backgroundColor: ((assignMode === 'select' || assignMode === 'assigned') && !selectedVehicleId) ? '#94a3b8' : '#3b82f6',
                                         color: 'white',
                                         fontWeight: '600',
-                                        cursor: (actionLoading || (assignMode === 'select' && !selectedVehicleId)) ? 'not-allowed' : 'pointer'
+                                        cursor: (actionLoading || ((assignMode === 'select' || assignMode === 'assigned') && !selectedVehicleId)) ? 'not-allowed' : 'pointer'
                                     }}
                                 >
                                     {actionLoading ? 'Assigning...' : '🚿 Start Wash'}
