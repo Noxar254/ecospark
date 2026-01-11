@@ -2185,11 +2185,18 @@ export const packagesService = {
   // Get all packages
   async getPackages() {
     try {
-      const q = query(collection(db, 'servicePackages'), orderBy('createdAt', 'asc'));
+      // Simple query without orderBy to avoid index requirements
+      const q = query(collection(db, 'servicePackages'));
       const querySnapshot = await getDocs(q);
       const packages = [];
       querySnapshot.forEach((doc) => {
         packages.push({ id: doc.id, ...doc.data() });
+      });
+      // Sort client-side by createdAt
+      packages.sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateA - dateB;
       });
       return { success: true, data: packages };
     } catch (error) {
@@ -2226,11 +2233,18 @@ export const packagesService = {
 
   // Subscribe to packages (real-time)
   subscribeToPackages(callback, onError) {
-    const q = query(collection(db, 'servicePackages'), orderBy('createdAt', 'asc'));
+    // Simple query without orderBy to avoid index requirements
+    const q = query(collection(db, 'servicePackages'));
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const packages = [];
       querySnapshot.forEach((doc) => {
         packages.push({ ...doc.data(), id: doc.id });
+      });
+      // Sort client-side by createdAt
+      packages.sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateA - dateB;
       });
       callback(packages);
     }, (error) => {

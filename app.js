@@ -4611,7 +4611,10 @@ function ServicePackages() {
     // Save package (add or update)
     const handleSave = async () => {
         const services = window.FirebaseServices;
-        if (!services?.packagesService) return;
+        if (!services?.packagesService) {
+            showNotification('Service not available. Please refresh.', 'error');
+            return;
+        }
 
         if (!formData.name.trim() || !formData.price) {
             showNotification('Name and price are required', 'error');
@@ -4623,20 +4626,32 @@ function ServicePackages() {
             price: parseFloat(formData.price),
             description: formData.description.trim(),
             features: formData.features.split(',').map(f => f.trim()).filter(f => f),
-            category: formData.category
+            category: formData.category,
+            isActive: true
         };
 
         try {
+            let result;
             if (editingPackage) {
-                await services.packagesService.updatePackage(editingPackage.id, packageData);
-                showNotification('Package updated successfully');
+                result = await services.packagesService.updatePackage(editingPackage.id, packageData);
+                if (result.success) {
+                    showNotification('Package updated successfully');
+                    setShowModal(false);
+                } else {
+                    showNotification(result.error || 'Error updating package', 'error');
+                }
             } else {
-                await services.packagesService.addPackage(packageData);
-                showNotification('Package added successfully');
+                result = await services.packagesService.addPackage(packageData);
+                if (result.success) {
+                    showNotification('Package added successfully');
+                    setShowModal(false);
+                } else {
+                    showNotification(result.error || 'Error adding package', 'error');
+                }
             }
-            setShowModal(false);
         } catch (error) {
-            showNotification('Error saving package', 'error');
+            console.error('Error saving package:', error);
+            showNotification('Error saving package: ' + error.message, 'error');
         }
     };
 
@@ -4651,13 +4666,21 @@ function ServicePackages() {
         if (!deleteTargetId) return;
         
         const services = window.FirebaseServices;
-        if (!services?.packagesService) return;
+        if (!services?.packagesService) {
+            showNotification('Service not available', 'error');
+            return;
+        }
 
         try {
-            await services.packagesService.deletePackage(deleteTargetId);
-            showNotification('Package deleted successfully');
+            const result = await services.packagesService.deletePackage(deleteTargetId);
+            if (result.success) {
+                showNotification('Package deleted successfully');
+            } else {
+                showNotification(result.error || 'Error deleting package', 'error');
+            }
         } catch (error) {
-            showNotification('Error deleting package', 'error');
+            console.error('Error deleting package:', error);
+            showNotification('Error deleting package: ' + error.message, 'error');
         } finally {
             setShowConfirmModal(false);
             setDeleteTargetId(null);
@@ -4667,12 +4690,20 @@ function ServicePackages() {
     // Toggle package active status
     const handleToggleActive = async (pkg) => {
         const services = window.FirebaseServices;
-        if (!services?.packagesService) return;
+        if (!services?.packagesService) {
+            showNotification('Service not available', 'error');
+            return;
+        }
 
         try {
-            await services.packagesService.updatePackage(pkg.id, { isActive: !pkg.isActive });
-            showNotification(`Package ${pkg.isActive ? 'deactivated' : 'activated'}`);
+            const result = await services.packagesService.updatePackage(pkg.id, { isActive: !pkg.isActive });
+            if (result.success) {
+                showNotification(`Package ${pkg.isActive ? 'deactivated' : 'activated'}`);
+            } else {
+                showNotification(result.error || 'Error updating package', 'error');
+            }
         } catch (error) {
+            console.error('Error toggling package:', error);
             showNotification('Error updating package status', 'error');
         }
     };
@@ -16920,47 +16951,427 @@ function BillingModule() {
     const exportPDF = () => {
         const printWindow = window.open('', '_blank');
         const dataToExport = activeTab === 'expenses' ? expenses : getFilteredInvoices();
+        const reportDate = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         
-        let html = `<!DOCTYPE html><html><head><title>Billing Report</title><style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            h1 { color: #1f2937; margin-bottom: 10px; }
-            h2 { color: #374151; font-size: 16px; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; font-size: 11px; }
-            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-            th { background: #f3f4f6; font-weight: 600; }
-            .amount { text-align: right; font-weight: 600; }
-            .paid { color: #166534; background: #dcfce7; }
-            .unpaid { color: #dc2626; background: #fee2e2; }
-            .expense { color: #dc2626; }
-            .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
-            .stat-box { padding: 12px 20px; border: 1px solid #e5e7eb; background: #f9fafb; }
-            .total-row { font-weight: bold; background: #f3f4f6; }
-        </style></head><body>`;
+        let html = `<!DOCTYPE html><html><head>
+        <title>Billing Report</title>
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Montserrat', sans-serif; padding: 24px; background: #fff; color: #1f2937; font-size: 10px; line-height: 1.4; }
+            .header { text-align: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid #e5e7eb; }
+            .header h1 { font-size: 16px; font-weight: 700; color: #111827; margin-bottom: 2px; letter-spacing: 0.5px; }
+            .header .subtitle { font-size: 11px; color: #6b7280; font-weight: 500; }
+            .header .generated { font-size: 8px; color: #9ca3af; margin-top: 4px; }
+            
+            .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+            .summary-box { background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 1px solid #e5e7eb; padding: 10px; text-align: center; }
+            .summary-box.green { background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border-color: #10b981; }
+            .summary-box.blue { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #3b82f6; }
+            .summary-box.orange { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #f59e0b; }
+            .summary-box.red { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #f87171; }
+            .summary-box .label { font-size: 8px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+            .summary-box .value { font-size: 14px; font-weight: 700; color: #111827; }
+            .summary-box.green .value { color: #059669; }
+            .summary-box.blue .value { color: #2563eb; }
+            .summary-box.orange .value { color: #d97706; }
+            .summary-box.red .value { color: #dc2626; }
+            
+            table { width: 100%; border-collapse: collapse; font-size: 9px; margin-top: 12px; }
+            th { background: #f3f4f6; font-size: 8px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.3px; padding: 8px 6px; text-align: left; border-bottom: 2px solid #d1d5db; }
+            td { padding: 6px; border-bottom: 1px solid #e5e7eb; color: #4b5563; }
+            tr:nth-child(even) { background: #f9fafb; }
+            .text-right { text-align: right; }
+            .text-center { text-align: center; }
+            .font-semibold { font-weight: 600; }
+            .text-green { color: #059669; }
+            .text-red { color: #dc2626; }
+            .text-blue { color: #2563eb; }
+            
+            .status-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 8px; font-weight: 600; text-transform: uppercase; }
+            .status-paid { background: #dcfce7; color: #166534; }
+            .status-pending { background: #fef3c7; color: #92400e; }
+            
+            .total-row { background: #f3f4f6 !important; font-weight: 600; }
+            .total-row td { border-top: 2px solid #d1d5db; color: #111827; padding: 10px 6px; }
+            
+            .footer { margin-top: 20px; padding-top: 12px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 8px; color: #9ca3af; }
+            
+            @media print { body { padding: 12px; } }
+        </style>
+        </head><body>`;
         
         if (activeTab === 'expenses') {
             const total = dataToExport.reduce((sum, e) => sum + (e.amount || 0), 0);
-            html += `<h1>📋 Expenses Report</h1><p>Generated: ${new Date().toLocaleString()}</p>`;
-            html += `<div class="stats"><div class="stat-box"><strong>Total Expenses:</strong> ${dataToExport.length}</div><div class="stat-box"><strong>Total Amount:</strong> KSH ${total.toLocaleString()}</div></div>`;
-            html += '<table><tr><th>Date</th><th>Category</th><th>Description</th><th>Vendor</th><th class="amount">Amount</th><th>Payment</th></tr>';
+            const categoryTotals = {};
             dataToExport.forEach(exp => {
-                html += `<tr><td>${exp.date || ''}</td><td>${exp.category || ''}</td><td>${exp.description || ''}</td><td>${exp.vendor || '-'}</td><td class="amount expense">-KSH ${(exp.amount || 0).toLocaleString()}</td><td>${exp.paymentMethod || 'Cash'}</td></tr>`;
+                const cat = exp.category || 'Other';
+                categoryTotals[cat] = (categoryTotals[cat] || 0) + (exp.amount || 0);
             });
-            html += `<tr class="total-row"><td colspan="4" style="text-align:right;">Grand Total:</td><td class="amount">KSH ${total.toLocaleString()}</td><td></td></tr>`;
+            const topCategories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]).slice(0, 3);
+            
+            html += `
+            <div class="header">
+                <h1>📋 EXPENSES REPORT</h1>
+                <div class="subtitle">${reportDate}</div>
+                <div class="generated">Generated: ${new Date().toLocaleString()}</div>
+            </div>
+            
+            <div class="summary-grid">
+                <div class="summary-box red">
+                    <div class="label">Total Expenses</div>
+                    <div class="value">KSH ${total.toLocaleString()}</div>
+                </div>
+                <div class="summary-box">
+                    <div class="label">Total Records</div>
+                    <div class="value">${dataToExport.length}</div>
+                </div>
+                ${topCategories[0] ? `<div class="summary-box orange"><div class="label">${topCategories[0][0]}</div><div class="value">KSH ${topCategories[0][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
+                ${topCategories[1] ? `<div class="summary-box"><div class="label">${topCategories[1][0]}</div><div class="value">KSH ${topCategories[1][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Category</th>
+                        <th>Description</th>
+                        <th>Vendor</th>
+                        <th class="text-right">Amount</th>
+                        <th class="text-center">Payment</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            
+            dataToExport.forEach(exp => {
+                html += `<tr>
+                    <td class="font-semibold">${exp.date || '-'}</td>
+                    <td>${exp.category || '-'}</td>
+                    <td>${exp.description || '-'}</td>
+                    <td>${exp.vendor || '-'}</td>
+                    <td class="text-right text-red font-semibold">-KSH ${(exp.amount || 0).toLocaleString()}</td>
+                    <td class="text-center">${exp.paymentMethod || 'Cash'}</td>
+                </tr>`;
+            });
+            
+            html += `<tr class="total-row">
+                <td colspan="4" class="text-right">Grand Total:</td>
+                <td class="text-right text-red">-KSH ${total.toLocaleString()}</td>
+                <td></td>
+            </tr></tbody></table>`;
         } else {
             const tabLabel = activeTab === 'paid' ? 'Paid Invoices' : activeTab === 'pending' ? 'Pending Invoices' : 'All Invoices';
             const totalAmount = dataToExport.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
             const paidCount = dataToExport.filter(inv => inv.paymentStatus === 'paid').length;
-            html += `<h1>💳 Billing Report - ${tabLabel}</h1><p>Generated: ${new Date().toLocaleString()}</p>`;
-            html += `<div class="stats"><div class="stat-box"><strong>Total Invoices:</strong> ${dataToExport.length}</div><div class="stat-box"><strong>Paid:</strong> ${paidCount}</div><div class="stat-box"><strong>Pending:</strong> ${dataToExport.length - paidCount}</div><div class="stat-box"><strong>Total Amount:</strong> KSH ${totalAmount.toLocaleString()}</div></div>`;
-            html += '<table><tr><th>Invoice #</th><th>Customer</th><th>Phone</th><th>Vehicle</th><th>Source</th><th class="amount">Amount</th><th>Status</th><th>Payment</th><th>M-Pesa</th><th>Date</th></tr>';
+            const paidAmount = dataToExport.filter(inv => inv.paymentStatus === 'paid').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+            const pendingAmount = totalAmount - paidAmount;
+            
+            html += `
+            <div class="header">
+                <h1>💳 BILLING REPORT</h1>
+                <div class="subtitle">${tabLabel} • ${reportDate}</div>
+                <div class="generated">Generated: ${new Date().toLocaleString()}</div>
+            </div>
+            
+            <div class="summary-grid">
+                <div class="summary-box blue">
+                    <div class="label">Total Amount</div>
+                    <div class="value">KSH ${totalAmount.toLocaleString()}</div>
+                </div>
+                <div class="summary-box green">
+                    <div class="label">Paid (${paidCount})</div>
+                    <div class="value">KSH ${paidAmount.toLocaleString()}</div>
+                </div>
+                <div class="summary-box orange">
+                    <div class="label">Pending (${dataToExport.length - paidCount})</div>
+                    <div class="value">KSH ${pendingAmount.toLocaleString()}</div>
+                </div>
+                <div class="summary-box">
+                    <div class="label">Total Invoices</div>
+                    <div class="value">${dataToExport.length}</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Invoice #</th>
+                        <th>Customer</th>
+                        <th>Phone</th>
+                        <th>Vehicle</th>
+                        <th>Source</th>
+                        <th class="text-right">Amount</th>
+                        <th class="text-center">Status</th>
+                        <th class="text-center">Payment</th>
+                        <th>M-Pesa</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            
             dataToExport.forEach(inv => {
-                const statusClass = inv.paymentStatus === 'paid' ? 'paid' : 'unpaid';
-                html += `<tr><td>${inv.invoiceNumber || inv.id?.slice(0,8)?.toUpperCase() || ''}</td><td>${inv.customerName || 'Walk-in'}</td><td>${inv.customerPhone || '-'}</td><td>${inv.plateNumber || '-'}</td><td>${inv.source || '-'}</td><td class="amount">KSH ${(inv.totalAmount || 0).toLocaleString()}</td><td class="${statusClass}">${inv.paymentStatus || 'Unpaid'}</td><td>${inv.paymentMethod || '-'}</td><td>${inv.mpesaCode || '-'}</td><td>${inv.createdAt?.split('T')[0] || ''}</td></tr>`;
+                const statusClass = inv.paymentStatus === 'paid' ? 'status-paid' : 'status-pending';
+                html += `<tr>
+                    <td class="font-semibold text-blue">${inv.invoiceNumber || inv.id?.slice(0,8)?.toUpperCase() || '-'}</td>
+                    <td>${inv.customerName || 'Walk-in'}</td>
+                    <td>${inv.customerPhone || '-'}</td>
+                    <td>${inv.plateNumber || '-'}</td>
+                    <td>${inv.source || '-'}</td>
+                    <td class="text-right font-semibold">KSH ${(inv.totalAmount || 0).toLocaleString()}</td>
+                    <td class="text-center"><span class="status-badge ${statusClass}">${inv.paymentStatus || 'Pending'}</span></td>
+                    <td class="text-center">${inv.paymentMethod || '-'}</td>
+                    <td>${inv.mpesaCode || '-'}</td>
+                    <td>${inv.createdAt?.split('T')[0] || '-'}</td>
+                </tr>`;
             });
-            html += `<tr class="total-row"><td colspan="5" style="text-align:right;">Grand Total:</td><td class="amount">KSH ${totalAmount.toLocaleString()}</td><td colspan="4"></td></tr>`;
+            
+            html += `<tr class="total-row">
+                <td colspan="5" class="text-right">Grand Total:</td>
+                <td class="text-right">KSH ${totalAmount.toLocaleString()}</td>
+                <td colspan="4"></td>
+            </tr></tbody></table>`;
         }
         
-        html += '</table></body></html>';
+        html += `
+        <div class="footer">
+            <strong>EcoSpark Car Wash & Garage</strong> • Billing Report • ${reportDate}
+        </div>
+        </body></html>`;
+        
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.onload = () => { printWindow.print(); };
+        setShowExportMenu(false);
+    };
+
+    // Daily Sales Report - Clean, detailed with Montserrat font
+    const exportDailySalesReport = () => {
+        const printWindow = window.open('', '_blank');
+        const today = new Date().toISOString().split('T')[0];
+        const todayFormatted = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        
+        // Filter today's data
+        const todaysInvoices = invoices.filter(inv => inv.createdAt?.startsWith(today));
+        const todaysExpenses = expenses.filter(exp => exp.date === today);
+        
+        // Calculate revenue by source
+        const washRevenue = todaysInvoices.filter(inv => inv.source === 'car-wash' || inv.source === 'wash').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        const garageRevenue = todaysInvoices.filter(inv => inv.source === 'garage').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        const otherRevenue = todaysInvoices.filter(inv => !['car-wash', 'wash', 'garage'].includes(inv.source)).reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        
+        // Calculate by payment status
+        const paidInvoices = todaysInvoices.filter(inv => inv.paymentStatus === 'paid');
+        const pendingInvoices = todaysInvoices.filter(inv => inv.paymentStatus !== 'paid');
+        const totalPaid = paidInvoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        const totalPending = pendingInvoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        
+        // Calculate by payment method
+        const cashPayments = paidInvoices.filter(inv => inv.paymentMethod?.toLowerCase() === 'cash').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        const mpesaPayments = paidInvoices.filter(inv => inv.paymentMethod?.toLowerCase() === 'm-pesa' || inv.paymentMethod?.toLowerCase() === 'mpesa').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        
+        // Calculate expenses
+        const totalExpenses = todaysExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
+        const expensesByCategory = {};
+        todaysExpenses.forEach(exp => {
+            const cat = exp.category || 'Other';
+            expensesByCategory[cat] = (expensesByCategory[cat] || 0) + (exp.amount || 0);
+        });
+        
+        // Net Profit
+        const grossRevenue = washRevenue + garageRevenue + otherRevenue;
+        const netProfit = totalPaid - totalExpenses;
+        
+        let html = `<!DOCTYPE html><html><head>
+        <title>Daily Sales Report - ${today}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Montserrat', sans-serif; padding: 24px; background: #fff; color: #1f2937; font-size: 10px; line-height: 1.4; }
+            .header { text-align: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid #e5e7eb; }
+            .header h1 { font-size: 16px; font-weight: 700; color: #111827; margin-bottom: 2px; letter-spacing: 0.5px; }
+            .header .date { font-size: 11px; color: #6b7280; font-weight: 500; }
+            .header .generated { font-size: 8px; color: #9ca3af; margin-top: 4px; }
+            
+            .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+            .summary-box { background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 1px solid #e5e7eb; padding: 10px; text-align: center; }
+            .summary-box.highlight { background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border-color: #10b981; }
+            .summary-box.expense { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #f87171; }
+            .summary-box.net { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #3b82f6; }
+            .summary-box .label { font-size: 8px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+            .summary-box .value { font-size: 14px; font-weight: 700; color: #111827; }
+            .summary-box.highlight .value { color: #059669; }
+            .summary-box.expense .value { color: #dc2626; }
+            .summary-box.net .value { color: #2563eb; }
+            
+            .section { margin-bottom: 16px; }
+            .section-title { font-size: 10px; font-weight: 700; color: #374151; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; text-transform: uppercase; letter-spacing: 0.5px; }
+            
+            .breakdown-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+            .breakdown-box { background: #f9fafb; border: 1px solid #e5e7eb; padding: 8px 10px; }
+            .breakdown-box .label { font-size: 8px; color: #6b7280; font-weight: 500; }
+            .breakdown-box .value { font-size: 12px; font-weight: 600; color: #1f2937; }
+            
+            .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            
+            table { width: 100%; border-collapse: collapse; font-size: 9px; }
+            th { background: #f3f4f6; font-size: 8px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.3px; padding: 6px 8px; text-align: left; border-bottom: 1px solid #d1d5db; }
+            td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; color: #4b5563; }
+            tr:nth-child(even) { background: #f9fafb; }
+            .text-right { text-align: right; }
+            .font-semibold { font-weight: 600; }
+            .text-green { color: #059669; }
+            .text-red { color: #dc2626; }
+            .text-orange { color: #d97706; }
+            
+            .total-row { background: #f3f4f6 !important; font-weight: 600; }
+            .total-row td { border-top: 2px solid #d1d5db; color: #111827; }
+            
+            .footer { margin-top: 20px; padding-top: 12px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 8px; color: #9ca3af; }
+            
+            @media print {
+                body { padding: 12px; }
+                .summary-grid { grid-template-columns: repeat(4, 1fr); }
+            }
+        </style>
+        </head><body>
+        
+        <div class="header">
+            <h1>📊 DAILY SALES REPORT</h1>
+            <div class="date">${todayFormatted}</div>
+            <div class="generated">Generated: ${new Date().toLocaleString()}</div>
+        </div>
+        
+        <div class="summary-grid">
+            <div class="summary-box highlight">
+                <div class="label">Total Revenue</div>
+                <div class="value">KSH ${grossRevenue.toLocaleString()}</div>
+            </div>
+            <div class="summary-box">
+                <div class="label">Collected</div>
+                <div class="value">KSH ${totalPaid.toLocaleString()}</div>
+            </div>
+            <div class="summary-box expense">
+                <div class="label">Expenses</div>
+                <div class="value">-KSH ${totalExpenses.toLocaleString()}</div>
+            </div>
+            <div class="summary-box net">
+                <div class="label">Net Profit</div>
+                <div class="value">${netProfit >= 0 ? '' : '-'}KSH ${Math.abs(netProfit).toLocaleString()}</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">💰 Revenue Breakdown</div>
+            <div class="breakdown-grid">
+                <div class="breakdown-box">
+                    <div class="label">🚗 Car Wash</div>
+                    <div class="value">KSH ${washRevenue.toLocaleString()}</div>
+                </div>
+                <div class="breakdown-box">
+                    <div class="label">🔧 Garage</div>
+                    <div class="value">KSH ${garageRevenue.toLocaleString()}</div>
+                </div>
+                <div class="breakdown-box">
+                    <div class="label">📦 Other</div>
+                    <div class="value">KSH ${otherRevenue.toLocaleString()}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">💳 Payment Methods</div>
+            <div class="breakdown-grid">
+                <div class="breakdown-box">
+                    <div class="label">💵 Cash</div>
+                    <div class="value">KSH ${cashPayments.toLocaleString()}</div>
+                </div>
+                <div class="breakdown-box">
+                    <div class="label">📱 M-Pesa</div>
+                    <div class="value">KSH ${mpesaPayments.toLocaleString()}</div>
+                </div>
+                <div class="breakdown-box">
+                    <div class="label">⏳ Pending</div>
+                    <div class="value text-orange">KSH ${totalPending.toLocaleString()}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="two-col">
+            <div class="section">
+                <div class="section-title">📋 Today's Transactions (${todaysInvoices.length})</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Invoice</th>
+                            <th>Customer</th>
+                            <th>Source</th>
+                            <th class="text-right">Amount</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        
+        if (todaysInvoices.length === 0) {
+            html += `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:16px;">No transactions today</td></tr>`;
+        } else {
+            todaysInvoices.forEach(inv => {
+                const statusClass = inv.paymentStatus === 'paid' ? 'text-green' : 'text-orange';
+                html += `<tr>
+                    <td class="font-semibold">${inv.invoiceNumber || inv.id?.slice(0,6)?.toUpperCase() || '-'}</td>
+                    <td>${inv.customerName || 'Walk-in'}</td>
+                    <td>${inv.source || '-'}</td>
+                    <td class="text-right font-semibold">KSH ${(inv.totalAmount || 0).toLocaleString()}</td>
+                    <td class="${statusClass}">${inv.paymentStatus || 'Pending'}</td>
+                </tr>`;
+            });
+            html += `<tr class="total-row">
+                <td colspan="3" class="text-right">Total:</td>
+                <td class="text-right">KSH ${grossRevenue.toLocaleString()}</td>
+                <td></td>
+            </tr>`;
+        }
+        
+        html += `</tbody></table>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">📉 Today's Expenses (${todaysExpenses.length})</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th class="text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        
+        if (todaysExpenses.length === 0) {
+            html += `<tr><td colspan="3" style="text-align:center;color:#9ca3af;padding:16px;">No expenses recorded today</td></tr>`;
+        } else {
+            todaysExpenses.forEach(exp => {
+                html += `<tr>
+                    <td class="font-semibold">${exp.category || 'Other'}</td>
+                    <td>${exp.description || '-'}</td>
+                    <td class="text-right text-red font-semibold">-KSH ${(exp.amount || 0).toLocaleString()}</td>
+                </tr>`;
+            });
+            html += `<tr class="total-row">
+                <td colspan="2" class="text-right">Total Expenses:</td>
+                <td class="text-right text-red">-KSH ${totalExpenses.toLocaleString()}</td>
+            </tr>`;
+        }
+        
+        html += `</tbody></table>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <strong>EcoSpark Car Wash & Garage</strong> • Daily Sales Report • ${todayFormatted}
+        </div>
+        
+        </body></html>`;
+        
         printWindow.document.write(html);
         printWindow.document.close();
         printWindow.onload = () => { printWindow.print(); };
@@ -17282,6 +17693,10 @@ function BillingModule() {
             `;
         }
         
+        // Get current logged in user for "Served by"
+        const currentUser = window.currentUserProfile;
+        const servedBy = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Staff';
+        
         receiptWindow.document.write(`
             <!DOCTYPE html>
             <html>
@@ -17312,6 +17727,7 @@ function BillingModule() {
                 <div class="info-row"><span>Phone:</span><span>${invoice.customerPhone || '-'}</span></div>
                 <div class="info-row"><span>Vehicle:</span><span>${invoice.plateNumber || '-'}</span></div>
                 <div class="info-row"><span>Source:</span><span>${(invoice.source || 'wash').toUpperCase()}</span></div>
+                <div class="info-row"><span>Served by:</span><span>${servedBy}</span></div>
                 
                 <table class="services">
                     <thead><tr><th style="text-align:left;padding:8px 0;border-bottom:2px solid #000;">Service</th><th style="text-align:right;padding:8px 0;border-bottom:2px solid #000;">Amount</th></tr></thead>
@@ -17873,6 +18289,14 @@ function BillingModule() {
                                     onMouseOut={(e) => e.target.style.background='none'}
                                 >
                                     📄 Export PDF
+                                </button>
+                                <button
+                                    onClick={exportDailySalesReport}
+                                    style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151', borderTop: '1px solid #e5e7eb' }}
+                                    onMouseOver={(e) => e.target.style.background='#f3f4f6'}
+                                    onMouseOut={(e) => e.target.style.background='none'}
+                                >
+                                    📈 Daily Sales Report
                                 </button>
                             </div>
                         )}
