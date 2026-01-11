@@ -14731,24 +14731,68 @@ function HRModule() {
     // Get all work history
     const allWorkHistory = getAllWorkHistory();
 
+    // Helper to calculate salary earnings based on payment type and period
+    const calculateSalaryEarnings = (staff, periodStart, periodEnd) => {
+        if (!staff || staff.paymentType === 'commission') return 0;
+        const salary = parseFloat(staff.salary) || 0;
+        if (!salary) return 0;
+        
+        const start = periodStart ? new Date(periodStart) : new Date();
+        const end = periodEnd ? new Date(periodEnd) : new Date();
+        const diffTime = Math.abs(end - start);
+        const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+        
+        switch (staff.paymentType) {
+            case 'daily':
+                return salary * diffDays;
+            case 'weekly':
+                const weeks = Math.ceil(diffDays / 7);
+                return salary * weeks;
+            case 'monthly':
+            default:
+                const months = Math.max(1, Math.ceil(diffDays / 30));
+                return salary * months;
+        }
+    };
+
     // Calculate staff stats from all sources
-    const getStaffStats = (staffId, staffName) => {
+    const getStaffStats = (staffId, staffName, staff = null) => {
         // Get work by staff ID or name match
         const staffWork = allWorkHistory.filter(w => 
             w.staffId === staffId || 
             w.staffName?.toLowerCase() === staffName?.toLowerCase()
         );
-        const staffPayments = payments.filter(p => p.staffId === staffId);
+        const staffPayments = payments.filter(p => p.staffId === staffId && p.status !== 'cancelled');
         
         const totalJobs = staffWork.length;
-        const totalCommission = staffWork.reduce((sum, w) => sum + (parseFloat(w.commissionAmount) || 0), 0);
+        
+        // Find staff data if not provided
+        const staffData = staff || staffList.find(s => s.id === staffId);
+        
+        // Calculate earnings based on payment type
+        let totalEarnings = 0;
+        if (staffData?.paymentType === 'commission') {
+            // Commission-based: sum up commission from jobs
+            totalEarnings = staffWork.reduce((sum, w) => sum + (parseFloat(w.commissionAmount) || 0), 0);
+        } else {
+            // Salary-based (daily/weekly/monthly): use the set salary rate
+            // For pending earnings, calculate based on current month
+            const now = new Date();
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+            const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            totalEarnings = calculateSalaryEarnings(staffData, monthStart, monthEnd);
+        }
+        
         const totalPaid = staffPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
         
         return { 
             totalJobs, 
-            totalCommission, 
+            totalCommission: totalEarnings,
+            totalEarnings,
             totalPaid, 
-            pendingCommission: Math.max(0, totalCommission - totalPaid),
+            pendingCommission: Math.max(0, totalEarnings - totalPaid),
+            paymentType: staffData?.paymentType || 'monthly',
+            salary: staffData?.salary || 0,
             workHistory: staffWork
         };
     };
@@ -15219,9 +15263,18 @@ function HRModule() {
                                                 </td>
                                                 <td style={tdStyle}>{stats.totalJobs}</td>
                                                 <td style={tdStyle}>
-                                                    <div>KES {stats.totalCommission.toLocaleString()}</div>
-                                                    {stats.pendingCommission > 0 && (
+                                                    <div>
+                                                        {staff.paymentType !== 'commission' ? (
+                                                            <span style={{ color: '#3b82f6' }}>KES {(staff.salary || 0).toLocaleString()}<span style={{ fontSize: '10px', color: isDark ? '#64748b' : '#94a3b8' }}>/{staff.paymentType === 'daily' ? 'day' : staff.paymentType === 'weekly' ? 'week' : 'month'}</span></span>
+                                                        ) : (
+                                                            <span>KES {stats.totalCommission.toLocaleString()}</span>
+                                                        )}
+                                                    </div>
+                                                    {staff.paymentType === 'commission' && stats.pendingCommission > 0 && (
                                                         <div style={{ fontSize: '11px', color: '#f59e0b' }}>Pending: KES {stats.pendingCommission.toLocaleString()}</div>
+                                                    )}
+                                                    {stats.totalPaid > 0 && (
+                                                        <div style={{ fontSize: '11px', color: '#10b981' }}>Paid: KES {stats.totalPaid.toLocaleString()}</div>
                                                     )}
                                                 </td>
                                                 <td style={tdStyle}>
@@ -15485,14 +15538,42 @@ function HRModule() {
                         </div>
 
                         {/* Staff Summary */}
-                        <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
-                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Payment Type:</span> <strong>{selectedStaff.paymentType || 'Not Set'}</strong></div>
-                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Jobs Done:</span> <strong>{getStaffStats(selectedStaff.id, selectedStaff.name).totalJobs}</strong></div>
-                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings:</span> <strong>KES {getStaffStats(selectedStaff.id, selectedStaff.name).totalCommission.toLocaleString()}</strong></div>
-                                <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Pending:</span> <strong style={{ color: '#f59e0b' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).pendingCommission.toLocaleString()}</strong></div>
-                            </div>
-                        </div>
+                        {(() => {
+                            const stats = getStaffStats(selectedStaff.id, selectedStaff.name, selectedStaff);
+                            const isSalaryBased = selectedStaff.paymentType && selectedStaff.paymentType !== 'commission';
+                            const paymentTypeLabels = { daily: 'Daily Rate', weekly: 'Weekly Rate', monthly: 'Monthly Salary', commission: 'Commission' };
+                            
+                            // Calculate salary for selected period
+                            const periodEarnings = paymentForm.periodStart && paymentForm.periodEnd 
+                                ? calculateSalaryEarnings(selectedStaff, paymentForm.periodStart, paymentForm.periodEnd)
+                                : (isSalaryBased ? (selectedStaff.salary || 0) : stats.totalCommission);
+                            
+                            return (
+                                <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Payment Type:</span> <strong style={{ textTransform: 'capitalize' }}>{paymentTypeLabels[selectedStaff.paymentType] || 'Not Set'}</strong></div>
+                                        {isSalaryBased ? (
+                                            <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{paymentTypeLabels[selectedStaff.paymentType]}:</span> <strong style={{ color: '#3b82f6' }}>KES {(selectedStaff.salary || 0).toLocaleString()}</strong></div>
+                                        ) : (
+                                            <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Jobs Done:</span> <strong>{stats.totalJobs}</strong></div>
+                                        )}
+                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{isSalaryBased ? 'Period Earnings:' : 'Total Commission:'}</span> <strong style={{ color: '#10b981' }}>KES {periodEarnings.toLocaleString()}</strong></div>
+                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Total Paid:</span> <strong>KES {stats.totalPaid.toLocaleString()}</strong></div>
+                                    </div>
+                                    {isSalaryBased && paymentForm.periodStart && paymentForm.periodEnd && (
+                                        <div style={{ marginTop: '12px', padding: '10px', background: isDark ? '#1e3a5f30' : '#dbeafe', borderRadius: '0' }}>
+                                            <div style={{ fontSize: '12px', color: isDark ? '#93c5fd' : '#1e40af' }}>
+                                                💡 <strong>Suggested Amount:</strong> KES {periodEarnings.toLocaleString()} for selected period
+                                                <button 
+                                                    style={{ marginLeft: '10px', background: '#3b82f6', color: 'white', border: 'none', padding: '4px 10px', cursor: 'pointer', fontSize: '11px' }}
+                                                    onClick={() => setPaymentForm({...paymentForm, amount: periodEarnings.toString()})}
+                                                >Use This Amount</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                             <div>
@@ -15753,20 +15834,36 @@ function HRModule() {
                         </div>
 
                         {/* Stats Summary */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-                            <div style={{ background: isDark ? '#0f172a' : '#f0f9ff', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#3b82f6' }}>{getStaffStats(selectedStaff.id, selectedStaff.name).totalJobs}</div>
-                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Jobs</div>
-                            </div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).totalCommission.toLocaleString()}</div>
-                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings</div>
-                            </div>
-                            <div style={{ background: isDark ? '#0f172a' : '#fffbeb', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b' }}>KES {getStaffStats(selectedStaff.id, selectedStaff.name).pendingCommission.toLocaleString()}</div>
-                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Pending</div>
-                            </div>
-                        </div>
+                        {(() => {
+                            const stats = getStaffStats(selectedStaff.id, selectedStaff.name, selectedStaff);
+                            const isSalaryBased = selectedStaff.paymentType && selectedStaff.paymentType !== 'commission';
+                            const rateLabel = selectedStaff.paymentType === 'daily' ? '/day' : selectedStaff.paymentType === 'weekly' ? '/week' : '/month';
+                            return (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                                    <div style={{ background: isDark ? '#0f172a' : '#f0f9ff', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#3b82f6' }}>{stats.totalJobs}</div>
+                                        <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Jobs</div>
+                                    </div>
+                                    <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                        {isSalaryBased ? (
+                                            <>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {(selectedStaff.salary || 0).toLocaleString()}</div>
+                                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Rate {rateLabel}</div>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {stats.totalCommission.toLocaleString()}</div>
+                                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings</div>
+                                            </>
+                                        )}
+                                    </div>
+                                    <div style={{ background: isDark ? '#0f172a' : '#fffbeb', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b' }}>KES {stats.totalPaid.toLocaleString()}</div>
+                                        <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Paid</div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         {/* Work List */}
                         <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
