@@ -1752,6 +1752,7 @@ export const intakeRecordsService = {
   },
 
   // Add or Update record - MAIN METHOD for handling returning vehicles
+  // Flow: When vehicle returns, previous visit goes to history, record shows LATEST service only
   async addOrUpdateRecord(plateNumber, vehicleData, visitHistory = null) {
     try {
       const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
@@ -1760,7 +1761,7 @@ export const intakeRecordsService = {
       const existingResult = await this.findByPlateNumber(normalizedPlate);
       
       if (existingResult.success && existingResult.exists && existingResult.data) {
-        // RETURNING VEHICLE - Update existing record
+        // RETURNING VEHICLE - Update existing record with NEW service, archive previous to history
         const existingRecord = existingResult.data;
         const currentVisitNumber = existingRecord.visitNumber || 1;
         const newVisitNumber = currentVisitNumber + 1;
@@ -1770,39 +1771,81 @@ export const intakeRecordsService = {
           ? [...existingRecord.visitHistoryLog] 
           : [];
         
-        // Save previous visit to history before updating
+        // Archive the PREVIOUS visit with ALL its details before updating
         const previousVisit = {
           visitNumber: currentVisitNumber,
+          // Service details from previous visit
           service: existingRecord.service,
+          serviceName: existingRecord.service?.name || 'Unknown Service',
           price: existingRecord.service?.price || 0,
-          status: existingRecord.status,
+          // Status and timing
+          status: existingRecord.status || 'completed',
           timeIn: existingRecord.timeIn,
-          timeOut: existingRecord.timeOut,
+          timeOut: existingRecord.timeOut || new Date().toISOString(),
+          // Bay info
           assignedBay: existingRecord.assignedBay,
-          completedAt: existingRecord.timeOut || existingRecord.updatedAt,
-          recordedAt: new Date().toISOString()
+          assignedBayId: existingRecord.assignedBayId,
+          // Customer info at time of visit
+          customerName: existingRecord.customerName,
+          customerPhone: existingRecord.customerPhone,
+          // Vehicle info
+          itemType: existingRecord.itemType || existingRecord.vehicleType,
+          priority: existingRecord.priority,
+          // Payment
+          paymentStatus: existingRecord.paymentStatus || 'pending',
+          // Timestamps
+          completedAt: existingRecord.timeOut || existingRecord.updatedAt || new Date().toISOString(),
+          archivedAt: new Date().toISOString()
         };
         
         existingHistory.push(previousVisit);
         
-        console.log('📜 Visit History for', normalizedPlate, ':', existingHistory.length, 'previous visits');
+        console.log('📜 Visit History for', normalizedPlate, ':', existingHistory.length, 'previous visits archived');
         
-        // Update the existing record with new visit info
+        // Update record with NEW visit info - previous visit is now in history
+        // The table will show ONLY the latest service (this new one)
         const updateData = {
-          ...vehicleData,
+          // Preserve original record identity
           plateNumber: normalizedPlate,
-          visitNumber: newVisitNumber,
-          isReturningVehicle: true,
-          visitHistoryLog: existingHistory,
-          previousVisits: existingHistory.length,
+          category: vehicleData.category || existingRecord.category || 'vehicle',
+          createdAt: existingRecord.createdAt, // Keep original first visit date
+          
+          // NEW service/visit data (this is what shows in intake table)
+          service: vehicleData.service, // NEW SERVICE for this visit
+          itemType: vehicleData.itemType || vehicleData.vehicleType || existingRecord.itemType,
+          vehicleType: vehicleData.itemType || vehicleData.vehicleType || existingRecord.vehicleType,
+          priority: vehicleData.priority || 'normal',
+          
+          // Customer info (use new if provided, else keep existing)
+          customerName: vehicleData.customerName || existingRecord.customerName,
+          customerPhone: vehicleData.customerPhone || existingRecord.customerPhone,
+          
+          // New visit status and bay
+          status: vehicleData.status || 'in-progress',
+          assignedBay: vehicleData.assignedBay || null,
+          assignedBayId: vehicleData.assignedBayId || null,
+          assignedTime: vehicleData.assignedTime || new Date().toISOString(),
+          timeIn: vehicleData.timeIn || new Date().toISOString(),
+          
           // Reset for new visit
           timeOut: null,
           paymentStatus: 'pending',
+          
+          // Visit tracking - THIS IS KEY
+          visitNumber: newVisitNumber, // 2nd visit = 2, 3rd = 3, etc.
+          isReturningVehicle: true, // Show RETURNING tag
+          visitHistoryLog: existingHistory, // All previous visits stored here
+          previousVisits: existingHistory.length, // Count of completed visits
+          
+          // Queue reference if any
+          queueId: vehicleData.queueId || null,
+          
+          // Timestamps
           updatedAt: new Date().toISOString()
         };
         
         await this.updateRecord(existingRecord.id, updateData);
-        console.log('✅ RETURNING: Updated existing record', existingRecord.id, 'Visit #' + newVisitNumber);
+        console.log('✅ RETURNING: Visit #' + newVisitNumber + ' - Record updated with NEW service, Visit #' + currentVisitNumber + ' archived to history');
         
         // AUTO-AWARD LOYALTY POINTS for returning customer
         let loyaltyResult = null;
@@ -1831,20 +1874,48 @@ export const intakeRecordsService = {
           qualifiesForReward: loyaltyResult?.qualifiesForReward || false
         };
       } else {
-        // NEW VEHICLE - Create first record
+        // NEW VEHICLE - Create first record (Visit #1, no RETURNING tag)
+        const now = new Date().toISOString();
         const newRecord = {
-          ...vehicleData,
+          // Identity
           plateNumber: normalizedPlate,
-          visitNumber: 1,
-          isReturningVehicle: false,
-          visitHistoryLog: [],
+          category: vehicleData.category || 'vehicle',
+          
+          // Service for this visit (shown in table)
+          service: vehicleData.service,
+          itemType: vehicleData.itemType || vehicleData.vehicleType,
+          vehicleType: vehicleData.itemType || vehicleData.vehicleType,
+          priority: vehicleData.priority || 'normal',
+          
+          // Customer info
+          customerName: vehicleData.customerName || null,
+          customerPhone: vehicleData.customerPhone || null,
+          
+          // Status and bay
+          status: vehicleData.status || 'in-progress',
+          assignedBay: vehicleData.assignedBay || null,
+          assignedBayId: vehicleData.assignedBayId || null,
+          assignedTime: vehicleData.assignedTime || now,
+          timeIn: vehicleData.timeIn || now,
+          timeOut: null,
+          paymentStatus: 'pending',
+          
+          // Visit tracking - First visit
+          visitNumber: 1, // First visit is always 1
+          isReturningVehicle: false, // No RETURNING tag for first visit
+          visitHistoryLog: [], // Empty - no previous visits yet
           previousVisits: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          
+          // Queue reference
+          queueId: vehicleData.queueId || null,
+          
+          // Timestamps
+          createdAt: now, // First visit date - never changes
+          updatedAt: now
         };
         
         const docRef = await addDoc(collection(db, 'vehicleIntake'), newRecord);
-        console.log('✅ NEW: Created first record', docRef.id, 'Visit #1');
+        console.log('✅ NEW VEHICLE: Visit #1 created -', normalizedPlate);
         
         // For first-time vehicles, also check if customer exists and award first visit points
         let loyaltyResult = null;
@@ -2350,10 +2421,63 @@ export const vehicleHistoryService = {
     }
   },
 
-  // Get vehicle visit history
+  // Get vehicle visit history - reads from vehicleIntake record's visitHistoryLog
   async getVehicleHistory(plateNumber) {
     try {
       const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+      
+      // First try to get from vehicleIntake (where visitHistoryLog is stored)
+      const intakeResult = await intakeRecordsService.findByPlateNumber(normalizedPlate);
+      
+      if (intakeResult.success && intakeResult.exists && intakeResult.data) {
+        const record = intakeResult.data;
+        const visitHistoryLog = Array.isArray(record.visitHistoryLog) ? record.visitHistoryLog : [];
+        
+        // Calculate total spent from history + current visit
+        let totalSpent = 0;
+        const visitHistory = visitHistoryLog.map((visit, index) => {
+          const amount = visit.price || visit.service?.price || 0;
+          totalSpent += amount;
+          return {
+            id: `visit-${index + 1}`,
+            visitNumber: visit.visitNumber || index + 1,
+            date: visit.timeIn || visit.completedAt,
+            timeIn: visit.timeIn,
+            timeOut: visit.timeOut,
+            service: visit.service,
+            serviceName: visit.serviceName || visit.service?.name,
+            amount: amount,
+            bay: visit.assignedBay,
+            status: visit.status || 'completed',
+            customerName: visit.customerName,
+            customerPhone: visit.customerPhone
+          };
+        });
+        
+        // Add current/ongoing visit amount
+        totalSpent += record.service?.price || 0;
+        
+        return { 
+          success: true, 
+          data: {
+            id: record.id,
+            plateNumber: normalizedPlate,
+            vehicleType: record.itemType || record.vehicleType,
+            customerName: record.customerName,
+            customerPhone: record.customerPhone,
+            totalVisits: record.visitNumber || 1,
+            previousVisits: visitHistoryLog.length,
+            totalSpent: totalSpent,
+            lastVisit: record.updatedAt || record.timeIn,
+            firstVisit: record.createdAt,
+            currentService: record.service,
+            currentStatus: record.status,
+            visitHistory: visitHistory.reverse() // Most recent first
+          }
+        };
+      }
+      
+      // Fallback: try vehicleProfiles collection
       const q = query(collection(db, 'vehicleProfiles'), where('plateNumber', '==', normalizedPlate));
       const querySnapshot = await getDocs(q);
       
