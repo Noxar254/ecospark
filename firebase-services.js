@@ -1269,6 +1269,24 @@ export const washBayService = {
     }
   },
 
+  // Release bay (make available without logging to history - for cancellations/releases)
+  async releaseBay(bayId) {
+    try {
+      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      await update(bayRef, {
+        status: 'available',
+        currentVehicle: null,
+        startTime: null,
+        lastUpdated: new Date().toISOString()
+      });
+      console.log('Bay released:', bayId);
+      return { success: true };
+    } catch (error) {
+      console.error('Error releasing bay:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
   // Set bay to maintenance mode
   async setMaintenance(bayId, maintenanceData = {}) {
     try {

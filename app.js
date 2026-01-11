@@ -1766,6 +1766,13 @@ function VehicleIntake() {
     const [showPlateSearchResults, setShowPlateSearchResults] = useState(false);
     const [selectedExistingVehicle, setSelectedExistingVehicle] = useState(null);
     
+    // Staff list for assignment
+    const [staffList, setStaffList] = useState([]);
+    const [selectedStaffId, setSelectedStaffId] = useState('');
+    
+    // Invoices for payment status tracking
+    const [invoices, setInvoices] = useState([]);
+    
     // Alert modal state
     const [alertModal, setAlertModal] = useState({
         isOpen: false,
@@ -1881,6 +1888,73 @@ function VehicleIntake() {
         setCurrentPage(1);
     }, [searchQuery, dateFilter, vehicles.length]);
 
+    // Auto-complete vehicles when payment is confirmed
+    useEffect(() => {
+        if (!invoices.length || !vehicles.length) return;
+        
+        const svc = window.FirebaseServices;
+        if (!svc?.intakeRecordsService) return;
+        
+        // Find vehicles that are not completed but have a paid invoice
+        vehicles.forEach(async (vehicle) => {
+            if (vehicle.status === 'completed') return; // Already completed
+            
+            // Check if there's a matching paid invoice
+            const matchingInvoice = invoices.find(inv => {
+                if (inv.paymentStatus !== 'paid') return false;
+                
+                // Match by record ID
+                if (inv.washRecordId === vehicle.id) return true;
+                
+                // Match by plateNumber + time window
+                if (inv.plateNumber === vehicle.plateNumber) {
+                    const invoiceTime = new Date(inv.createdAt);
+                    const vehicleTimeIn = new Date(vehicle.timeIn);
+                    return Math.abs(invoiceTime - vehicleTimeIn) < 3600000; // Within 1 hour
+                }
+                return false;
+            });
+            
+            if (matchingInvoice) {
+                console.log('🔄 Auto-completing vehicle due to payment:', vehicle.plateNumber);
+                try {
+                    await svc.intakeRecordsService.updateRecord(vehicle.id, {
+                        status: 'completed',
+                        timeOut: vehicle.timeOut || new Date().toISOString(),
+                        autoCompletedByPayment: true
+                    });
+                    
+                    // Free bay if assigned
+                    if (vehicle.assignedBayId && svc.washBayService) {
+                        await svc.washBayService.releaseBay(vehicle.assignedBayId);
+                    }
+                    
+                    // Record visit in vehicle history
+                    if (vehicle.category === 'vehicle' && vehicle.plateNumber && svc.vehicleHistoryService) {
+                        await svc.vehicleHistoryService.recordVehicleVisit(vehicle.plateNumber, {
+                            service: vehicle.service,
+                            amount: vehicle.service?.price || 0,
+                            vehicleType: vehicle.vehicleType || vehicle.itemType,
+                            category: vehicle.category,
+                            status: 'completed',
+                            assignedBay: vehicle.assignedBay,
+                            timeIn: vehicle.timeIn,
+                            timeOut: new Date().toISOString(),
+                            customerName: vehicle.customerName,
+                            customerPhone: vehicle.customerPhone,
+                            recordId: vehicle.id,
+                            autoCompletedByPayment: true
+                        });
+                    }
+                    
+                    console.log('✅ Auto-completed:', vehicle.plateNumber);
+                } catch (err) {
+                    console.error('Failed to auto-complete vehicle:', err);
+                }
+            }
+        });
+    }, [invoices, vehicles]);
+
     // Initialize Firebase subscriptions - using refs for proper cleanup
     const subscriptionsRef = React.useRef({
         queue: null,
@@ -1977,18 +2051,44 @@ function VehicleIntake() {
                     }
                 );
 
-                // Subscribe to bays (Realtime Database)
-                subscriptionsRef.current.bays = intakeBaysService.subscribeToBays(
-                    (baysData) => {
-                        if (subscriptionsRef.current.mounted) {
-                            console.log('📥 Bays updated:', baysData.length, 'bays');
-                            setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
+                // Subscribe to bays from WASH BAYS (Realtime Database) - this is the source of truth for bay status
+                // Use washBayService instead of intakeBaysService to get real-time wash status
+                if (services.washBayService?.subscribeToBays) {
+                    subscriptionsRef.current.bays = services.washBayService.subscribeToBays(
+                        (baysData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                console.log('📥 Wash Bays updated:', baysData.length, 'bays');
+                                setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
+                            }
+                        },
+                        (err) => {
+                            console.error('Wash Bays subscription error:', err);
+                            // Fallback to intake bays if wash bays fail
+                            if (intakeBaysService?.subscribeToBays) {
+                                subscriptionsRef.current.bays = intakeBaysService.subscribeToBays(
+                                    (baysData) => {
+                                        if (subscriptionsRef.current.mounted) {
+                                            setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
+                                        }
+                                    }
+                                );
+                            }
                         }
-                    },
-                    (err) => {
-                        console.error('Bays subscription error:', err);
-                    }
-                );
+                    );
+                } else {
+                    // Fallback to intake bays
+                    subscriptionsRef.current.bays = intakeBaysService.subscribeToBays(
+                        (baysData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                console.log('📥 Bays updated:', baysData.length, 'bays');
+                                setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
+                            }
+                        },
+                        (err) => {
+                            console.error('Bays subscription error:', err);
+                        }
+                    );
+                }
 
                 // Subscribe to service packages (Firestore)
                 if (packagesService) {
@@ -2024,6 +2124,30 @@ function VehicleIntake() {
                     );
                 }
 
+                // Subscribe to staff list (for assignment)
+                if (services.staffService?.subscribeToAllStaff) {
+                    subscriptionsRef.current.staff = services.staffService.subscribeToAllStaff(
+                        (staffData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                console.log('📥 Staff updated:', staffData.length, 'staff');
+                                setStaffList(staffData.filter(s => s.status === 'active'));
+                            }
+                        }
+                    );
+                }
+
+                // Subscribe to invoices for payment status
+                if (services.billingService?.subscribeToInvoices) {
+                    subscriptionsRef.current.invoices = services.billingService.subscribeToInvoices(
+                        (invoicesData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                console.log('📥 Invoices updated:', invoicesData.length, 'invoices');
+                                setInvoices(invoicesData);
+                            }
+                        }
+                    );
+                }
+
                 if (subscriptionsRef.current.mounted) {
                     setLoading(false);
                     console.log('✅ VehicleIntake: Subscriptions active');
@@ -2049,6 +2173,7 @@ function VehicleIntake() {
             if (subscriptionsRef.current.bays) subscriptionsRef.current.bays();
             if (subscriptionsRef.current.packages) subscriptionsRef.current.packages();
             if (subscriptionsRef.current.vehicleProfiles) subscriptionsRef.current.vehicleProfiles();
+            if (subscriptionsRef.current.invoices) subscriptionsRef.current.invoices();
         };
     }, []);
 
@@ -2078,6 +2203,41 @@ function VehicleIntake() {
         if (!plateNumber) return null;
         const normalizedPlate = plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
         return vehicleProfiles.find(p => p.plateNumber === normalizedPlate) || null;
+    };
+
+    // Get payment status for a vehicle record
+    const getPaymentStatusForVehicle = (vehicle) => {
+        if (!vehicle) return { isPaid: false, invoice: null };
+        
+        // Find matching invoice using multiple strategies
+        const matchingInvoice = invoices.find(inv => {
+            // Strategy 1: Match by record ID (most reliable)
+            if (inv.washRecordId && vehicle.id) {
+                return inv.washRecordId === vehicle.id;
+            }
+            // Strategy 2: Match by plateNumber + bay + time window
+            if (inv.plateNumber === vehicle.plateNumber && vehicle.assignedBayId) {
+                const invoiceTime = new Date(inv.createdAt);
+                const vehicleTimeIn = new Date(vehicle.timeIn);
+                const vehicleTimeOut = vehicle.timeOut ? new Date(vehicle.timeOut) : new Date();
+                // Match within 5 minutes of vehicle timeIn or timeOut
+                return Math.abs(invoiceTime - vehicleTimeIn) < 300000 || 
+                       Math.abs(invoiceTime - vehicleTimeOut) < 300000;
+            }
+            // Strategy 3: Match by plateNumber only (less reliable but fallback)
+            if (inv.plateNumber === vehicle.plateNumber) {
+                const invoiceTime = new Date(inv.createdAt);
+                const vehicleTimeIn = new Date(vehicle.timeIn);
+                // Match within 1 hour of vehicle timeIn
+                return Math.abs(invoiceTime - vehicleTimeIn) < 3600000;
+            }
+            return false;
+        });
+        
+        return {
+            isPaid: matchingInvoice?.paymentStatus === 'paid',
+            invoice: matchingInvoice
+        };
     };
 
     // Open visit history modal
@@ -2270,6 +2430,10 @@ function VehicleIntake() {
             const bay = bays.find(b => b.id === bayId);
             const { id: queueId, ...vehicleData } = selectedVehicle;
             
+            // Get selected staff info
+            const assignedStaff = staffList.find(s => s.id === selectedStaffId);
+            const assignedBy = assignedStaff?.name || '';
+            
             // Prepare vehicle record data
             const recordData = {
                 ...vehicleData,
@@ -2277,6 +2441,8 @@ function VehicleIntake() {
                 status: 'in-progress',
                 assignedBay: bay.name,
                 assignedBayId: bayId,
+                assignedBy: assignedBy,
+                assignedStaffId: selectedStaffId || null,
                 assignedTime: new Date().toISOString(),
                 timeIn: new Date().toISOString()
             };
@@ -2308,17 +2474,30 @@ function VehicleIntake() {
                 );
             }
 
-            // Update bay status
-            await services.intakeBaysService.updateBay(bayId, 'occupied', {
-                plateNumber: selectedVehicle.plateNumber,
-                recordId: result.id
-            });
+            // Update wash bay status (this is the source of truth for bay status)
+            if (services.washBayService) {
+                const vehicleDataForBay = {
+                    plateNumber: selectedVehicle.plateNumber,
+                    customerName: selectedVehicle.customerName || '',
+                    vehicleType: selectedVehicle.vehicleType || 'sedan',
+                    service: selectedVehicle.service || selectedVehicle.selectedService || 'Car Wash',
+                    servicePrice: selectedVehicle.service?.price || selectedVehicle.servicePrice || 0,
+                    recordId: result.id,
+                    queueId: queueId,
+                    assignedBy: assignedBy,
+                    assignedStaffId: selectedStaffId || null,
+                    startTime: new Date().toISOString()
+                };
+                await services.washBayService.assignVehicle(bayId, vehicleDataForBay);
+                console.log('✅ Wash bay updated to occupied:', bayId, 'Staff:', assignedBy);
+            }
 
             // Remove from queue
             await services.intakeQueueService.removeFromQueue(selectedVehicle.id);
 
             setShowAssignModal(false);
             setSelectedVehicle(null);
+            setSelectedStaffId(''); // Reset staff selection
             
         } catch (err) {
             console.error('Error assigning bay:', err);
@@ -2340,15 +2519,26 @@ function VehicleIntake() {
         try {
             const { id: queueId, ...vehicleData } = vehicle;
             
+            // Create a "Garage" service placeholder
+            const garageService = {
+                id: 'garage-service',
+                name: 'Garage Service',
+                price: 0,
+                description: 'Vehicle sent to garage for repairs/service'
+            };
+            
             // Prepare record data for garage
             const recordData = {
                 ...vehicleData,
                 queueId: queueId,
+                service: garageService, // Change service to Garage
                 status: 'garage',
                 assignedBay: 'Garage',
                 assignedBayId: null,
                 assignedTime: new Date().toISOString(),
-                timeIn: new Date().toISOString()
+                timeIn: new Date().toISOString(),
+                sentToGarage: true,
+                garageTimeIn: new Date().toISOString()
             };
             
             // Use addOrUpdateRecord - handles returning vehicles automatically
@@ -2361,12 +2551,42 @@ function VehicleIntake() {
                 throw new Error(result.error || 'Failed to process vehicle record');
             }
             
-            // Remove from queue
+            // Also add to garage queue if garageQueueService is available
+            if (services.garageQueueService) {
+                try {
+                    await services.garageQueueService.addToQueue({
+                        plateNumber: vehicle.plateNumber,
+                        vehicleType: vehicle.vehicleType || vehicle.itemType,
+                        customerName: vehicle.customerName || '',
+                        customerPhone: vehicle.customerPhone || '',
+                        services: [], // No services selected yet - to be selected in garage module
+                        notes: `From Vehicle Intake - ${vehicle.service?.name || 'N/A'}`,
+                        priority: vehicle.priority || 'normal',
+                        sourceId: result.recordId || vehicle.id,
+                        source: 'intake-queue',
+                        totalCost: 0,
+                        intakeTimeIn: vehicle.timeIn || new Date().toISOString(),
+                        originalService: vehicle.service // Keep track of original service
+                    });
+                    console.log('✅ Vehicle added to garage queue:', vehicle.plateNumber);
+                } catch (garageErr) {
+                    console.error('Failed to add to garage queue (non-critical):', garageErr);
+                    // Don't fail the whole operation if garage queue fails
+                }
+            }
+            
+            // Remove from intake queue
             await services.intakeQueueService.removeFromQueue(vehicle.id);
             
             console.log(result.isReturning 
                 ? `✅ RETURNING vehicle sent to garage - Visit #${result.visitNumber}` 
                 : `✅ NEW vehicle sent to garage - Visit #1`
+            );
+            
+            showAlert(
+                '🔧 Sent to Garage',
+                `${vehicle.plateNumber} has been sent to the Garage.\nCheck the Garage Management module to assign services.`,
+                'success'
             );
             
             // Show loyalty points notification if awarded
@@ -2383,6 +2603,7 @@ function VehicleIntake() {
         } catch (err) {
             console.error('Error sending to garage:', err);
             setError('Failed to send to garage: ' + err.message);
+            showAlert('Error', 'Failed to send to garage: ' + err.message, 'error');
         } finally {
             setActionLoading(false);
         }
@@ -2420,10 +2641,12 @@ function VehicleIntake() {
                 throw new Error(result.error || 'Update failed');
             }
 
-            // Free up the bay if assigned
-            if (vehicle.assignedBayId && svc.intakeBaysService) {
+            // Free up the bay if assigned (use washBayService as source of truth)
+            if (vehicle.assignedBayId) {
                 console.log('Freeing bay:', vehicle.assignedBayId);
-                await svc.intakeBaysService.updateBay(vehicle.assignedBayId, 'available', null);
+                if (svc.washBayService) {
+                    await svc.washBayService.releaseBay(vehicle.assignedBayId);
+                }
             }
 
             // Record visit in vehicle history (for vehicles category)
@@ -2487,9 +2710,11 @@ function VehicleIntake() {
                 throw new Error(result.error || 'Update failed');
             }
 
-            // Free bay if completing
-            if (newStatus === 'completed' && vehicle.assignedBayId && svc.intakeBaysService) {
-                await svc.intakeBaysService.updateBay(vehicle.assignedBayId, 'available', null);
+            // Free bay if completing (use washBayService as source of truth)
+            if (newStatus === 'completed' && vehicle.assignedBayId) {
+                if (svc.washBayService) {
+                    await svc.washBayService.releaseBay(vehicle.assignedBayId);
+                }
             }
 
             // Record visit in vehicle history when completing (for vehicles category)
@@ -2602,9 +2827,9 @@ function VehicleIntake() {
             // If status changed to completed, set timeOut
             if (editFormData.status === 'completed' && selectedVehicle.status !== 'completed') {
                 updateData.timeOut = new Date().toISOString();
-                // Free the bay if assigned
-                if (selectedVehicle.assignedBayId) {
-                    await services.intakeBaysService.updateBay(selectedVehicle.assignedBayId, 'available', null);
+                // Free the bay if assigned (use washBayService as source of truth)
+                if (selectedVehicle.assignedBayId && services.washBayService) {
+                    await services.washBayService.releaseBay(selectedVehicle.assignedBayId);
                 }
             }
 
@@ -3092,6 +3317,7 @@ function VehicleIntake() {
                                 <th>Service</th>
                                 <th>Price</th>
                                 <th>Status</th>
+                                <th>Payment</th>
                                 <th>Time In</th>
                                 <th>Time Out</th>
                                 <th>Actions</th>
@@ -3100,7 +3326,7 @@ function VehicleIntake() {
                         <tbody>
                             {filteredVehicles.length === 0 ? (
                                 <tr>
-                                    <td colSpan="10" className="intake-table-empty">
+                                    <td colSpan="11" className="intake-table-empty">
                                         {vehicles.length === 0 
                                             ? 'No intake records. Add items from the queue above.'
                                             : 'No records match your search or filter.'}
@@ -3174,6 +3400,42 @@ function VehicleIntake() {
                                                 <option value="garage" style={{ backgroundColor: '#8b5cf6', color: '#fff' }}>Garage</option>
                                                 <option value="waiting" style={{ backgroundColor: '#f59e0b', color: '#fff' }}>Waiting</option>
                                             </select>
+                                        </td>
+                                        <td>
+                                            {/* Payment Status */}
+                                            {(() => {
+                                                const { isPaid } = getPaymentStatusForVehicle(vehicle);
+                                                const price = vehicle.service?.price || 0;
+                                                return isPaid ? (
+                                                    <span style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px',
+                                                        padding: '4px 10px',
+                                                        borderRadius: '12px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '600',
+                                                        backgroundColor: '#d1fae5',
+                                                        color: '#059669'
+                                                    }}>
+                                                        ✓ Paid
+                                                    </span>
+                                                ) : (
+                                                    <span style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px',
+                                                        padding: '4px 10px',
+                                                        borderRadius: '12px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '600',
+                                                        backgroundColor: '#fef3c7',
+                                                        color: '#d97706'
+                                                    }}>
+                                                        💰 Awaiting
+                                                    </span>
+                                                );
+                                            })()}
                                         </td>
                                         <td>{formatTime(vehicle.timeIn)}</td>
                                         <td>{formatTime(vehicle.timeOut)}</td>
@@ -3659,8 +3921,8 @@ function VehicleIntake() {
                 <div className="modal-overlay" onClick={() => setShowAssignModal(false)}>
                     <div className="modal modal-small" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Assign Bay</h2>
-                            <button className="modal-close" onClick={() => setShowAssignModal(false)}>
+                            <h2>Assign Bay & Staff</h2>
+                            <button className="modal-close" onClick={() => { setShowAssignModal(false); setSelectedStaffId(''); }}>
                                 {Icons.x}
                             </button>
                         </div>
@@ -3671,6 +3933,39 @@ function VehicleIntake() {
                                     {selectedVehicle.service?.name || 'No Service'} • {selectedVehicle.customerName || 'Walk-in'}
                                 </span>
                             </p>
+                            
+                            {/* Staff Assignment - Required */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-primary)' }}>
+                                    👤 Assign Staff <span style={{ color: '#ef4444' }}>*</span>
+                                </label>
+                                <select 
+                                    value={selectedStaffId}
+                                    onChange={(e) => setSelectedStaffId(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        border: '2px solid var(--border-color)',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        background: 'var(--bg-primary)',
+                                        color: 'var(--text-primary)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <option value="">-- Select Staff Member --</option>
+                                    {staffList.map(staff => (
+                                        <option key={staff.id} value={staff.id}>
+                                            {staff.name} {staff.role ? `(${staff.role})` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                                {staffList.length === 0 && (
+                                    <p style={{ fontSize: '12px', color: '#f59e0b', marginTop: '6px' }}>
+                                        ⚠️ No active staff found. Add staff in Staff Management.
+                                    </p>
+                                )}
+                            </div>
                             
                             {/* Available Bays Count */}
                             <div style={{ marginBottom: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
@@ -3683,24 +3978,28 @@ function VehicleIntake() {
                                 {bays.map(bay => {
                                     const isAvailable = bay.status === 'available';
                                     const isOccupied = bay.status === 'occupied';
+                                    const canAssign = isAvailable && selectedStaffId; // Require staff selection
                                     const isMaintenance = bay.status === 'maintenance';
                                     
                                     return (
                                         <button 
                                             key={bay.id}
-                                            onClick={() => isAvailable && handleAssignBay(bay.id)}
-                                            disabled={!isAvailable}
+                                            onClick={() => canAssign && handleAssignBay(bay.id)}
+                                            disabled={!canAssign}
+                                            title={isAvailable && !selectedStaffId ? 'Please select a staff member first' : ''}
                                             style={{
                                                 padding: '16px',
-                                                border: isAvailable ? '2px solid #22c55e' : isOccupied ? '2px solid #3b82f6' : '2px solid #f59e0b',
+                                                border: canAssign ? '2px solid #22c55e' : isAvailable ? '2px solid #94a3b8' : isOccupied ? '2px solid #3b82f6' : '2px solid #f59e0b',
                                                 borderRadius: '10px',
-                                                background: isAvailable 
+                                                background: canAssign 
                                                     ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' 
-                                                    : isOccupied 
-                                                        ? 'linear-gradient(135deg, #eff6ff, #dbeafe)'
-                                                        : 'linear-gradient(135deg, #fefce8, #fef9c3)',
-                                                cursor: isAvailable ? 'pointer' : 'not-allowed',
-                                                opacity: isAvailable ? 1 : 0.85,
+                                                    : isAvailable
+                                                        ? 'linear-gradient(135deg, #f8fafc, #f1f5f9)'
+                                                        : isOccupied 
+                                                            ? 'linear-gradient(135deg, #eff6ff, #dbeafe)'
+                                                            : 'linear-gradient(135deg, #fefce8, #fef9c3)',
+                                                cursor: canAssign ? 'pointer' : 'not-allowed',
+                                                opacity: canAssign ? 1 : 0.7,
                                                 textAlign: 'left',
                                                 transition: 'all 0.2s ease',
                                                 position: 'relative',
@@ -3758,6 +4057,22 @@ function VehicleIntake() {
                                     );
                                 })}
                             </div>
+                            
+                            {/* Staff selection reminder */}
+                            {bays.filter(b => b.status === 'available').length > 0 && !selectedStaffId && (
+                                <div style={{ 
+                                    marginTop: '16px', 
+                                    padding: '12px', 
+                                    background: '#fef3c7', 
+                                    borderRadius: '8px', 
+                                    textAlign: 'center',
+                                    border: '1px solid #fcd34d'
+                                }}>
+                                    <span style={{ color: '#92400e', fontSize: '13px', fontWeight: '500' }}>
+                                        👆 Please select a staff member above to enable bay assignment
+                                    </span>
+                                </div>
+                            )}
                             
                             {bays.filter(b => b.status === 'available').length === 0 && (
                                 <div style={{ 
@@ -8821,6 +9136,11 @@ function GarageManagement() {
     const [showAssignTechModal, setShowAssignTechModal] = useState(false);
     const [selectedQueueItem, setSelectedQueueItem] = useState(null);
     const [selectedTechnician, setSelectedTechnician] = useState('');
+    
+    // Edit services modal state
+    const [showEditServicesModal, setShowEditServicesModal] = useState(false);
+    const [editServicesItem, setEditServicesItem] = useState(null);
+    const [editServices, setEditServices] = useState([]);
 
     // Form data for adding to queue
     const [formData, setFormData] = useState({
@@ -9627,6 +9947,63 @@ function GarageManagement() {
         );
     };
 
+    // Open edit services modal
+    const handleOpenEditServices = (item) => {
+        setEditServicesItem(item);
+        setEditServices(item.services || []);
+        setShowEditServicesModal(true);
+    };
+
+    // Toggle service selection for edit modal
+    const toggleEditService = (serviceId) => {
+        setEditServices(prev => 
+            prev.includes(serviceId)
+                ? prev.filter(id => id !== serviceId)
+                : [...prev, serviceId]
+        );
+    };
+
+    // Save edited services
+    const handleSaveEditServices = async () => {
+        if (!editServicesItem) return;
+        
+        const services = window.FirebaseServices;
+        
+        setActionLoading(true);
+        try {
+            // Calculate new total cost
+            const totalCost = editServices.reduce((sum, sId) => {
+                const service = garageServices.find(s => s.id === sId);
+                return sum + (service?.price || 0);
+            }, 0);
+
+            // Determine if it's a queue item or a job
+            const isQueueItem = activeTab === 'queue';
+            
+            if (isQueueItem && services?.garageQueueService) {
+                await services.garageQueueService.updateQueueItem(editServicesItem.id, {
+                    services: editServices,
+                    totalCost: totalCost
+                });
+            } else if (!isQueueItem && services?.garageJobsService) {
+                await services.garageJobsService.updateJob(editServicesItem.id, {
+                    services: editServices,
+                    totalCost: totalCost
+                });
+            }
+
+            showAlert('Success', 'Services updated successfully!', 'success');
+            setShowEditServicesModal(false);
+            setEditServicesItem(null);
+            setEditServices([]);
+        } catch (err) {
+            console.error('Error updating services:', err);
+            setError('Failed to update services: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     // Toggle service selection
     const toggleService = (serviceId) => {
         setFormData(prev => ({
@@ -9998,6 +10375,12 @@ function GarageManagement() {
                                             {activeTab === 'queue' && (
                                                 <>
                                                     <button
+                                                        onClick={() => handleOpenEditServices(item)}
+                                                        style={{ padding: '6px 12px', backgroundColor: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}
+                                                    >
+                                                        ✏️ Edit
+                                                    </button>
+                                                    <button
                                                         onClick={() => handleStartJob(item)}
                                                         disabled={actionLoading}
                                                         style={{ padding: '6px 12px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}
@@ -10015,6 +10398,12 @@ function GarageManagement() {
                                             )}
                                             {activeTab === 'jobs' && (
                                                 <>
+                                                    <button
+                                                        onClick={() => handleOpenEditServices(item)}
+                                                        style={{ padding: '6px 12px', backgroundColor: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}
+                                                    >
+                                                        ✏️ Edit
+                                                    </button>
                                                     <button
                                                         onClick={() => handleShowNotes(item)}
                                                         style={{ padding: '6px 12px', backgroundColor: '#fef3c7', color: '#d97706', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}
@@ -11298,6 +11687,140 @@ function GarageManagement() {
                 </div>
             )}
 
+            {/* Edit Services Modal */}
+            {showEditServicesModal && editServicesItem && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, borderRadius: '0', width: '100%', maxWidth: '650px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, backgroundColor: theme.bg, zIndex: 1 }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>✏️ Edit Services</h2>
+                            <button onClick={() => { setShowEditServicesModal(false); setEditServicesItem(null); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+                        <div style={{ padding: '24px' }}>
+                            {/* Vehicle Info */}
+                            <div style={{ backgroundColor: theme.bgTertiary, padding: '16px', marginBottom: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div>
+                                        <div style={{ fontWeight: '700', color: theme.text, fontSize: '18px' }}>{editServicesItem.plateNumber}</div>
+                                        <div style={{ color: theme.textSecondary, fontSize: '14px', marginTop: '4px' }}>{editServicesItem.vehicleType}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ color: theme.text, fontSize: '14px' }}>{editServicesItem.customerName || 'Walk-in Customer'}</div>
+                                        {editServicesItem.customerPhone && (
+                                            <div style={{ color: theme.textSecondary, fontSize: '13px' }}>{editServicesItem.customerPhone}</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Current Services */}
+                            {editServicesItem.services?.length > 0 && (
+                                <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d' }}>
+                                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#92400e', marginBottom: '8px' }}>Current Services:</div>
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                        {editServicesItem.services.map((sId, idx) => {
+                                            const service = garageServices.find(s => s.id === sId);
+                                            return service ? (
+                                                <span key={idx} style={{ fontSize: '12px', padding: '4px 10px', backgroundColor: '#fde68a', borderRadius: '0', color: '#78350f' }}>
+                                                    {service.name}
+                                                </span>
+                                            ) : null;
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Services Selection */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: theme.text, marginBottom: '8px' }}>
+                                    Select Services
+                                </label>
+                                {garageServices.length === 0 ? (
+                                    <div style={{ padding: '20px', backgroundColor: theme.bgTertiary, textAlign: 'center', color: theme.textSecondary }}>
+                                        <p style={{ margin: '0 0 12px 0' }}>No services available.</p>
+                                        <button
+                                            onClick={() => { setShowEditServicesModal(false); setShowServicesModal(true); }}
+                                            style={{ padding: '8px 16px', backgroundColor: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px' }}
+                                        >
+                                            ⚙️ Add Services
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px', maxHeight: '300px', overflowY: 'auto', padding: '4px' }}>
+                                        {garageServices.map(service => (
+                                            <div
+                                                key={service.id}
+                                                onClick={() => toggleEditService(service.id)}
+                                                style={{
+                                                    padding: '14px',
+                                                    border: editServices.includes(service.id) ? '2px solid #3b82f6' : `1px solid ${theme.border}`,
+                                                    backgroundColor: editServices.includes(service.id) ? '#dbeafe' : theme.bg,
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.15s'
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                    <div style={{ flex: 1 }}>
+                                                        <div style={{ fontWeight: '500', color: theme.text, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            {editServices.includes(service.id) && <span style={{ color: '#3b82f6' }}>✓</span>}
+                                                            {service.name}
+                                                        </div>
+                                                        <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '4px' }}>
+                                                            ⏱️ {service.duration || 30} mins
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ fontWeight: '700', color: '#10b981', fontSize: '15px' }}>
+                                                        KSh {(service.price || 0).toLocaleString()}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Selected Summary */}
+                                {editServices.length > 0 && (
+                                    <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ color: '#166534', fontSize: '14px' }}>
+                                            {editServices.length} service(s) selected
+                                        </span>
+                                        <span style={{ fontWeight: '700', color: '#166534', fontSize: '16px' }}>
+                                            Total: KSh {editServices.reduce((sum, sId) => {
+                                                const service = garageServices.find(s => s.id === sId);
+                                                return sum + (service?.price || 0);
+                                            }, 0).toLocaleString()}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div style={{ padding: '16px 24px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => { setShowEditServicesModal(false); setEditServicesItem(null); }}
+                                style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '14px' }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSaveEditServices}
+                                disabled={actionLoading || editServices.length === 0}
+                                style={{ 
+                                    padding: '10px 24px', 
+                                    backgroundColor: editServices.length === 0 ? '#94a3b8' : '#3b82f6', 
+                                    color: 'white', 
+                                    border: 'none', 
+                                    borderRadius: '0', 
+                                    cursor: editServices.length === 0 ? 'not-allowed' : 'pointer', 
+                                    fontSize: '14px', 
+                                    fontWeight: '600'
+                                }}
+                            >
+                                {actionLoading ? 'Saving...' : '💾 Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Alert Modal */}
             <AlertModal
                 isOpen={alertModal.isOpen}
@@ -11772,8 +12295,9 @@ function WashBaysContent() {
             }
             // Note: 'assigned' mode doesn't need queue updates - vehicle is already tracked in records
 
-            // 3. Assign to wash bay (Realtime DB)
+            // 3. Assign to wash bay (Realtime DB) - this is the source of truth for bay status
             const result = await services.washBayService.assignVehicle(selectedBay.id, vehicleData);
+            
             if (result.success) {
                 setShowAssignModal(false);
                 setSelectedBay(null);
@@ -11833,7 +12357,7 @@ function WashBaysContent() {
                 await services.intakeQueueService.removeFromQueue(currentVehicle.queueId);
             }
             
-            // 3. Complete the wash bay
+            // 3. Complete the wash bay (this sets it to available and logs history)
             await services.washBayService.completeWash(bay.id);
 
             // 4. Create invoice for the completed wash
@@ -11989,6 +12513,24 @@ function WashBaysContent() {
     const safeBays = Array.isArray(bays) ? bays.filter(b => b && typeof b === 'object') : [];
     const safeQueue = Array.isArray(intakeQueue) ? intakeQueue : [];
     const safeStats = todayStats || { completed: 0, avgTime: 0 };
+    
+    // Calculate pending payments from history
+    const completedRecords = Array.isArray(history) ? history.filter(r => r.action === 'completed') : [];
+    const pendingPaymentCount = completedRecords.filter(record => {
+        // Find matching invoice
+        const matchingInvoice = invoices.find(inv => {
+            if (inv.washRecordId && record.vehicle?.recordId) {
+                return inv.washRecordId === record.vehicle.recordId;
+            }
+            return inv.plateNumber === record.vehicle?.plateNumber &&
+                inv.source === 'wash' &&
+                inv.bayId === record.bayId &&
+                Math.abs(new Date(inv.createdAt) - new Date(record.endTime || record.timestamp)) < 300000;
+        });
+        return !matchingInvoice || matchingInvoice.paymentStatus !== 'paid';
+    }).length;
+    
+    const paidCount = completedRecords.length - pendingPaymentCount;
 
     // Stats cards
     const statsCards = [
@@ -12014,7 +12556,8 @@ function WashBaysContent() {
             label: 'Completed Today', 
             value: safeStats.completed || 0, 
             icon: '🏁',
-            color: '#8b5cf6'
+            color: '#8b5cf6',
+            subLabel: pendingPaymentCount > 0 ? `${pendingPaymentCount} awaiting payment` : null
         }
     ];
 
@@ -12101,6 +12644,11 @@ function WashBaysContent() {
                             <div>
                                 <div style={{ fontSize: '28px', fontWeight: '700', color: theme.text }}>{stat.value}</div>
                                 <div style={{ fontSize: '13px', color: theme.textSecondary }}>{stat.label}</div>
+                                {stat.subLabel && (
+                                    <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '2px', fontWeight: '500' }}>
+                                        💰 {stat.subLabel}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -12516,13 +13064,19 @@ function WashBaysContent() {
                                         ? record.vehicle?.service?.price 
                                         : (record.vehicle?.servicePrice || 0);
                                     
-                                    // Find matching invoice by plate number and approximate time
-                                    const matchingInvoice = invoices.find(inv => 
-                                        inv.plateNumber === record.vehicle?.plateNumber &&
-                                        inv.source === 'wash' &&
-                                        // Match within 1 hour of the wash completion
-                                        Math.abs(new Date(inv.createdAt) - new Date(record.timestamp)) < 3600000
-                                    );
+                                    // Find matching invoice - try multiple matching strategies
+                                    const matchingInvoice = invoices.find(inv => {
+                                        // Match by washRecordId if available (most reliable)
+                                        if (inv.washRecordId && record.vehicle?.recordId) {
+                                            return inv.washRecordId === record.vehicle.recordId;
+                                        }
+                                        // Match by plate number + bay + time window
+                                        return inv.plateNumber === record.vehicle?.plateNumber &&
+                                            inv.source === 'wash' &&
+                                            inv.bayId === record.bayId &&
+                                            // Match within 5 minutes of the wash completion
+                                            Math.abs(new Date(inv.createdAt) - new Date(record.endTime || record.timestamp)) < 300000;
+                                    });
                                     const isPaid = matchingInvoice?.paymentStatus === 'paid';
                                     
                                     return (
