@@ -1326,8 +1326,8 @@ export const washBayService = {
     });
   },
 
-  // Subscribe to wash history (real-time)
-  subscribeToHistory(callback, limitCount = 50) {
+  // Subscribe to wash history (real-time) - optimized for large datasets
+  subscribeToHistory(callback, limitCount = 10000) {
     const historyRef = ref(realtimeDb, 'washHistory');
     return onValue(historyRef, (snapshot) => {
       const data = snapshot.val();

@@ -11932,6 +11932,17 @@ function WashBaysContent() {
     const [renderError, setRenderError] = useState(null);
     const [componentMounted, setComponentMounted] = useState(false);
     
+    // History search, filter, and pagination states
+    const [historySearch, setHistorySearch] = useState('');
+    const [historyDateFilter, setHistoryDateFilter] = useState('all'); // 'today', 'week', 'month', 'custom', 'all'
+    const [historyCustomDateFrom, setHistoryCustomDateFrom] = useState('');
+    const [historyCustomDateTo, setHistoryCustomDateTo] = useState('');
+    const [historyPaymentFilter, setHistoryPaymentFilter] = useState('all'); // 'all', 'paid', 'pending'
+    const [historyBayFilter, setHistoryBayFilter] = useState('all');
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyPageSize, setHistoryPageSize] = useState(25);
+    const [historyJumpPage, setHistoryJumpPage] = useState('');
+    
     // Debug logging on mount
     useEffect(() => {
         console.log('WashBaysContent: Component mounting...');
@@ -13009,12 +13020,173 @@ function WashBaysContent() {
 
             {/* History Tab */}
             {activeTab === 'history' && (
-                <div style={{
-                    backgroundColor: theme.bg,
-                    borderRadius: '2px',
-                    border: `1px solid ${theme.border}`,
-                    overflow: 'hidden'
-                }}>
+                <div>
+                    {/* Search & Filters Bar */}
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        border: `1px solid ${theme.border}`,
+                        padding: '16px',
+                        marginBottom: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px'
+                    }}>
+                        {/* Search Row */}
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <div style={{ flex: '1', minWidth: '200px', maxWidth: '350px', position: 'relative' }}>
+                                <input
+                                    type="text"
+                                    placeholder="Search plate, customer, or staff..."
+                                    value={historySearch}
+                                    onChange={(e) => { setHistorySearch(e.target.value); setHistoryPage(1); }}
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 12px 10px 36px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: theme.inputBg,
+                                        color: theme.text,
+                                        fontSize: '14px',
+                                        outline: 'none'
+                                    }}
+                                />
+                                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: theme.textSecondary }}>🔍</span>
+                            </div>
+                            
+                            {/* Date Filter */}
+                            <select
+                                value={historyDateFilter}
+                                onChange={(e) => { setHistoryDateFilter(e.target.value); setHistoryPage(1); }}
+                                style={{
+                                    padding: '10px 12px',
+                                    borderRadius: '2px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.text,
+                                    fontSize: '14px',
+                                    cursor: 'pointer',
+                                    minWidth: '130px'
+                                }}
+                            >
+                                <option value="all">All Time</option>
+                                <option value="today">Today</option>
+                                <option value="yesterday">Yesterday</option>
+                                <option value="week">This Week</option>
+                                <option value="month">This Month</option>
+                                <option value="custom">Custom Range</option>
+                            </select>
+                            
+                            {/* Custom Date Range */}
+                            {historyDateFilter === 'custom' && (
+                                <>
+                                    <input
+                                        type="date"
+                                        value={historyCustomDateFrom}
+                                        onChange={(e) => { setHistoryCustomDateFrom(e.target.value); setHistoryPage(1); }}
+                                        style={{
+                                            padding: '9px 12px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: theme.inputBg,
+                                            color: theme.text,
+                                            fontSize: '14px'
+                                        }}
+                                    />
+                                    <span style={{ color: theme.textSecondary }}>to</span>
+                                    <input
+                                        type="date"
+                                        value={historyCustomDateTo}
+                                        onChange={(e) => { setHistoryCustomDateTo(e.target.value); setHistoryPage(1); }}
+                                        style={{
+                                            padding: '9px 12px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: theme.inputBg,
+                                            color: theme.text,
+                                            fontSize: '14px'
+                                        }}
+                                    />
+                                </>
+                            )}
+                            
+                            {/* Payment Filter */}
+                            <select
+                                value={historyPaymentFilter}
+                                onChange={(e) => { setHistoryPaymentFilter(e.target.value); setHistoryPage(1); }}
+                                style={{
+                                    padding: '10px 12px',
+                                    borderRadius: '2px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.text,
+                                    fontSize: '14px',
+                                    cursor: 'pointer',
+                                    minWidth: '120px'
+                                }}
+                            >
+                                <option value="all">All Payments</option>
+                                <option value="paid">✓ Paid</option>
+                                <option value="pending">⏳ Pending</option>
+                            </select>
+                            
+                            {/* Bay Filter */}
+                            <select
+                                value={historyBayFilter}
+                                onChange={(e) => { setHistoryBayFilter(e.target.value); setHistoryPage(1); }}
+                                style={{
+                                    padding: '10px 12px',
+                                    borderRadius: '2px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.inputBg,
+                                    color: theme.text,
+                                    fontSize: '14px',
+                                    cursor: 'pointer',
+                                    minWidth: '120px'
+                                }}
+                            >
+                                <option value="all">All Bays</option>
+                                {safeBays.map(bay => (
+                                    <option key={bay.id} value={bay.id}>{bay.name}</option>
+                                ))}
+                            </select>
+                            
+                            {/* Clear Filters */}
+                            {(historySearch || historyDateFilter !== 'all' || historyPaymentFilter !== 'all' || historyBayFilter !== 'all') && (
+                                <button
+                                    onClick={() => {
+                                        setHistorySearch('');
+                                        setHistoryDateFilter('all');
+                                        setHistoryPaymentFilter('all');
+                                        setHistoryBayFilter('all');
+                                        setHistoryCustomDateFrom('');
+                                        setHistoryCustomDateTo('');
+                                        setHistoryPage(1);
+                                    }}
+                                    style={{
+                                        padding: '10px 16px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: '#fee2e2',
+                                        color: '#dc2626',
+                                        fontSize: '14px',
+                                        cursor: 'pointer',
+                                        fontWeight: '500'
+                                    }}
+                                >
+                                    Clear
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* History Table */}
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        border: `1px solid ${theme.border}`,
+                        overflow: 'hidden'
+                    }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ backgroundColor: theme.bgSecondary }}>
@@ -13031,8 +13203,77 @@ function WashBaysContent() {
                         </thead>
                         <tbody>
                             {(() => {
-                                // Group history by combining started and completed records
-                                const completedRecords = history.filter(r => r.action === 'completed');
+                                // Get all completed records and apply filters
+                                let completedRecords = history.filter(r => r.action === 'completed');
+                                
+                                // Search filter
+                                if (historySearch.trim()) {
+                                    const searchLower = historySearch.toLowerCase();
+                                    completedRecords = completedRecords.filter(r => 
+                                        (r.vehicle?.plateNumber || '').toLowerCase().includes(searchLower) ||
+                                        (r.vehicle?.customerName || '').toLowerCase().includes(searchLower) ||
+                                        (r.vehicle?.assignedBy || '').toLowerCase().includes(searchLower) ||
+                                        (r.completedBy || '').toLowerCase().includes(searchLower) ||
+                                        (r.bayName || '').toLowerCase().includes(searchLower)
+                                    );
+                                }
+                                
+                                // Date filter
+                                const now = new Date();
+                                const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                                const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+                                const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+                                const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                                
+                                if (historyDateFilter === 'today') {
+                                    completedRecords = completedRecords.filter(r => new Date(r.timestamp || r.endTime) >= todayStart);
+                                } else if (historyDateFilter === 'yesterday') {
+                                    completedRecords = completedRecords.filter(r => {
+                                        const d = new Date(r.timestamp || r.endTime);
+                                        return d >= yesterdayStart && d < todayStart;
+                                    });
+                                } else if (historyDateFilter === 'week') {
+                                    completedRecords = completedRecords.filter(r => new Date(r.timestamp || r.endTime) >= weekStart);
+                                } else if (historyDateFilter === 'month') {
+                                    completedRecords = completedRecords.filter(r => new Date(r.timestamp || r.endTime) >= monthStart);
+                                } else if (historyDateFilter === 'custom' && historyCustomDateFrom && historyCustomDateTo) {
+                                    const fromDate = new Date(historyCustomDateFrom); fromDate.setHours(0, 0, 0, 0);
+                                    const toDate = new Date(historyCustomDateTo); toDate.setHours(23, 59, 59, 999);
+                                    completedRecords = completedRecords.filter(r => {
+                                        const d = new Date(r.timestamp || r.endTime);
+                                        return d >= fromDate && d <= toDate;
+                                    });
+                                }
+                                
+                                // Bay filter
+                                if (historyBayFilter !== 'all') {
+                                    completedRecords = completedRecords.filter(r => r.bayId === historyBayFilter);
+                                }
+                                
+                                // Payment filter - check against invoices
+                                if (historyPaymentFilter !== 'all') {
+                                    completedRecords = completedRecords.filter(record => {
+                                        const matchingInvoice = invoices.find(inv => {
+                                            if (inv.washRecordId && record.vehicle?.recordId) {
+                                                return inv.washRecordId === record.vehicle.recordId;
+                                            }
+                                            return inv.plateNumber === record.vehicle?.plateNumber &&
+                                                inv.source === 'wash' &&
+                                                inv.bayId === record.bayId &&
+                                                Math.abs(new Date(inv.createdAt) - new Date(record.endTime || record.timestamp)) < 300000;
+                                        });
+                                        const isPaid = matchingInvoice?.paymentStatus === 'paid';
+                                        return historyPaymentFilter === 'paid' ? isPaid : !isPaid;
+                                    });
+                                }
+                                
+                                // Store total for pagination
+                                const totalFiltered = completedRecords.length;
+                                const totalPages = Math.ceil(totalFiltered / historyPageSize) || 1;
+                                
+                                // Paginate
+                                const startIndex = (historyPage - 1) * historyPageSize;
+                                const paginatedRecords = completedRecords.slice(startIndex, startIndex + historyPageSize);
                                 
                                 if (completedRecords.length === 0) {
                                     // Show in-progress items (started but not completed)
@@ -13089,8 +13330,8 @@ function WashBaysContent() {
                                     ));
                                 }
                                 
-                                // Show completed records (they have all the info including start time)
-                                return completedRecords.map(record => {
+                                // Show paginated completed records
+                                const rows = paginatedRecords.map(record => {
                                     const servicePrice = typeof record.vehicle?.service === 'object' 
                                         ? record.vehicle?.service?.price 
                                         : (record.vehicle?.servicePrice || 0);
@@ -13164,9 +13405,240 @@ function WashBaysContent() {
                                         </td>
                                     </tr>
                                 )});
+                                
+                                // Store pagination info for footer
+                                window._historyPaginationInfo = { totalFiltered, totalPages, startIndex };
+                                return rows;
                             })()}
                         </tbody>
                     </table>
+                    
+                    {/* Pagination Controls */}
+                    {(() => {
+                        const info = window._historyPaginationInfo || { totalFiltered: 0, totalPages: 1, startIndex: 0 };
+                        const { totalFiltered, totalPages } = info;
+                        
+                        // Generate page numbers to show
+                        const getPageNumbers = () => {
+                            const pages = [];
+                            const maxVisible = 7;
+                            
+                            if (totalPages <= maxVisible) {
+                                for (let i = 1; i <= totalPages; i++) pages.push(i);
+                            } else {
+                                pages.push(1);
+                                
+                                if (historyPage > 3) pages.push('...');
+                                
+                                const start = Math.max(2, historyPage - 1);
+                                const end = Math.min(totalPages - 1, historyPage + 1);
+                                
+                                for (let i = start; i <= end; i++) {
+                                    if (!pages.includes(i)) pages.push(i);
+                                }
+                                
+                                if (historyPage < totalPages - 2) pages.push('...');
+                                
+                                if (!pages.includes(totalPages)) pages.push(totalPages);
+                            }
+                            return pages;
+                        };
+                        
+                        return (
+                            <div style={{
+                                padding: '16px 20px',
+                                borderTop: `1px solid ${theme.border}`,
+                                backgroundColor: theme.bgSecondary,
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: '16px'
+                            }}>
+                                {/* Left: Results info & page size */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '13px', color: theme.textSecondary }}>
+                                        Showing <strong style={{ color: theme.text }}>{Math.min((historyPage - 1) * historyPageSize + 1, totalFiltered)}-{Math.min(historyPage * historyPageSize, totalFiltered)}</strong> of <strong style={{ color: theme.text }}>{totalFiltered.toLocaleString()}</strong> records
+                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ fontSize: '13px', color: theme.textSecondary }}>Show:</span>
+                                        <select
+                                            value={historyPageSize}
+                                            onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1); }}
+                                            style={{
+                                                padding: '6px 10px',
+                                                borderRadius: '2px',
+                                                border: `1px solid ${theme.border}`,
+                                                backgroundColor: theme.inputBg,
+                                                color: theme.text,
+                                                fontSize: '13px',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            <option value={10}>10</option>
+                                            <option value={25}>25</option>
+                                            <option value={50}>50</option>
+                                            <option value={100}>100</option>
+                                            <option value={250}>250</option>
+                                            <option value={500}>500</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                {/* Center: Page numbers */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    {/* First & Prev */}
+                                    <button
+                                        onClick={() => setHistoryPage(1)}
+                                        disabled={historyPage === 1}
+                                        style={{
+                                            padding: '8px 10px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: historyPage === 1 ? theme.bgSecondary : theme.bg,
+                                            color: historyPage === 1 ? theme.textSecondary : theme.text,
+                                            cursor: historyPage === 1 ? 'not-allowed' : 'pointer',
+                                            fontSize: '12px',
+                                            opacity: historyPage === 1 ? 0.5 : 1
+                                        }}
+                                        title="First page"
+                                    >
+                                        ⟪
+                                    </button>
+                                    <button
+                                        onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                                        disabled={historyPage === 1}
+                                        style={{
+                                            padding: '8px 12px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: historyPage === 1 ? theme.bgSecondary : theme.bg,
+                                            color: historyPage === 1 ? theme.textSecondary : theme.text,
+                                            cursor: historyPage === 1 ? 'not-allowed' : 'pointer',
+                                            fontSize: '12px',
+                                            opacity: historyPage === 1 ? 0.5 : 1
+                                        }}
+                                    >
+                                        ← Prev
+                                    </button>
+                                    
+                                    {/* Page Numbers */}
+                                    {getPageNumbers().map((page, idx) => (
+                                        page === '...' ? (
+                                            <span key={`ellipsis-${idx}`} style={{ padding: '8px 4px', color: theme.textSecondary }}>...</span>
+                                        ) : (
+                                            <button
+                                                key={page}
+                                                onClick={() => setHistoryPage(page)}
+                                                style={{
+                                                    padding: '8px 12px',
+                                                    borderRadius: '2px',
+                                                    border: historyPage === page ? 'none' : `1px solid ${theme.border}`,
+                                                    backgroundColor: historyPage === page ? '#3b82f6' : theme.bg,
+                                                    color: historyPage === page ? 'white' : theme.text,
+                                                    cursor: 'pointer',
+                                                    fontSize: '13px',
+                                                    fontWeight: historyPage === page ? '600' : '400',
+                                                    minWidth: '40px'
+                                                }}
+                                            >
+                                                {page.toLocaleString()}
+                                            </button>
+                                        )
+                                    ))}
+                                    
+                                    {/* Next & Last */}
+                                    <button
+                                        onClick={() => setHistoryPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={historyPage === totalPages}
+                                        style={{
+                                            padding: '8px 12px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: historyPage === totalPages ? theme.bgSecondary : theme.bg,
+                                            color: historyPage === totalPages ? theme.textSecondary : theme.text,
+                                            cursor: historyPage === totalPages ? 'not-allowed' : 'pointer',
+                                            fontSize: '12px',
+                                            opacity: historyPage === totalPages ? 0.5 : 1
+                                        }}
+                                    >
+                                        Next →
+                                    </button>
+                                    <button
+                                        onClick={() => setHistoryPage(totalPages)}
+                                        disabled={historyPage === totalPages}
+                                        style={{
+                                            padding: '8px 10px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: historyPage === totalPages ? theme.bgSecondary : theme.bg,
+                                            color: historyPage === totalPages ? theme.textSecondary : theme.text,
+                                            cursor: historyPage === totalPages ? 'not-allowed' : 'pointer',
+                                            fontSize: '12px',
+                                            opacity: historyPage === totalPages ? 0.5 : 1
+                                        }}
+                                        title="Last page"
+                                    >
+                                        ⟫
+                                    </button>
+                                </div>
+                                
+                                {/* Right: Jump to page */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '13px', color: theme.textSecondary }}>Go to:</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max={totalPages}
+                                        value={historyJumpPage}
+                                        onChange={(e) => setHistoryJumpPage(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                const page = parseInt(historyJumpPage);
+                                                if (page >= 1 && page <= totalPages) {
+                                                    setHistoryPage(page);
+                                                    setHistoryJumpPage('');
+                                                }
+                                            }
+                                        }}
+                                        placeholder={historyPage.toString()}
+                                        style={{
+                                            width: '70px',
+                                            padding: '6px 10px',
+                                            borderRadius: '2px',
+                                            border: `1px solid ${theme.border}`,
+                                            backgroundColor: theme.inputBg,
+                                            color: theme.text,
+                                            fontSize: '13px',
+                                            textAlign: 'center'
+                                        }}
+                                    />
+                                    <button
+                                        onClick={() => {
+                                            const page = parseInt(historyJumpPage);
+                                            if (page >= 1 && page <= totalPages) {
+                                                setHistoryPage(page);
+                                                setHistoryJumpPage('');
+                                            }
+                                        }}
+                                        style={{
+                                            padding: '6px 12px',
+                                            borderRadius: '2px',
+                                            border: 'none',
+                                            backgroundColor: '#3b82f6',
+                                            color: 'white',
+                                            fontSize: '13px',
+                                            cursor: 'pointer',
+                                            fontWeight: '500'
+                                        }}
+                                    >
+                                        Go
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })()}
+                </div>
                 </div>
             )}
 
@@ -14419,13 +14891,28 @@ function Dashboard({ onModuleClick }) {
     const availableBays = bays.filter(b => b.status === 'available').length;
     const maintenanceBays = bays.filter(b => b.status === 'maintenance').length;
     
-    // Wash history stats - count completed washes today
+    // Today's date string for comparisons
     const todayStr = today.toISOString().split('T')[0];
-    const completedWashesToday = washHistory.filter(h => {
-        if (h.action !== 'completed') return false;
-        const hDate = h.timestamp ? new Date(h.timestamp).toISOString().split('T')[0] : null;
-        return hDate === todayStr;
-    }).length;
+    
+    // Wash history stats - count completed washes today from real-time wash bay history
+    const completedWashesToday = React.useMemo(() => {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        
+        return washHistory.filter(h => {
+            // Only count completed actions
+            if (h.action !== 'completed') return false;
+            
+            // Use endTime (completion time) or timestamp
+            const completionTime = h.endTime || h.timestamp;
+            if (!completionTime) return false;
+            
+            const completionDate = new Date(completionTime);
+            return completionDate >= todayStart && completionDate <= todayEnd;
+        }).length;
+    }, [washHistory]);
     const totalWashHistory = washHistory.filter(h => h.action === 'completed').length;
     
     // Real-time inventory stats
@@ -18514,7 +19001,7 @@ function BillingModule() {
             {activeTab !== 'expenses' ? (
             <div style={{ 
                 background: isDark ? '#1e293b' : '#ffffff', 
-                borderRadius: '16px', 
+                borderRadius: '0', 
                 overflow: 'hidden',
                 boxShadow: isDark ? '0 4px 24px rgba(0,0,0,0.4)' : '0 4px 24px rgba(0,0,0,0.08)',
                 border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}`
