@@ -691,6 +691,8 @@ export const billingService = {
         paidAmount: paymentData.amount,
         mpesaCode: paymentData.mpesaCode || null,
         mpesaPhone: paymentData.mpesaPhone || null,
+        cardLastFour: paymentData.cardLastFour || null,
+        transactionRef: paymentData.transactionRef || null,
         updatedAt: new Date().toISOString()
       });
       
@@ -979,8 +981,9 @@ export const billingService = {
           totalPending: invoices.filter(inv => inv.paymentStatus === 'unpaid').reduce((sum, inv) => sum + (inv.totalAmount || 0), 0),
           totalCollected: invoices.filter(inv => inv.paymentStatus === 'paid').reduce((sum, inv) => sum + (inv.paidAmount || 0), 0),
           todayInvoiceCount: todayInvoices.length,
-          mpesaPayments: invoices.filter(inv => inv.paymentMethod === 'mpesa').length,
-          cashPayments: invoices.filter(inv => inv.paymentMethod === 'cash').length
+          mpesaPayments: invoices.filter(inv => inv.paymentMethod === 'mpesa' || inv.paymentMethod === 'm-pesa').length,
+          cashPayments: invoices.filter(inv => inv.paymentMethod === 'cash').length,
+          cardPayments: invoices.filter(inv => inv.paymentMethod === 'card').length
         }
       };
     } catch (error) {
@@ -1000,6 +1003,8 @@ export const billingService = {
         paidAmount: 0,
         mpesaCode: null,
         mpesaPhone: null,
+        cardLastFour: null,
+        transactionRef: null,
         updatedAt: new Date().toISOString()
       });
       return { success: true };

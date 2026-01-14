@@ -16639,6 +16639,11 @@ function BillingModule() {
     const [customDateFrom, setCustomDateFrom] = useState('');
     const [customDateTo, setCustomDateTo] = useState('');
     const [sourceFilter, setSourceFilter] = useState('all');
+    const [paymentMethodFilter, setPaymentMethodFilter] = useState('all');
+    
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
     
     // Alert modal state
     const [alertModal, setAlertModal] = useState({
@@ -16665,18 +16670,23 @@ function BillingModule() {
         totalCollected: 0,
         todayInvoiceCount: 0,
         mpesaPayments: 0,
-        cashPayments: 0
+        cashPayments: 0,
+        cardPayments: 0
     });
     
     // Payment modal states
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [showMpesaModal, setShowMpesaModal] = useState(false);
+    const [showCardModal, setShowCardModal] = useState(false);
     const [showInvoiceDetailModal, setShowInvoiceDetailModal] = useState(false);
     const [selectedInvoice, setSelectedInvoice] = useState(null);
     const [mpesaPhone, setMpesaPhone] = useState('');
     const [mpesaLoading, setMpesaLoading] = useState(false);
     const [mpesaPaymentId, setMpesaPaymentId] = useState(null);
     const [mpesaStatus, setMpesaStatus] = useState(null);
+    const [mpesaMode, setMpesaMode] = useState('stk'); // 'stk' or 'manual'
+    const [manualMpesaCode, setManualMpesaCode] = useState('');
+    const [cardDetails, setCardDetails] = useState({ lastFourDigits: '', transactionRef: '' });
     
     // Manual billing modal states
     const [showManualBillingModal, setShowManualBillingModal] = useState(false);
@@ -16916,8 +16926,39 @@ function BillingModule() {
             }
         }
 
+        // Filter by payment method
+        if (paymentMethodFilter !== 'all') {
+            filtered = filtered.filter(inv => {
+                const method = inv.paymentMethod?.toLowerCase();
+                if (paymentMethodFilter === 'cash') return method === 'cash';
+                if (paymentMethodFilter === 'mpesa') return method === 'mpesa' || method === 'm-pesa';
+                if (paymentMethodFilter === 'card') return method === 'card';
+                if (paymentMethodFilter === 'unpaid') return !inv.paymentMethod || inv.paymentStatus !== 'paid';
+                return true;
+            });
+        }
+
         return filtered;
     };
+
+    // Get paginated invoices
+    const getPaginatedInvoices = () => {
+        const filtered = getFilteredInvoices();
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        return filtered.slice(startIndex, endIndex);
+    };
+
+    // Get total pages
+    const getTotalPages = () => {
+        const filtered = getFilteredInvoices();
+        return Math.ceil(filtered.length / itemsPerPage);
+    };
+
+    // Reset page when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, dateFilter, sourceFilter, paymentMethodFilter, activeTab]);
     
     // Export functions
     const exportCSV = () => {
@@ -17524,7 +17565,115 @@ function BillingModule() {
         setMpesaPhone(selectedInvoice?.customerPhone || '');
         setMpesaStatus(null);
         setMpesaPaymentId(null);
+        setMpesaMode('stk');
+        setManualMpesaCode('');
         setShowMpesaModal(true);
+    };
+
+    // Open Card Payment modal
+    const openCardModal = () => {
+        setShowPaymentModal(false);
+        setCardDetails({ lastFourDigits: '', transactionRef: '' });
+        setShowCardModal(true);
+    };
+
+    // Handle manual M-Pesa code entry
+    const handleManualMpesaPayment = async () => {
+        if (!selectedInvoice || !manualMpesaCode.trim()) return;
+        
+        // Validate M-Pesa code format (typically 10 alphanumeric characters)
+        const codeRegex = /^[A-Z0-9]{10,}$/i;
+        if (!codeRegex.test(manualMpesaCode.trim())) {
+            setError('Please enter a valid M-Pesa transaction code (e.g., QJK3L5M7N9)');
+            return;
+        }
+
+        setMpesaLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.billingService.markAsPaid(selectedInvoice.id, {
+                method: 'm-pesa',
+                amount: selectedInvoice.totalAmount,
+                mpesaCode: manualMpesaCode.trim().toUpperCase(),
+                mpesaPhone: mpesaPhone || null
+            });
+            
+            if (result.success) {
+                // Log activity
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'billing',
+                        action: 'Payment Received',
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (M-Pesa: ${manualMpesaCode.trim().toUpperCase()})`,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+                
+                setSuccessMessage('M-Pesa payment recorded successfully!');
+                setShowMpesaModal(false);
+                setSelectedInvoice(null);
+                setManualMpesaCode('');
+                setMpesaPhone('');
+            } else {
+                setError(result.error || 'Failed to record payment');
+            }
+        } catch (err) {
+            setError('Failed to record M-Pesa payment');
+        } finally {
+            setMpesaLoading(false);
+        }
+    };
+
+    // Handle card payment
+    const handleCardPayment = async () => {
+        if (!selectedInvoice) return;
+        
+        if (!cardDetails.transactionRef.trim()) {
+            setError('Please enter the transaction reference');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.billingService.markAsPaid(selectedInvoice.id, {
+                method: 'card',
+                amount: selectedInvoice.totalAmount,
+                cardLastFour: cardDetails.lastFourDigits || null,
+                transactionRef: cardDetails.transactionRef.trim()
+            });
+            
+            if (result.success) {
+                // Log activity
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'billing',
+                        action: 'Payment Received',
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (Card${cardDetails.lastFourDigits ? ` ****${cardDetails.lastFourDigits}` : ''})`,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+                
+                setSuccessMessage('Card payment recorded successfully!');
+                setShowCardModal(false);
+                setSelectedInvoice(null);
+                setCardDetails({ lastFourDigits: '', transactionRef: '' });
+            } else {
+                setError(result.error || 'Failed to record payment');
+            }
+        } catch (err) {
+            setError('Failed to record card payment');
+        } finally {
+            setActionLoading(false);
+        }
     };
 
     // View invoice details
@@ -17592,88 +17741,121 @@ function BillingModule() {
             `<tr><td style="padding:8px 0;border-bottom:1px dashed #ddd;">${s.name}</td><td style="padding:8px 0;border-bottom:1px dashed #ddd;text-align:right;">KES ${parseFloat(s.price).toLocaleString()}</td></tr>`
         ).join('') || '<tr><td colspan="2">-</td></tr>';
         
-        // Fetch customer loyalty data
+        // Fetch customer loyalty data - try multiple methods to find customer
         let loyaltyData = null;
-        if (invoice.customerPhone) {
-            try {
-                const services = window.FirebaseServices;
+        let customer = null;
+        let customerPhone = invoice.customerPhone || '';
+        const services = window.FirebaseServices;
+        
+        try {
+            // Method 1: Try by customerId if stored on invoice
+            if (invoice.customerId) {
+                const allCustomersResult = await services.customerService.getCustomers();
+                if (allCustomersResult.success && allCustomersResult.data) {
+                    customer = allCustomersResult.data.find(c => c.id === invoice.customerId);
+                }
+            }
+            
+            // Method 2: Try by phone number
+            if (!customer && invoice.customerPhone) {
                 const customerResult = await services.customerService.findCustomerByPhone(invoice.customerPhone);
                 if (customerResult.success && customerResult.data) {
-                    const customer = customerResult.data;
-                    // Fetch loyalty settings
-                    let loyaltySettings = { enabled: true, pointsPerVisit: 1, rewardThreshold: 20 };
-                    try {
-                        const settingsResult = await services.loyaltySettingsService.getSettings();
-                        if (settingsResult.success && settingsResult.data) {
-                            loyaltySettings = settingsResult.data;
-                        }
-                    } catch (e) { console.log('Using default loyalty settings'); }
-                    
-                    const currentPoints = customer.loyaltyPoints || 0;
-                    const pointsEarned = invoice.pointsEarned || loyaltySettings.pointsPerVisit || 1;
-                    const newBalance = currentPoints + pointsEarned;
-                    const totalVisits = (customer.totalVisits || 0) + 1;
-                    const rewardThreshold = loyaltySettings.rewardThreshold || 20;
-                    const pointsToReward = Math.max(0, rewardThreshold - newBalance);
-                    
-                    loyaltyData = {
-                        enabled: loyaltySettings.enabled !== false,
-                        currentPoints,
-                        pointsEarned,
-                        newBalance,
-                        totalVisits,
-                        rewardThreshold,
-                        pointsToReward,
-                        qualifiesForReward: newBalance >= rewardThreshold,
-                        pendingReward: customer.pendingReward || null
-                    };
+                    customer = customerResult.data;
                 }
-            } catch (e) {
-                console.log('Could not fetch loyalty data:', e);
             }
+            
+            // Method 3: Try by customer name (get all customers once and search)
+            if (!customer && invoice.customerName && invoice.customerName !== 'Walk-in' && invoice.customerName !== 'Walk-in Customer') {
+                const allCustomersResult = await services.customerService.getCustomers();
+                if (allCustomersResult.success && allCustomersResult.data) {
+                    customer = allCustomersResult.data.find(c => 
+                        c.name?.toLowerCase() === invoice.customerName?.toLowerCase()
+                    );
+                }
+            }
+            
+            // Method 4: Try to get phone from vehicle intake record
+            if (!customerPhone && invoice.plateNumber) {
+                try {
+                    // Try to find the intake record by plate number
+                    const intakeResult = await services.intakeRecordsService?.findByPlateNumber?.(invoice.plateNumber);
+                    if (intakeResult?.success && intakeResult?.data?.customerPhone) {
+                        customerPhone = intakeResult.data.customerPhone;
+                    }
+                } catch (e) { 
+                    console.log('Could not fetch intake record'); 
+                }
+            }
+            
+            // If customer found, get their phone and build loyalty data
+            if (customer) {
+                // Use customer's phone if we don't have one yet
+                if (!customerPhone && customer.phone) {
+                    customerPhone = customer.phone;
+                }
+                
+                // Fetch loyalty settings
+                let loyaltySettings = { enabled: true, pointsPerVisit: 1, rewardThreshold: 20 };
+                try {
+                    const settingsResult = await services.loyaltySettingsService.getSettings();
+                    if (settingsResult.success && settingsResult.data) {
+                        loyaltySettings = settingsResult.data;
+                    }
+                } catch (e) { console.log('Using default loyalty settings'); }
+                
+                const currentPoints = customer.loyaltyPoints || 0;
+                const totalVisits = customer.totalVisits || 0;
+                const rewardThreshold = loyaltySettings.rewardThreshold || 20;
+                const pointsToReward = Math.max(0, rewardThreshold - currentPoints);
+                
+                loyaltyData = {
+                    enabled: loyaltySettings.enabled !== false,
+                    currentPoints,
+                    totalVisits,
+                    rewardThreshold,
+                    pointsToReward,
+                    qualifiesForReward: currentPoints >= rewardThreshold,
+                    pendingReward: customer.pendingReward || null,
+                    customerName: customer.name || invoice.customerName
+                };
+            }
+        } catch (e) {
+            console.log('Could not fetch loyalty data:', e);
         }
         
         // Build loyalty section HTML
         let loyaltySection = '';
         if (loyaltyData && loyaltyData.enabled) {
-            const progressPercent = Math.min(100, (loyaltyData.newBalance / loyaltyData.rewardThreshold) * 100);
+            const progressPercent = Math.min(100, (loyaltyData.currentPoints / loyaltyData.rewardThreshold) * 100);
             
             loyaltySection = `
                 <div style="border-top:2px dashed #ccc; margin-top:15px; padding-top:15px;">
-                    <div style="font-size:11px; color:#666; text-align:center; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">⭐ Loyalty Program</div>
+                    <div style="font-size:11px; color:#666; text-align:center; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;">⭐ Loyalty Program ⭐</div>
                     
-                    <div style="background:#f5f5f5; padding:10px; margin-bottom:10px;">
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                            <span style="font-size:12px; color:#666;">Current Balance:</span>
-                            <span style="font-size:13px; font-weight:600;">${loyaltyData.currentPoints} pts</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                            <span style="font-size:12px; color:#666;">Points This Visit:</span>
-                            <span style="font-size:13px; font-weight:600; color:#22c55e;">+${loyaltyData.pointsEarned} pts</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; border-top:1px solid #ddd; padding-top:6px;">
-                            <span style="font-size:12px; color:#666;">New Balance:</span>
-                            <span style="font-size:15px; font-weight:700; color:#f59e0b;">${loyaltyData.newBalance} pts</span>
-                        </div>
+                    <!-- Points Earned Highlight Box -->
+                    <div style="background:linear-gradient(135deg, #fef3c7, #fde68a); padding:15px; text-align:center; margin-bottom:12px; border-radius:8px; border:2px solid #f59e0b;">
+                        <div style="font-size:10px; color:#92400e; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">Points Earned</div>
+                        <div style="font-size:28px; font-weight:800; color:#d97706;">🏆 ${loyaltyData.currentPoints}</div>
+                        <div style="font-size:10px; color:#92400e; margin-top:2px;">Total Loyalty Points</div>
                     </div>
                     
                     <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:8px; padding:0 4px;">
                         <span style="color:#666;">Total Visits:</span>
-                        <span style="font-weight:500;">${loyaltyData.totalVisits}</span>
+                        <span style="font-weight:600;">${loyaltyData.totalVisits}</span>
                     </div>
                     
                     ${!loyaltyData.qualifiesForReward && loyaltyData.pointsToReward > 0 ? `
-                    <div style="background:#fef3c7; padding:10px; text-align:center; margin-top:10px;">
-                        <div style="font-size:11px; color:#92400e;">🎯 ${loyaltyData.pointsToReward} more point${loyaltyData.pointsToReward !== 1 ? 's' : ''} to earn a reward!</div>
-                        <div style="margin-top:6px; background:#fde68a; height:8px; overflow:hidden;">
-                            <div style="width:${progressPercent}%; height:100%; background:#f59e0b;"></div>
+                    <div style="background:#f5f5f5; padding:10px; text-align:center; margin-top:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#666; margin-bottom:6px;">🎯 ${loyaltyData.pointsToReward} more point${loyaltyData.pointsToReward !== 1 ? 's' : ''} to earn a reward!</div>
+                        <div style="background:#e5e5e5; height:10px; border-radius:5px; overflow:hidden;">
+                            <div style="width:${progressPercent}%; height:100%; background:#f59e0b; border-radius:5px;"></div>
                         </div>
-                        <div style="font-size:10px; color:#92400e; margin-top:4px;">${loyaltyData.newBalance} / ${loyaltyData.rewardThreshold} points</div>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">${loyaltyData.currentPoints} / ${loyaltyData.rewardThreshold} points</div>
                     </div>
                     ` : ''}
                     
                     ${loyaltyData.qualifiesForReward && !loyaltyData.pendingReward ? `
-                    <div style="background:#dcfce7; padding:12px; text-align:center; margin-top:10px;">
+                    <div style="background:#dcfce7; padding:12px; text-align:center; margin-top:10px; border-radius:6px; border:1px solid #22c55e;">
                         <div style="font-size:20px; margin-bottom:4px;">🎁</div>
                         <div style="font-size:13px; font-weight:600; color:#166534;">Congratulations!</div>
                         <div style="font-size:11px; color:#15803d;">You qualify for a reward!</div>
@@ -17682,7 +17864,7 @@ function BillingModule() {
                     ` : ''}
                     
                     ${loyaltyData.pendingReward ? `
-                    <div style="background:#dbeafe; padding:12px; text-align:center; margin-top:10px;">
+                    <div style="background:#dbeafe; padding:12px; text-align:center; margin-top:10px; border-radius:6px; border:1px solid #3b82f6;">
                         <div style="font-size:20px; margin-bottom:4px;">🎉</div>
                         <div style="font-size:13px; font-weight:600; color:#1e40af;">Reward Pending</div>
                         <div style="font-size:11px; color:#1d4ed8;">${loyaltyData.pendingReward.rewardType || 'Reward'}</div>
@@ -17724,7 +17906,7 @@ function BillingModule() {
                 <div class="info-row"><span>Receipt #:</span><span>${invoice.invoiceNumber}</span></div>
                 <div class="info-row"><span>Date:</span><span>${new Date(invoice.createdAt).toLocaleDateString()}</span></div>
                 <div class="info-row"><span>Customer:</span><span>${invoice.customerName || 'Walk-in'}</span></div>
-                <div class="info-row"><span>Phone:</span><span>${invoice.customerPhone || '-'}</span></div>
+                <div class="info-row"><span>Phone:</span><span>${customerPhone || '-'}</span></div>
                 <div class="info-row"><span>Vehicle:</span><span>${invoice.plateNumber || '-'}</span></div>
                 <div class="info-row"><span>Source:</span><span>${(invoice.source || 'wash').toUpperCase()}</span></div>
                 <div class="info-row"><span>Served by:</span><span>${servedBy}</span></div>
@@ -18247,6 +18429,30 @@ function BillingModule() {
                             />
                         </>
                     )}
+                    {/* Payment Method Filter */}
+                    <select
+                        value={paymentMethodFilter}
+                        onChange={(e) => setPaymentMethodFilter(e.target.value)}
+                        style={{ ...inputStyle, width: '130px', marginLeft: '8px' }}
+                    >
+                        <option value="all">All Methods</option>
+                        <option value="cash">💵 Cash</option>
+                        <option value="mpesa">📱 M-Pesa</option>
+                        <option value="card">💳 Card</option>
+                        <option value="unpaid">⏳ Unpaid</option>
+                    </select>
+                    {/* Items per page */}
+                    <select
+                        value={itemsPerPage}
+                        onChange={(e) => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
+                        style={{ ...inputStyle, width: '90px', marginLeft: '8px' }}
+                    >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={250}>250</option>
+                    </select>
                     {/* Export Button */}
                     <div style={{ position: 'relative', marginLeft: '8px' }}>
                         <button
@@ -18306,134 +18512,194 @@ function BillingModule() {
 
             {/* Invoices Table - Only show when not on expenses tab */}
             {activeTab !== 'expenses' ? (
-            <div style={{ overflowX: 'auto', background: theme.bg }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ 
+                background: isDark ? '#1e293b' : '#ffffff', 
+                borderRadius: '16px', 
+                overflow: 'hidden',
+                boxShadow: isDark ? '0 4px 24px rgba(0,0,0,0.4)' : '0 4px 24px rgba(0,0,0,0.08)',
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}`
+            }}>
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0', fontFamily: "'Montserrat', sans-serif" }}>
                     <thead>
-                        <tr style={{ background: theme.bgTertiary, borderBottom: `2px solid ${theme.border}` }}>
-                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice #</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vehicle</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Source</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'right', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>M-Pesa Code</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Date</th>
-                            <th style={{ padding: '16px 20px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Actions</th>
+                        <tr style={{ 
+                            background: isDark ? '#1e40af' : '#3b82f6'
+                        }}>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Invoice</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Customer</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Vehicle</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Amount</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Payment</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Ref Code</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>Date</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '11px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px', width: '120px' }}>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {filteredInvoices.length === 0 ? (
+                        {getFilteredInvoices().length === 0 ? (
                             <tr>
-                                <td colSpan="9" style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
-                                    <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>📭</div>
-                                    <div style={{ fontSize: '14px', fontWeight: '600' }}>No invoices found</div>
-                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>Invoices will appear here when jobs are completed</div>
+                                <td colSpan="8" style={{ padding: '60px 20px', textAlign: 'center' }}>
+                                    <div style={{ 
+                                        width: '80px', height: '80px', margin: '0 auto 16px', 
+                                        background: isDark ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)', 
+                                        borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px' 
+                                    }}>📭</div>
+                                    <div style={{ fontSize: '16px', fontWeight: '600', color: theme.text, marginBottom: '4px' }}>No Transactions Found</div>
+                                    <div style={{ fontSize: '13px', color: theme.textSecondary }}>Invoices will appear here when jobs are completed</div>
                                 </td>
                             </tr>
                         ) : (
-                            filteredInvoices.map((invoice, idx) => (
-                                <tr key={invoice.id} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? theme.bg : theme.bgSecondary }}>
-                                    <td style={{ padding: '18px 20px' }}>
-                                        <span style={{ fontWeight: '700', color: '#3b82f6', cursor: 'pointer', letterSpacing: '0.3px' }} onClick={() => viewInvoiceDetails(invoice)}>
-                                            {invoice.invoiceNumber || invoice.id.slice(0, 8).toUpperCase()}
-                                        </span>
-                                    </td>
-                                    <td style={{ padding: '18px 20px' }}>
-                                        <div style={{ fontWeight: '600', color: theme.text }}>{invoice.customerName || 'Walk-in'}</div>
-                                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{invoice.customerPhone || '-'}</div>
-                                    </td>
-                                    <td style={{ padding: '18px 20px' }}>
-                                        <span style={{ fontWeight: '700', color: theme.text, background: theme.bgTertiary, padding: '4px 10px', fontSize: '12px' }}>{invoice.plateNumber || '-'}</span>
-                                    </td>
-                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>{getSourceBadge(invoice.source)}</td>
-                                    <td style={{ padding: '18px 20px', textAlign: 'right', fontWeight: '800', color: theme.text, fontSize: '15px' }}>
-                                        {formatCurrency(invoice.totalAmount)}
-                                    </td>
-                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
-                                        {getPaymentBadge(invoice.paymentStatus, invoice.paymentMethod)}
-                                    </td>
-                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
-                                        {invoice.paymentMethod === 'mpesa' && invoice.mpesaCode ? (
-                                            <span style={{ 
-                                                fontWeight: '700', 
-                                                color: '#00a651', 
-                                                background: '#d1fae5', 
-                                                padding: '4px 10px', 
-                                                fontSize: '11px',
-                                                fontFamily: 'monospace',
-                                                letterSpacing: '0.5px'
+                            getPaginatedInvoices().map((invoice, idx) => (
+                                <tr 
+                                    key={invoice.id} 
+                                    style={{ 
+                                        background: isDark 
+                                            ? idx % 2 === 0 ? 'rgba(30,41,59,0.5)' : 'rgba(15,23,42,0.5)'
+                                            : idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                                        transition: 'all 0.2s ease',
+                                        borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`
+                                    }}
+                                    onMouseOver={(e) => e.currentTarget.style.background = isDark ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.08)'}
+                                    onMouseOut={(e) => e.currentTarget.style.background = isDark 
+                                        ? idx % 2 === 0 ? 'rgba(30,41,59,0.5)' : 'rgba(15,23,42,0.5)'
+                                        : idx % 2 === 0 ? '#ffffff' : '#f8fafc'}
+                                >
+                                    <td style={{ padding: '12px 16px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <div style={{ 
+                                                width: '36px', height: '36px', borderRadius: '10px', 
+                                                background: invoice.source === 'wash' ? '#06b6d4' : 
+                                                           invoice.source === 'garage' ? '#f59e0b' : '#8b5cf6',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', color: 'white',
+                                                boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
                                             }}>
-                                                {invoice.mpesaCode}
-                                            </span>
-                                        ) : (
-                                            <span style={{ color: theme.textSecondary, fontSize: '12px' }}>-</span>
+                                                {invoice.source === 'wash' ? '🚗' : invoice.source === 'garage' ? '🔧' : '📦'}
+                                            </div>
+                                            <div>
+                                                <div 
+                                                    style={{ fontWeight: '700', color: '#3b82f6', cursor: 'pointer', fontSize: '13px', letterSpacing: '0.3px' }} 
+                                                    onClick={() => viewInvoiceDetails(invoice)}
+                                                >
+                                                    {invoice.invoiceNumber || invoice.id.slice(0, 8).toUpperCase()}
+                                                </div>
+                                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '2px', textTransform: 'capitalize' }}>
+                                                    {invoice.source || 'Service'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td style={{ padding: '12px 16px' }}>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{invoice.customerName || 'Walk-in Customer'}</div>
+                                        {invoice.customerPhone && (
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                <span style={{ opacity: 0.7 }}>📞</span> {invoice.customerPhone}
+                                            </div>
                                         )}
                                     </td>
-                                    <td style={{ padding: '18px 20px', color: theme.textSecondary, fontSize: '12px' }}>
+                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                        <span style={{ 
+                                            fontWeight: '700', 
+                                            color: isDark ? '#f1f5f9' : '#1e293b', 
+                                            fontSize: '12px', 
+                                            background: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)', 
+                                            padding: '6px 12px', 
+                                            borderRadius: '6px',
+                                            letterSpacing: '0.5px'
+                                        }}>
+                                            {invoice.plateNumber || '—'}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                        <div style={{ fontWeight: '800', color: '#10b981', fontSize: '15px', letterSpacing: '-0.3px' }}>
+                                            {formatCurrency(invoice.totalAmount)}
+                                        </div>
+                                    </td>
+                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                        {invoice.paymentStatus === 'paid' ? (
+                                            <span style={{ 
+                                                fontSize: '10px', 
+                                                fontWeight: '700', 
+                                                padding: '6px 12px',
+                                                borderRadius: '20px',
+                                                background: invoice.paymentMethod === 'cash' ? '#f59e0b' : 
+                                                           (invoice.paymentMethod === 'mpesa' || invoice.paymentMethod === 'm-pesa') ? '#10b981' : 
+                                                           invoice.paymentMethod === 'card' ? '#3b82f6' : '#10b981',
+                                                color: 'white',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.5px',
+                                                boxShadow: '0 2px 6px rgba(0,0,0,0.15)'
+                                            }}>
+                                                {invoice.paymentMethod === 'cash' ? '💵 Cash' : 
+                                                 (invoice.paymentMethod === 'mpesa' || invoice.paymentMethod === 'm-pesa') ? '📱 M-Pesa' : 
+                                                 invoice.paymentMethod === 'card' ? '💳 Card' : '✓ Paid'}
+                                            </span>
+                                        ) : (
+                                            <span style={{ 
+                                                fontSize: '10px', fontWeight: '700', padding: '6px 12px', borderRadius: '20px',
+                                                background: '#fbbf24', color: '#78350f',
+                                                textTransform: 'uppercase', letterSpacing: '0.5px'
+                                            }}>⏳ Pending</span>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                        {(invoice.paymentMethod === 'mpesa' || invoice.paymentMethod === 'm-pesa') && invoice.mpesaCode ? (
+                                            <span style={{ 
+                                                fontSize: '11px', fontWeight: '700', color: '#10b981', 
+                                                fontFamily: "'Montserrat', monospace", 
+                                                background: isDark ? 'rgba(16,185,129,0.15)' : 'rgba(16,185,129,0.1)',
+                                                padding: '4px 8px', borderRadius: '4px'
+                                            }}>{invoice.mpesaCode}</span>
+                                        ) : invoice.paymentMethod === 'card' && (invoice.transactionRef || invoice.cardLastFour) ? (
+                                            <span style={{ 
+                                                fontSize: '11px', fontWeight: '700', color: '#3b82f6', 
+                                                fontFamily: "'Montserrat', monospace",
+                                                background: isDark ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.1)',
+                                                padding: '4px 8px', borderRadius: '4px'
+                                            }}>{invoice.transactionRef || `****${invoice.cardLastFour}`}</span>
+                                        ) : (
+                                            <span style={{ color: theme.textMuted, fontSize: '12px' }}>—</span>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '12px 16px', textAlign: 'center', color: theme.textSecondary, fontSize: '12px', fontWeight: '500' }}>
                                         {formatDate(invoice.createdAt)}
                                     </td>
-                                    <td style={{ padding: '18px 20px', textAlign: 'center' }}>
-                                        <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                             {invoice.paymentStatus === 'paid' ? (
                                                 <>
-                                                    <span style={{ 
-                                                        padding: '8px 12px', 
-                                                        background: '#10b981', 
-                                                        color: 'white', 
-                                                        fontSize: '10px', 
-                                                        fontWeight: '700',
-                                                        letterSpacing: '0.5px',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '4px'
-                                                    }}>
-                                                        ✓ COMPLETED
-                                                    </span>
-                                                    <button
-                                                        onClick={() => handlePrintReceipt(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#3b82f6', color: 'white', fontSize: '12px' }}
-                                                        title="Print Receipt"
-                                                    >
-                                                        🧾
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleCancelPayment(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#f59e0b', color: 'white', fontSize: '12px' }}
-                                                        title="Cancel Payment"
-                                                    >
-                                                        ↩
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDeleteInvoice(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#ef4444', color: 'white', fontSize: '12px' }}
-                                                        title="Delete Invoice"
-                                                    >
-                                                        🗑
-                                                    </button>
+                                                    <button onClick={() => handlePrintReceipt(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(59,130,246,0.2)' : 'rgba(59,130,246,0.1)', 
+                                                        color: '#3b82f6', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s'
+                                                    }} title="Print Receipt">🧾</button>
+                                                    <button onClick={() => handleCancelPayment(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.1)', 
+                                                        color: '#f59e0b', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s'
+                                                    }} title="Revert Payment">↩</button>
+                                                    <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(239,68,68,0.2)' : 'rgba(239,68,68,0.1)', 
+                                                        color: '#ef4444', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s'
+                                                    }} title="Delete">×</button>
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button
-                                                        onClick={() => viewInvoiceDetails(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 14px', background: theme.bgTertiary, color: theme.text }}
-                                                        title="View Details"
-                                                    >
-                                                        VIEW
-                                                    </button>
-                                                    <button
-                                                        onClick={() => openPaymentModal(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 14px', background: '#10b981', color: 'white' }}
-                                                        title="Record Payment"
-                                                    >
-                                                        PAY
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDeleteInvoice(invoice)}
-                                                        style={{ ...buttonStyle, padding: '8px 10px', background: '#ef4444', color: 'white', fontSize: '12px' }}
-                                                        title="Delete Invoice"
-                                                    >
-                                                        🗑
-                                                    </button>
+                                                    <button onClick={() => openPaymentModal(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 14px', 
+                                                        background: '#10b981', 
+                                                        color: 'white', fontSize: '11px', fontWeight: '700', border: 'none', borderRadius: '8px',
+                                                        boxShadow: '0 2px 8px rgba(16,185,129,0.3)',
+                                                        transition: 'all 0.2s', letterSpacing: '0.5px'
+                                                    }} title="Record Payment">PAY NOW</button>
+                                                    <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(239,68,68,0.2)' : 'rgba(239,68,68,0.1)', 
+                                                        color: '#ef4444', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s'
+                                                    }} title="Delete">×</button>
                                                 </>
                                             )}
                                         </div>
@@ -18443,6 +18709,102 @@ function BillingModule() {
                         )}
                     </tbody>
                 </table>
+                
+                {/* Pagination Controls */}
+                {getFilteredInvoices().length > 0 && (
+                    <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        padding: '16px 20px', 
+                        background: isDark ? 'rgba(30,41,59,0.8)' : 'rgba(248,250,252,0.9)', 
+                        borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}`,
+                        flexWrap: 'wrap',
+                        gap: '12px'
+                    }}>
+                        {/* Results info */}
+                        <div style={{ color: theme.textSecondary, fontSize: '13px', fontWeight: '500' }}>
+                            Showing <span style={{ color: '#3b82f6', fontWeight: '700' }}>{((currentPage - 1) * itemsPerPage) + 1}</span> - <span style={{ color: '#3b82f6', fontWeight: '700' }}>{Math.min(currentPage * itemsPerPage, getFilteredInvoices().length)}</span> of <span style={{ color: theme.text, fontWeight: '700' }}>{getFilteredInvoices().length.toLocaleString()}</span> transactions
+                        </div>
+                        
+                        {/* Pagination buttons */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} style={{ 
+                                ...buttonStyle, padding: '8px 12px', 
+                                background: currentPage === 1 ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : (isDark ? 'rgba(255,255,255,0.1)' : 'white'),
+                                color: currentPage === 1 ? theme.textMuted : theme.text, 
+                                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, 
+                                borderRadius: '8px', fontSize: '12px', fontWeight: '600',
+                                opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
+                            }}>⟪</button>
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ 
+                                ...buttonStyle, padding: '8px 14px', 
+                                background: currentPage === 1 ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : (isDark ? 'rgba(255,255,255,0.1)' : 'white'),
+                                color: currentPage === 1 ? theme.textMuted : theme.text, 
+                                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, 
+                                borderRadius: '8px', fontSize: '12px', fontWeight: '500',
+                                opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
+                            }}>← Prev</button>
+                            
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '0 8px' }}>
+                                {(() => {
+                                    const totalPages = getTotalPages();
+                                    const pages = [];
+                                    let startPage = Math.max(1, currentPage - 2);
+                                    let endPage = Math.min(totalPages, currentPage + 2);
+                                    if (currentPage <= 3) endPage = Math.min(5, totalPages);
+                                    if (currentPage >= totalPages - 2) startPage = Math.max(1, totalPages - 4);
+                                    
+                                    if (startPage > 1) {
+                                        pages.push(<button key={1} onClick={() => setCurrentPage(1)} style={{ ...buttonStyle, padding: '8px 12px', background: isDark ? 'rgba(255,255,255,0.1)' : 'white', color: theme.text, border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, borderRadius: '8px', minWidth: '36px', fontSize: '12px', fontWeight: '500' }}>1</button>);
+                                        if (startPage > 2) pages.push(<span key="s" style={{ padding: '0 6px', color: theme.textSecondary, fontWeight: '500' }}>…</span>);
+                                    }
+                                    for (let i = startPage; i <= endPage; i++) {
+                                        pages.push(<button key={i} onClick={() => setCurrentPage(i)} style={{ 
+                                            ...buttonStyle, padding: '8px 12px', 
+                                            background: currentPage === i ? '#3b82f6' : (isDark ? 'rgba(255,255,255,0.1)' : 'white'), 
+                                            color: currentPage === i ? 'white' : theme.text, 
+                                            border: currentPage === i ? 'none' : `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, 
+                                            borderRadius: '8px', fontWeight: currentPage === i ? '700' : '500', minWidth: '36px', fontSize: '12px',
+                                            boxShadow: currentPage === i ? '0 2px 8px rgba(59,130,246,0.4)' : 'none'
+                                        }}>{i}</button>);
+                                    }
+                                    if (endPage < totalPages) {
+                                        if (endPage < totalPages - 1) pages.push(<span key="e" style={{ padding: '0 6px', color: theme.textSecondary, fontWeight: '500' }}>…</span>);
+                                        pages.push(<button key={totalPages} onClick={() => setCurrentPage(totalPages)} style={{ ...buttonStyle, padding: '8px 12px', background: isDark ? 'rgba(255,255,255,0.1)' : 'white', color: theme.text, border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, borderRadius: '8px', minWidth: '36px', fontSize: '12px', fontWeight: '500' }}>{totalPages}</button>);
+                                    }
+                                    return pages;
+                                })()}
+                            </div>
+                            
+                            <button onClick={() => setCurrentPage(p => Math.min(getTotalPages(), p + 1))} disabled={currentPage === getTotalPages()} style={{ 
+                                ...buttonStyle, padding: '8px 14px', 
+                                background: currentPage === getTotalPages() ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : (isDark ? 'rgba(255,255,255,0.1)' : 'white'),
+                                color: currentPage === getTotalPages() ? theme.textMuted : theme.text, 
+                                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, 
+                                borderRadius: '8px', fontSize: '12px', fontWeight: '500',
+                                opacity: currentPage === getTotalPages() ? 0.5 : 1, cursor: currentPage === getTotalPages() ? 'not-allowed' : 'pointer'
+                            }}>Next →</button>
+                            <button onClick={() => setCurrentPage(getTotalPages())} disabled={currentPage === getTotalPages()} style={{ 
+                                ...buttonStyle, padding: '8px 12px', 
+                                background: currentPage === getTotalPages() ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : (isDark ? 'rgba(255,255,255,0.1)' : 'white'),
+                                color: currentPage === getTotalPages() ? theme.textMuted : theme.text, 
+                                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`, 
+                                borderRadius: '8px', fontSize: '12px', fontWeight: '600',
+                                opacity: currentPage === getTotalPages() ? 0.5 : 1, cursor: currentPage === getTotalPages() ? 'not-allowed' : 'pointer'
+                            }}>⟫</button>
+                            
+                            <div style={{ marginLeft: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ color: theme.textSecondary, fontSize: '12px', fontWeight: '500' }}>Go to</span>
+                                <input type="number" min={1} max={getTotalPages()} value={currentPage} onChange={(e) => { const p = parseInt(e.target.value); if (p >= 1 && p <= getTotalPages()) setCurrentPage(p); }} style={{ 
+                                    ...inputStyle, width: '50px', padding: '6px 10px', textAlign: 'center', fontSize: '12px', fontWeight: '600',
+                                    borderRadius: '8px', border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                                    background: isDark ? 'rgba(255,255,255,0.1)' : 'white'
+                                }} />
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
             ) : (
             /* Expenses Table - Show when on expenses tab */
@@ -18598,6 +18960,24 @@ function BillingModule() {
                                 <span style={{ fontSize: '24px' }}>📱</span>
                                 M-PESA PAYMENT
                             </button>
+
+                            <button
+                                onClick={openCardModal}
+                                style={{ 
+                                    ...buttonStyle, 
+                                    padding: '18px', 
+                                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)', 
+                                    color: 'white',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '12px',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                <span style={{ fontSize: '24px' }}>💳</span>
+                                CARD PAYMENT
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -18679,8 +19059,49 @@ function BillingModule() {
                             </div>
                         )}
 
-                        {/* Phone input */}
+                        {/* Mode Toggle */}
                         {(!mpesaStatus || mpesaStatus.status === 'failed') && (
+                            <div style={{ display: 'flex', marginBottom: '20px', borderRadius: '0', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
+                                <button
+                                    onClick={() => setMpesaMode('stk')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        border: 'none',
+                                        background: mpesaMode === 'stk' ? 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)' : theme.bgSecondary,
+                                        color: mpesaMode === 'stk' ? 'white' : theme.textSecondary,
+                                        fontWeight: '600',
+                                        fontSize: '12px',
+                                        cursor: 'pointer',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                    }}
+                                >
+                                    📲 STK Push
+                                </button>
+                                <button
+                                    onClick={() => setMpesaMode('manual')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        border: 'none',
+                                        borderLeft: `1px solid ${theme.border}`,
+                                        background: mpesaMode === 'manual' ? 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)' : theme.bgSecondary,
+                                        color: mpesaMode === 'manual' ? 'white' : theme.textSecondary,
+                                        fontWeight: '600',
+                                        fontSize: '12px',
+                                        cursor: 'pointer',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.5px'
+                                    }}
+                                >
+                                    ✏️ Enter Code
+                                </button>
+                            </div>
+                        )}
+
+                        {/* STK Push Mode */}
+                        {mpesaMode === 'stk' && (!mpesaStatus || mpesaStatus.status === 'failed') && (
                             <>
                                 <div style={{ marginBottom: '24px' }}>
                                     <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -18723,6 +19144,64 @@ function BillingModule() {
                             </>
                         )}
 
+                        {/* Manual Code Entry Mode */}
+                        {mpesaMode === 'manual' && (!mpesaStatus || mpesaStatus.status === 'failed') && (
+                            <>
+                                <div style={{ marginBottom: '16px' }}>
+                                    <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                        M-Pesa Transaction Code *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={manualMpesaCode}
+                                        onChange={(e) => setManualMpesaCode(e.target.value.toUpperCase())}
+                                        placeholder="e.g., QJK3L5M7N9"
+                                        style={{ ...inputStyle, padding: '14px 16px', fontSize: '16px', fontFamily: 'monospace', letterSpacing: '2px' }}
+                                        maxLength={12}
+                                    />
+                                    <p style={{ margin: '10px 0 0', fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                        Enter the M-Pesa confirmation code from SMS
+                                    </p>
+                                </div>
+
+                                <div style={{ marginBottom: '24px' }}>
+                                    <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                        Phone Number (Optional)
+                                    </label>
+                                    <input
+                                        type="tel"
+                                        value={mpesaPhone}
+                                        onChange={(e) => setMpesaPhone(e.target.value)}
+                                        placeholder="e.g., 0712345678"
+                                        style={{ ...inputStyle, padding: '14px 16px', fontSize: '16px' }}
+                                    />
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '0' }}>
+                                    <button
+                                        onClick={() => setShowMpesaModal(false)}
+                                        style={{ ...buttonStyle, flex: 1, background: theme.bgSecondary, color: theme.text, padding: '16px' }}
+                                    >
+                                        CANCEL
+                                    </button>
+                                    <button
+                                        onClick={handleManualMpesaPayment}
+                                        disabled={mpesaLoading || !manualMpesaCode.trim()}
+                                        style={{ 
+                                            ...buttonStyle, 
+                                            flex: 2, 
+                                            background: 'linear-gradient(135deg, #00a651 0%, #007a3d 100%)', 
+                                            color: 'white',
+                                            opacity: mpesaLoading || !manualMpesaCode.trim() ? 0.6 : 1,
+                                            padding: '16px'
+                                        }}
+                                    >
+                                        {mpesaLoading ? 'RECORDING...' : 'CONFIRM PAYMENT'}
+                                    </button>
+                                </div>
+                            </>
+                        )}
+
                         {mpesaStatus?.status === 'success' && (
                             <button
                                 onClick={() => {
@@ -18735,6 +19214,88 @@ function BillingModule() {
                                 Done
                             </button>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Card Payment Modal */}
+            {showCardModal && selectedInvoice && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !actionLoading && setShowCardModal(false)}>
+                    <div style={{ ...cardStyle, width: '440px', maxWidth: '90vw' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ textAlign: 'center', marginBottom: '28px', paddingBottom: '20px', borderBottom: `2px solid ${theme.border}` }}>
+                            <div style={{ 
+                                width: '80px', 
+                                height: '80px', 
+                                margin: '0 auto 16px', 
+                                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)', 
+                                borderRadius: '0',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '36px',
+                                color: 'white'
+                            }}>💳</div>
+                            <h3 style={{ margin: '0 0 8px', color: theme.text, fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Card Payment</h3>
+                            <p style={{ margin: 0, color: theme.textSecondary, fontSize: '14px', fontWeight: '500' }}>
+                                {selectedInvoice.invoiceNumber} • {formatCurrency(selectedInvoice.totalAmount)}
+                            </p>
+                        </div>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                Transaction Reference / Approval Code *
+                            </label>
+                            <input
+                                type="text"
+                                value={cardDetails.transactionRef}
+                                onChange={(e) => setCardDetails(prev => ({ ...prev, transactionRef: e.target.value }))}
+                                placeholder="e.g., TXN123456789"
+                                style={{ ...inputStyle, padding: '14px 16px', fontSize: '16px' }}
+                            />
+                            <p style={{ margin: '10px 0 0', fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                Enter the transaction reference from POS receipt
+                            </p>
+                        </div>
+
+                        <div style={{ marginBottom: '24px' }}>
+                            <label style={{ display: 'block', marginBottom: '10px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                Last 4 Digits of Card (Optional)
+                            </label>
+                            <input
+                                type="text"
+                                value={cardDetails.lastFourDigits}
+                                onChange={(e) => {
+                                    const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                                    setCardDetails(prev => ({ ...prev, lastFourDigits: val }));
+                                }}
+                                placeholder="e.g., 1234"
+                                style={{ ...inputStyle, padding: '14px 16px', fontSize: '16px', fontFamily: 'monospace', letterSpacing: '4px' }}
+                                maxLength={4}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0' }}>
+                            <button
+                                onClick={() => setShowCardModal(false)}
+                                style={{ ...buttonStyle, flex: 1, background: theme.bgSecondary, color: theme.text, padding: '16px' }}
+                            >
+                                CANCEL
+                            </button>
+                            <button
+                                onClick={handleCardPayment}
+                                disabled={actionLoading || !cardDetails.transactionRef.trim()}
+                                style={{ 
+                                    ...buttonStyle, 
+                                    flex: 2, 
+                                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)', 
+                                    color: 'white',
+                                    opacity: actionLoading || !cardDetails.transactionRef.trim() ? 0.6 : 1,
+                                    padding: '16px'
+                                }}
+                            >
+                                {actionLoading ? 'RECORDING...' : 'CONFIRM PAYMENT'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
