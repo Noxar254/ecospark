@@ -1,13 +1,26 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background:#1e3a5f;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ecospark - Car Wash Management</title>
+    <!-- Prevent white flash - set background immediately before any resources load -->
+    <style>
+        html, body { 
+            background: #1e3a5f !important; 
+            margin: 0; 
+            padding: 0;
+        }
+    </style>
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif; }
+        /* Reset body background after CSS loads */
+        body.app-loaded {
+            background: var(--bg-primary) !important;
+            transition: background-color 0.3s ease;
+        }
         /* Fast loading screen styles */
         .loading-screen {
             position: fixed;
@@ -116,6 +129,8 @@
                     const loadingScreen = document.getElementById('loadingScreen');
                     if (loadingScreen) {
                         loadingScreen.classList.add('hidden');
+                        // Switch body background to app theme
+                        document.body.classList.add('app-loaded');
                         setTimeout(() => loadingScreen.remove(), 300);
                     }
                 }, 100);

@@ -1121,227 +1121,381 @@ export const realtimeStatsService = {
 };
 
 // ==================== WASH BAY SERVICE (REAL-TIME) ====================
+// Stable version - defensive coding for long-term use
+
+// Default wash bays configuration (4 bays)
+const DEFAULT_WASH_BAYS = {
+  bay1: { id: 'bay1', name: 'Bay 1', status: 'available', type: 'standard', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+  bay2: { id: 'bay2', name: 'Bay 2', status: 'available', type: 'standard', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+  bay3: { id: 'bay3', name: 'Bay 3', status: 'available', type: 'premium', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+  bay4: { id: 'bay4', name: 'Bay 4', status: 'available', type: 'express', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() }
+};
+
+// Helper: Sanitize data for Firebase (removes undefined values)
+const sanitizeForFirebase = (obj) => {
+  if (obj === null || obj === undefined) return null;
+  if (typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(sanitizeForFirebase);
+  
+  const result = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const value = obj[key];
+      if (value !== undefined) {
+        result[key] = sanitizeForFirebase(value);
+      }
+    }
+  }
+  return result;
+};
+
+// Helper: Safe string - handles objects by extracting name property
+const safeStr = (val, fallback = '') => {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') {
+    // If it's a service object, extract the name
+    if (val.name !== undefined) return String(val.name);
+    // Otherwise try to stringify or return fallback
+    return fallback;
+  }
+  return String(val);
+};
+
+// Helper: Safe number extraction
+const safeNum = (val, fallback = 0) => {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object' && val.price !== undefined) return Number(val.price) || fallback;
+  const num = Number(val);
+  return isNaN(num) ? fallback : num;
+};
 
 export const washBayService = {
-  // Initialize default bays if none exist
-  async initializeBays() {
+  // Initialize default bays if none exist (or force reset)
+  async initializeBays(forceReset = false) {
     try {
       const baysRef = ref(realtimeDb, 'washBays');
       const snapshot = await get(baysRef);
       
-      if (!snapshot.exists()) {
-        const defaultBays = {
-          bay1: { id: 'bay1', name: 'Bay 1', status: 'available', type: 'standard', currentVehicle: null, startTime: null },
-          bay2: { id: 'bay2', name: 'Bay 2', status: 'available', type: 'standard', currentVehicle: null, startTime: null },
-          bay3: { id: 'bay3', name: 'Bay 3', status: 'available', type: 'premium', currentVehicle: null, startTime: null },
-          bay4: { id: 'bay4', name: 'Bay 4', status: 'available', type: 'express', currentVehicle: null, startTime: null }
-        };
-        await set(baysRef, defaultBays);
-        return { success: true, initialized: true };
+      if (!snapshot.exists() || forceReset) {
+        await set(baysRef, sanitizeForFirebase(DEFAULT_WASH_BAYS));
+        return { success: true, initialized: true, baysCount: Object.keys(DEFAULT_WASH_BAYS).length };
       }
-      return { success: true, initialized: false };
+      
+      const existingBays = snapshot.val() || {};
+      return { success: true, initialized: false, baysCount: Object.keys(existingBays).length };
     } catch (error) {
       console.error('Error initializing bays:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
+    }
+  },
+
+  // Reset to default bays (deletes all existing and creates defaults)
+  async resetToDefaultBays() {
+    try {
+      const baysRef = ref(realtimeDb, 'washBays');
+      await remove(baysRef);
+      
+      const freshDefaults = {
+        bay1: { id: 'bay1', name: 'Bay 1', status: 'available', type: 'standard', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+        bay2: { id: 'bay2', name: 'Bay 2', status: 'available', type: 'standard', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+        bay3: { id: 'bay3', name: 'Bay 3', status: 'available', type: 'premium', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() },
+        bay4: { id: 'bay4', name: 'Bay 4', status: 'available', type: 'express', currentVehicle: null, startTime: null, createdAt: new Date().toISOString() }
+      };
+      
+      await set(baysRef, sanitizeForFirebase(freshDefaults));
+      return { success: true, baysCount: 4 };
+    } catch (error) {
+      console.error('Error resetting bays:', error);
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Add a new bay
   async addBay(bayData) {
     try {
-      const bayId = `bay${Date.now()}`;
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
-      await set(bayRef, {
+      if (!bayData || !bayData.name) {
+        return { success: false, error: 'Bay name is required' };
+      }
+      const bayId = 'bay' + Date.now();
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
+      const newBay = sanitizeForFirebase({
         id: bayId,
-        name: bayData.name,
-        type: bayData.type || 'standard',
+        name: safeStr(bayData.name, 'New Bay'),
+        type: safeStr(bayData.type, 'standard'),
         status: 'available',
         currentVehicle: null,
         startTime: null,
         createdAt: new Date().toISOString()
       });
+      await set(bayRef, newBay);
       return { success: true, id: bayId };
     } catch (error) {
       console.error('Error adding bay:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Update bay details
   async updateBay(bayId, updates) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
-      await update(bayRef, {
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
+      const safeUpdates = sanitizeForFirebase({
         ...updates,
         updatedAt: new Date().toISOString()
       });
+      await update(bayRef, safeUpdates);
       return { success: true };
     } catch (error) {
       console.error('Error updating bay:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Delete a bay
   async deleteBay(bayId) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
       await remove(bayRef);
       return { success: true };
     } catch (error) {
       console.error('Error deleting bay:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Update bay status
   async updateBayStatus(bayId, status) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      const validStatuses = ['available', 'occupied', 'maintenance'];
+      const safeStatus = validStatuses.includes(status) ? status : 'available';
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
       await update(bayRef, {
-        status,
+        status: safeStatus,
         lastUpdated: new Date().toISOString()
       });
       return { success: true };
     } catch (error) {
       console.error('Error updating bay status:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Assign vehicle to bay
   async assignVehicle(bayId, vehicleData) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      if (!vehicleData) return { success: false, error: 'Vehicle data is required' };
+      
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
+      const vehicleRecord = sanitizeForFirebase({
+        plateNumber: safeStr(vehicleData.plateNumber, 'Unknown'),
+        customerName: safeStr(vehicleData.customerName, ''),
+        vehicleType: safeStr(vehicleData.vehicleType, ''),
+        service: vehicleData.service || 'Basic Wash',
+        servicePrice: vehicleData.servicePrice || 0,
+        recordId: safeStr(vehicleData.recordId, ''),
+        queueId: safeStr(vehicleData.queueId, ''),
+        assignedBy: safeStr(vehicleData.assignedBy, ''),
+        washedBy: safeStr(vehicleData.washedBy, ''),
+        assignedStaffId: safeStr(vehicleData.assignedStaffId, '')
+      });
+      
       await update(bayRef, {
         status: 'occupied',
-        currentVehicle: {
-          plateNumber: vehicleData.plateNumber,
-          customerName: vehicleData.customerName || '',
-          vehicleType: vehicleData.vehicleType || '',
-          service: vehicleData.service || 'Basic Wash',
-          assignedBy: vehicleData.assignedBy || ''
-        },
+        currentVehicle: vehicleRecord,
         startTime: new Date().toISOString(),
         lastUpdated: new Date().toISOString()
       });
       
-      // Note: History is logged only on completion (includes start time, end time, duration)
-      
       return { success: true };
     } catch (error) {
       console.error('Error assigning vehicle:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
-  // Complete wash and release bay
-  async completeWash(bayId, completionData = {}) {
+  // Complete wash and release bay - logs to wash history
+  async completeWash(bayId, completionData) {
     try {
-      // Get current bay data first
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
-      const snapshot = await get(bayRef);
-      const bayData = snapshot.val();
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
       
-      if (bayData?.currentVehicle) {
-        // Log completion to history
-        const historyRef = ref(realtimeDb, `washHistory/${Date.now()}`);
-        await set(historyRef, {
-          bayId,
-          bayName: bayData.name,
-          action: 'completed',
-          vehicle: bayData.currentVehicle,
-          startTime: bayData.startTime,
-          endTime: new Date().toISOString(),
-          duration: bayData.startTime ? Math.round((Date.now() - new Date(bayData.startTime).getTime()) / 60000) : 0,
-          notes: completionData.notes || '',
-          completedBy: completionData.completedBy || '',
-          timestamp: new Date().toISOString()
-        });
+      const cData = completionData || {};
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
+      const snapshot = await get(bayRef);
+      const bayData = snapshot.exists() ? snapshot.val() : null;
+      
+      // Calculate timing
+      const now = new Date();
+      const endTimeStr = now.toISOString();
+      const startTimeStr = (bayData && bayData.startTime) ? bayData.startTime : endTimeStr;
+      let durationMins = 0;
+      try {
+        if (bayData && bayData.startTime) {
+          durationMins = Math.max(0, Math.round((now.getTime() - new Date(bayData.startTime).getTime()) / 60000));
+        }
+      } catch (e) {
+        durationMins = 0;
       }
+      
+      // Extract vehicle info safely
+      const vehicle = (bayData && bayData.currentVehicle) ? bayData.currentVehicle : {};
+      
+      // Extract service info properly - handle both object and string formats
+      const rawService = vehicle.service || cData.service;
+      const serviceName = safeStr(rawService, 'Car Wash');
+      const servicePrice = safeNum(rawService, vehicle.servicePrice || cData.servicePrice || 0);
+      
+      // Build history record - all fields guaranteed to have values
+      const historyRecord = sanitizeForFirebase({
+        bayId: safeStr(bayId, 'unknown'),
+        bayName: (bayData && bayData.name) ? safeStr(bayData.name) : ('Bay ' + bayId),
+        action: 'completed',
+        vehicle: {
+          plateNumber: safeStr(vehicle.plateNumber || cData.plateNumber, 'Unknown'),
+          customerName: safeStr(vehicle.customerName || cData.customerName, 'Walk-in'),
+          vehicleType: safeStr(vehicle.vehicleType || cData.vehicleType, 'Vehicle'),
+          service: serviceName,
+          servicePrice: servicePrice,
+          assignedBy: safeStr(vehicle.assignedBy || cData.assignedBy, ''),
+          washedBy: safeStr(vehicle.washedBy || cData.washedBy, ''),
+          recordId: safeStr(vehicle.recordId || cData.recordId, '')
+        },
+        startTime: startTimeStr,
+        endTime: endTimeStr,
+        duration: durationMins,
+        notes: safeStr(cData.notes, ''),
+        completedBy: safeStr(cData.completedBy, ''),
+        timestamp: endTimeStr
+      });
+      
+      // Save to wash history
+      const historyRef = ref(realtimeDb, 'washHistory/' + now.getTime());
+      await set(historyRef, historyRecord);
       
       // Clear the bay
       await update(bayRef, {
         status: 'available',
         currentVehicle: null,
         startTime: null,
-        lastUpdated: new Date().toISOString()
+        lastUpdated: endTimeStr
       });
       
-      return { success: true };
+      return { success: true, duration: durationMins };
     } catch (error) {
       console.error('Error completing wash:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
-  // Release bay (make available without logging to history - for cancellations/releases)
+  // Release bay without logging to history (for cancellations)
   async releaseBay(bayId) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
       await update(bayRef, {
         status: 'available',
         currentVehicle: null,
         startTime: null,
         lastUpdated: new Date().toISOString()
       });
-      console.log('Bay released:', bayId);
       return { success: true };
     } catch (error) {
       console.error('Error releasing bay:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
   // Set bay to maintenance mode
-  async setMaintenance(bayId, maintenanceData = {}) {
+  async setMaintenance(bayId, maintenanceData) {
     try {
-      const bayRef = ref(realtimeDb, `washBays/${bayId}`);
-      await update(bayRef, {
+      if (!bayId) return { success: false, error: 'Bay ID is required' };
+      const mData = maintenanceData || {};
+      const bayRef = ref(realtimeDb, 'washBays/' + bayId);
+      await update(bayRef, sanitizeForFirebase({
         status: 'maintenance',
         currentVehicle: null,
         startTime: null,
-        maintenanceNote: maintenanceData.note || '',
-        maintenanceBy: maintenanceData.by || '',
+        maintenanceNote: safeStr(mData.note, ''),
+        maintenanceBy: safeStr(mData.by, ''),
         lastUpdated: new Date().toISOString()
-      });
+      }));
       return { success: true };
     } catch (error) {
       console.error('Error setting maintenance:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error.message || error) };
     }
   },
 
-  // Subscribe to all bays (real-time)
-  subscribeToBays(callback) {
-    const baysRef = ref(realtimeDb, 'washBays');
-    return onValue(baysRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        // Convert object to array
-        const baysArray = Object.values(data);
-        callback(baysArray);
-      } else {
+  // Subscribe to all bays (real-time) - with error handling
+  subscribeToBays(callback, onError) {
+    try {
+      const baysRef = ref(realtimeDb, 'washBays');
+      return onValue(baysRef, (snapshot) => {
+        try {
+          const data = snapshot.val();
+          if (data && typeof data === 'object') {
+            const baysArray = Object.values(data).filter(b => b && b.id);
+            callback(baysArray);
+          } else {
+            callback([]);
+          }
+        } catch (err) {
+          console.error('Error processing bays data:', err);
+          callback([]);
+        }
+      }, (error) => {
+        console.error('Bays subscription error:', error);
+        if (onError) onError(error);
         callback([]);
-      }
-    });
+      });
+    } catch (error) {
+      console.error('Error setting up bays subscription:', error);
+      if (onError) onError(error);
+      return () => {};
+    }
   },
 
-  // Subscribe to wash history (real-time) - optimized for large datasets
-  subscribeToHistory(callback, limitCount = 10000) {
-    const historyRef = ref(realtimeDb, 'washHistory');
-    return onValue(historyRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const historyArray = Object.entries(data)
-          .map(([key, value]) => ({ id: key, ...value }))
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-          .slice(0, limitCount);
-        callback(historyArray);
-      } else {
+  // Subscribe to wash history (real-time) - with error handling
+  subscribeToHistory(callback, limitCount) {
+    try {
+      const limit = limitCount || 10000;
+      const historyRef = ref(realtimeDb, 'washHistory');
+      return onValue(historyRef, (snapshot) => {
+        try {
+          const data = snapshot.val();
+          if (data && typeof data === 'object') {
+            const historyArray = Object.entries(data)
+              .map(function(entry) { 
+                return { id: entry[0], ...entry[1] }; 
+              })
+              .filter(function(record) { 
+                return record && record.action === 'completed'; 
+              })
+              .sort(function(a, b) { 
+                var timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                var timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return timeB - timeA; 
+              })
+              .slice(0, limit);
+            callback(historyArray);
+          } else {
+            callback([]);
+          }
+        } catch (err) {
+          console.error('Error processing history data:', err);
+          callback([]);
+        }
+      }, (error) => {
+        console.error('History subscription error:', error);
         callback([]);
-      }
-    });
+      });
+    } catch (error) {
+      console.error('Error setting up history subscription:', error);
+      return () => {};
+    }
   },
 
   // Get today's stats
@@ -3472,6 +3626,120 @@ export const auditService = {
       return { success: true, data: summary };
     } catch (error) {
       console.error('Error getting user activity:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Track active sessions
+  async startSession(user) {
+    try {
+      const sessionRef = ref(realtimeDb, 'active_sessions/' + user.uid);
+      const sessionData = {
+        odId: user.uid,
+        email: user.email || 'unknown',
+        displayName: user.displayName || user.email?.split('@')[0] || 'Unknown',
+        loginTime: new Date().toISOString(),
+        lastActivity: new Date().toISOString(),
+        status: 'active',
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null
+      };
+      await set(sessionRef, sessionData);
+      return { success: true };
+    } catch (error) {
+      console.error('Error starting session:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update session activity (heartbeat)
+  async updateSessionActivity(userId) {
+    try {
+      const sessionRef = ref(realtimeDb, 'active_sessions/' + userId);
+      await update(sessionRef, {
+        lastActivity: new Date().toISOString(),
+        status: 'active'
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // End session (logout)
+  async endSession(userId) {
+    try {
+      const sessionRef = ref(realtimeDb, 'active_sessions/' + userId);
+      await remove(sessionRef);
+      return { success: true };
+    } catch (error) {
+      console.error('Error ending session:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all active sessions
+  async getActiveSessions() {
+    try {
+      const sessionsRef = ref(realtimeDb, 'active_sessions');
+      const snapshot = await get(sessionsRef);
+      const data = snapshot.val();
+      if (!data) return { success: true, data: [] };
+      
+      const sessions = Object.entries(data).map(([id, session]) => ({
+        odId: id,
+        ...session
+      }));
+      return { success: true, data: sessions };
+    } catch (error) {
+      console.error('Error getting active sessions:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to active sessions
+  subscribeToActiveSessions(callback) {
+    const sessionsRef = ref(realtimeDb, 'active_sessions');
+    return onValue(sessionsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const sessions = Object.entries(data).map(([id, session]) => ({
+          odId: id,
+          ...session
+        }));
+        callback(sessions);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Check if user is currently active
+  isUserActive(activeSessions, userId) {
+    return activeSessions.some(s => s.odId === userId && s.status === 'active');
+  },
+
+  // Get user's last login info
+  async getUserLastLogin(userId) {
+    try {
+      const result = await this.getAuditLogs({ userId, action: 'login', limit: 1 });
+      if (result.success && result.data.length > 0) {
+        return { success: true, data: result.data[0] };
+      }
+      return { success: true, data: null };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get user's last logout info
+  async getUserLastLogout(userId) {
+    try {
+      const result = await this.getAuditLogs({ userId, action: 'logout', limit: 1 });
+      if (result.success && result.data.length > 0) {
+        return { success: true, data: result.data[0] };
+      }
+      return { success: true, data: null };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   }

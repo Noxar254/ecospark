@@ -51,14 +51,16 @@ function LoginPage({ onLoginSuccess }) {
                         setLoading(false);
                         return;
                     }
-                    // Log successful login
+                    // Log successful login and start session
                     await services.auditService?.logLogin(result.user, true);
+                    await services.auditService?.startSession(result.user);
                     onLoginSuccess(result.user, userResult.data);
                 } else {
                     const initResult = await services.userService.initializeAdminUser(result.user.uid, result.user.email);
                     if (initResult.isFirstUser) {
                         const newUserResult = await services.userService.getUserProfile(result.user.uid);
                         await services.auditService?.logLogin(result.user, true);
+                        await services.auditService?.startSession(result.user);
                         onLoginSuccess(result.user, newUserResult.data);
                     } else {
                         await services.userService.createUserProfile(result.user.uid, {
@@ -68,6 +70,7 @@ function LoginPage({ onLoginSuccess }) {
                         });
                         const newUserResult = await services.userService.getUserProfile(result.user.uid);
                         await services.auditService?.logLogin(result.user, true);
+                        await services.auditService?.startSession(result.user);
                         onLoginSuccess(result.user, newUserResult.data);
                     }
                 }
@@ -1978,20 +1981,22 @@ function VehicleIntake() {
             
             let services = getServices();
 
-            // Wait for services if not ready - use fast polling
+            // Wait for services if not ready - faster polling with exponential backoff
             if (!services) {
                 let attempts = 0;
-                while (!services && attempts < 20 && subscriptionsRef.current.mounted) {
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                let delay = 25;
+                while (!services && attempts < 15 && subscriptionsRef.current.mounted) {
+                    await new Promise(resolve => setTimeout(resolve, delay));
                     services = getServices();
                     attempts++;
+                    delay = Math.min(delay * 1.5, 100); // Exponential backoff up to 100ms
                 }
                 
                 if (!services) {
                     console.error('❌ FirebaseServices not available');
                     if (subscriptionsRef.current.mounted) {
                         setError('Connecting...');
-                        setTimeout(initializeData, 100);
+                        setTimeout(initializeData, 50);
                     }
                     return;
                 }
@@ -2002,156 +2007,128 @@ function VehicleIntake() {
             
             // Clear loading error if we got services
             setError(null);
+            
+            // Set loading false early to show UI faster
+            setLoading(false);
 
             const { intakeQueueService, intakeRecordsService, intakeBaysService, packagesService } = services;
             
-            if (!intakeQueueService || !intakeRecordsService || !intakeBaysService) {
+            if (!intakeQueueService || !intakeRecordsService) {
                 console.error('❌ Required intake services not available');
                 setError('Required services incomplete.');
                 return;
             }
 
             try {
-                // Initialize bays if needed
-                await intakeBaysService.initializeBays();
+                // Subscribe to critical data first (queue and records) - in parallel
+                const criticalSubscriptions = [];
                 
-                // Check if still mounted
+                // Subscribe to queue (Realtime Database) - CRITICAL
+                criticalSubscriptions.push(new Promise(resolve => {
+                    subscriptionsRef.current.queue = intakeQueueService.subscribeToQueue(
+                        (queueData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                setQueue(queueData);
+                            }
+                            resolve();
+                        },
+                        (err) => {
+                            console.error('Queue subscription error:', err);
+                            resolve();
+                        }
+                    );
+                }));
+
+                // Subscribe to vehicle records (Firestore) - CRITICAL
+                criticalSubscriptions.push(new Promise(resolve => {
+                    subscriptionsRef.current.records = intakeRecordsService.subscribeToRecords(
+                        (recordsData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                setVehicles(recordsData);
+                            }
+                            resolve();
+                        },
+                        (err) => {
+                            console.error('Records subscription error:', err);
+                            resolve();
+                        }
+                    );
+                }));
+                
+                // Wait for critical subscriptions to get first data
+                await Promise.race([
+                    Promise.all(criticalSubscriptions),
+                    new Promise(resolve => setTimeout(resolve, 500)) // Max 500ms wait
+                ]);
+                
                 if (!subscriptionsRef.current.mounted) return;
-                
-                // Subscribe to queue (Realtime Database) - PERSISTED DATA
-                console.log('📡 Subscribing to queue...');
-                subscriptionsRef.current.queue = intakeQueueService.subscribeToQueue(
-                    (queueData) => {
-                        if (subscriptionsRef.current.mounted) {
-                            console.log('📥 Queue updated:', queueData.length, 'items');
-                            setQueue(queueData);
-                        }
-                    },
-                    (err) => {
-                        console.error('Queue subscription error:', err);
-                        if (subscriptionsRef.current.mounted) {
-                            setError('Failed to load queue data');
-                        }
-                    }
-                );
 
-                // Subscribe to vehicle records (Firestore)
-                subscriptionsRef.current.records = intakeRecordsService.subscribeToRecords(
-                    (recordsData) => {
-                        if (subscriptionsRef.current.mounted) {
-                            console.log('📥 Records updated:', recordsData.length, 'items');
-                            setVehicles(recordsData);
-                        }
-                    },
-                    (err) => {
-                        console.error('Records subscription error:', err);
-                        if (subscriptionsRef.current.mounted) {
-                            setError('Failed to load vehicle records');
-                        }
-                    }
-                );
-
-                // Subscribe to bays from WASH BAYS (Realtime Database) - this is the source of truth for bay status
-                // Use washBayService instead of intakeBaysService to get real-time wash status
+                // Subscribe to non-critical data in background (don't await)
+                // Bays
                 if (services.washBayService?.subscribeToBays) {
                     subscriptionsRef.current.bays = services.washBayService.subscribeToBays(
                         (baysData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Wash Bays updated:', baysData.length, 'bays');
                                 setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
                             }
                         },
-                        (err) => {
-                            console.error('Wash Bays subscription error:', err);
-                            // Fallback to intake bays if wash bays fail
-                            if (intakeBaysService?.subscribeToBays) {
-                                subscriptionsRef.current.bays = intakeBaysService.subscribeToBays(
-                                    (baysData) => {
-                                        if (subscriptionsRef.current.mounted) {
-                                            setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
-                                        }
-                                    }
-                                );
-                            }
-                        }
+                        () => {} // Silent error
                     );
-                } else {
-                    // Fallback to intake bays
+                } else if (intakeBaysService?.subscribeToBays) {
                     subscriptionsRef.current.bays = intakeBaysService.subscribeToBays(
                         (baysData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Bays updated:', baysData.length, 'bays');
                                 setBays(baysData.length > 0 ? baysData : DEFAULT_BAYS);
                             }
-                        },
-                        (err) => {
-                            console.error('Bays subscription error:', err);
                         }
                     );
                 }
 
-                // Subscribe to service packages (Firestore)
+                // Service packages - load async
                 if (packagesService) {
-                    await packagesService.initializeDefaultPackages();
-                    if (!subscriptionsRef.current.mounted) return;
-                    
                     subscriptionsRef.current.packages = packagesService.subscribeToPackages(
                         (packagesData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Packages updated:', packagesData.length, 'packages');
-                                // Only include active packages
                                 setServicePackages(packagesData.filter(p => p.isActive !== false));
                             }
-                        },
-                        (err) => {
-                            console.error('Packages subscription error:', err);
                         }
                     );
                 }
 
-                // Subscribe to vehicle profiles (for visit history)
+                // Vehicle profiles - load async (non-critical)
                 if (services.vehicleHistoryService) {
                     subscriptionsRef.current.vehicleProfiles = services.vehicleHistoryService.subscribeToVehicleProfiles(
                         (profilesData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Vehicle profiles updated:', profilesData.length, 'profiles');
                                 setVehicleProfiles(profilesData);
                             }
-                        },
-                        (err) => {
-                            console.error('Vehicle profiles subscription error:', err);
                         }
                     );
                 }
 
-                // Subscribe to staff list (for assignment)
+                // Staff list - load async
                 if (services.staffService?.subscribeToAllStaff) {
                     subscriptionsRef.current.staff = services.staffService.subscribeToAllStaff(
                         (staffData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Staff updated:', staffData.length, 'staff');
                                 setStaffList(staffData.filter(s => s.status === 'active'));
                             }
                         }
                     );
                 }
 
-                // Subscribe to invoices for payment status
+                // Invoices - load async
                 if (services.billingService?.subscribeToInvoices) {
                     subscriptionsRef.current.invoices = services.billingService.subscribeToInvoices(
                         (invoicesData) => {
                             if (subscriptionsRef.current.mounted) {
-                                console.log('📥 Invoices updated:', invoicesData.length, 'invoices');
                                 setInvoices(invoicesData);
                             }
                         }
                     );
                 }
 
-                if (subscriptionsRef.current.mounted) {
-                    setLoading(false);
-                    console.log('✅ VehicleIntake: Subscriptions active');
-                }
+                console.log('✅ VehicleIntake: Subscriptions active');
                 
             } catch (err) {
                 console.error('❌ Failed to initialize:', err);
@@ -2430,9 +2407,13 @@ function VehicleIntake() {
             const bay = bays.find(b => b.id === bayId);
             const { id: queueId, ...vehicleData } = selectedVehicle;
             
-            // Get selected staff info
+            // Get selected staff info (who will wash the vehicle)
             const assignedStaff = staffList.find(s => s.id === selectedStaffId);
-            const assignedBy = assignedStaff?.name || '';
+            const washedBy = assignedStaff?.name || '';
+            
+            // Get the current logged-in user (who is assigning the vehicle)
+            const currentUser = window.currentUserProfile;
+            const assignedByUser = (currentUser && currentUser.displayName) || (currentUser && currentUser.email) || 'System';
             
             // Prepare vehicle record data
             const recordData = {
@@ -2441,7 +2422,8 @@ function VehicleIntake() {
                 status: 'in-progress',
                 assignedBay: bay.name,
                 assignedBayId: bayId,
-                assignedBy: assignedBy,
+                assignedBy: assignedByUser,
+                washedBy: washedBy,
                 assignedStaffId: selectedStaffId || null,
                 assignedTime: new Date().toISOString(),
                 timeIn: new Date().toISOString()
@@ -2484,12 +2466,13 @@ function VehicleIntake() {
                     servicePrice: selectedVehicle.service?.price || selectedVehicle.servicePrice || 0,
                     recordId: result.id,
                     queueId: queueId,
-                    assignedBy: assignedBy,
+                    assignedBy: assignedByUser,
+                    washedBy: washedBy,
                     assignedStaffId: selectedStaffId || null,
                     startTime: new Date().toISOString()
                 };
                 await services.washBayService.assignVehicle(bayId, vehicleDataForBay);
-                console.log('✅ Wash bay updated to occupied:', bayId, 'Staff:', assignedBy);
+                console.log('✅ Wash bay updated to occupied:', bayId, 'Assigned by:', assignedByUser, 'Washed by:', washedBy);
             }
 
             // Remove from queue
@@ -9222,117 +9205,123 @@ function GarageManagement() {
         { id: 'urgent', name: 'Urgent', color: '#ef4444' }
     ];
 
-    // Initialize Firebase subscriptions
+    // Initialize Firebase subscriptions - OPTIMIZED
     useEffect(() => {
+        let mounted = true;
         let unsubQueue, unsubJobs, unsubGarageServices, unsubIntakeQueue, unsubIntakeRecords, unsubStaff;
-        let retryCount = 0;
-        const maxRetries = 10;
 
         const initializeData = async () => {
-            // Wait for Firebase services to be available
+            // Fast service detection with exponential backoff
             let services = window.FirebaseServices;
-            while (!services && retryCount < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+            let attempts = 0;
+            let delay = 25;
+            
+            while (!services && attempts < 12 && mounted) {
+                await new Promise(resolve => setTimeout(resolve, delay));
                 services = window.FirebaseServices;
-                retryCount++;
+                attempts++;
+                delay = Math.min(delay * 1.5, 100);
             }
 
-            if (!services) {
-                console.error('❌ Firebase services not available after retries');
-                setLoading(false);
-                setError('Firebase services not available. Please refresh.');
+            if (!services || !mounted) {
+                if (mounted) {
+                    setLoading(false);
+                    setError('Firebase services not available. Please refresh.');
+                }
                 return;
             }
 
-            console.log('🔧 Garage: Firebase services available, initializing...');
+            // Set loading false early to show UI faster
+            setLoading(false);
 
             try {
-                // Initialize default garage services
-                if (services.garageServicesService) {
-                    await services.garageServicesService.initializeDefaultServices();
-                }
-
-                // Subscribe to garage queue
+                // Subscribe to critical data first - garage queue and jobs in parallel
+                const criticalPromises = [];
+                
+                // Garage queue - CRITICAL
                 if (services.garageQueueService) {
-                    unsubQueue = services.garageQueueService.subscribeToQueue(
-                        (data) => {
-                            console.log('🔧 Garage queue updated:', data.length, 'items');
-                            setQueue(data);
-                        },
-                        (err) => console.error('Garage queue error:', err)
-                    );
+                    criticalPromises.push(new Promise(resolve => {
+                        unsubQueue = services.garageQueueService.subscribeToQueue(
+                            (data) => {
+                                if (mounted) setQueue(data);
+                                resolve();
+                            },
+                            () => resolve()
+                        );
+                    }));
                 }
 
-                // Subscribe to garage jobs
+                // Garage jobs - CRITICAL
                 if (services.garageJobsService) {
-                    unsubJobs = services.garageJobsService.subscribeToJobs(
-                        (data) => setJobs(data),
-                        (err) => console.error('Garage jobs error:', err)
-                    );
+                    criticalPromises.push(new Promise(resolve => {
+                        unsubJobs = services.garageJobsService.subscribeToJobs(
+                            (data) => {
+                                if (mounted) setJobs(data);
+                                resolve();
+                            },
+                            () => resolve()
+                        );
+                    }));
                 }
+                
+                // Wait for critical data (max 500ms)
+                await Promise.race([
+                    Promise.all(criticalPromises),
+                    new Promise(resolve => setTimeout(resolve, 500))
+                ]);
+                
+                if (!mounted) return;
 
-                // Subscribe to garage services catalog
+                // Non-critical subscriptions - load async in background
+                // Garage services catalog
                 if (services.garageServicesService) {
                     unsubGarageServices = services.garageServicesService.subscribeToServices(
-                        (data) => setGarageServices(data.filter(s => s.isActive !== false)),
-                        (err) => console.error('Garage services error:', err)
+                        (data) => { if (mounted) setGarageServices(data.filter(s => s.isActive !== false)); }
                     );
                 }
 
-                // Subscribe to intake queue (to pull waiting vehicles)
+                // Intake queue (for pulling vehicles)
                 if (services.intakeQueueService) {
-                    console.log('🔧 Subscribing to intake queue for garage...');
                     unsubIntakeQueue = services.intakeQueueService.subscribeToQueue(
-                        (data) => {
-                            console.log('🚗 Intake queue for garage:', data.length, 'waiting');
-                            setIntakeVehicles(data);
-                        },
-                        (err) => console.error('Intake queue error:', err)
+                        (data) => { if (mounted) setIntakeVehicles(data); }
                     );
-                } else {
-                    console.error('❌ intakeQueueService not available');
                 }
 
-                // Subscribe to intake records (vehicles assigned to bays/in-progress)
+                // Intake records (vehicles in bays)
                 if (services.intakeRecordsService) {
-                    console.log('🔧 Subscribing to intake records for garage...');
                     unsubIntakeRecords = services.intakeRecordsService.subscribeToRecords(
                         (data) => {
-                            // Filter to only in-progress vehicles (not completed)
-                            const activeRecords = data.filter(r => r.status === 'in-progress');
-                            console.log('🚗 Intake records for garage:', activeRecords.length, 'in-progress');
-                            setIntakeRecords(activeRecords);
-                        },
-                        (err) => console.error('Intake records error:', err)
+                            if (mounted) {
+                                const activeRecords = data.filter(r => r.status === 'in-progress');
+                                setIntakeRecords(activeRecords);
+                            }
+                        }
                     );
                 }
 
-                // Subscribe to staff list for technician assignment
+                // Staff list for technician assignment
                 if (services.staffService?.subscribeToStaff) {
                     unsubStaff = services.staffService.subscribeToStaff((data) => {
-                        // Include all active staff for assignment
-                        const activeStaff = data.filter(s => s.status === 'active');
-                        setStaffList(activeStaff);
+                        if (mounted) setStaffList(data.filter(s => s.status === 'active'));
                     });
                 }
 
-                setLoading(false);
             } catch (err) {
                 console.error('Failed to initialize garage:', err);
-                setError('Failed to initialize. Please refresh.');
-                setLoading(false);
+                if (mounted) setError('Failed to initialize. Please refresh.');
             }
         };
 
         initializeData();
 
         return () => {
-            if (unsubQueue) unsubQueue();
-            if (unsubJobs) unsubJobs();
-            if (unsubGarageServices) unsubGarageServices();
-            if (unsubIntakeQueue) unsubIntakeQueue();
-            if (unsubIntakeRecords) unsubIntakeRecords();
-            if (unsubStaff) unsubStaff();
+            mounted = false;
+            if (unsubQueue) try { unsubQueue(); } catch(e) {}
+            if (unsubJobs) try { unsubJobs(); } catch(e) {}
+            if (unsubGarageServices) try { unsubGarageServices(); } catch(e) {}
+            if (unsubIntakeQueue) try { unsubIntakeQueue(); } catch(e) {}
+            if (unsubIntakeRecords) try { unsubIntakeRecords(); } catch(e) {}
+            if (unsubStaff) try { unsubStaff(); } catch(e) {}
         };
     }, []);
 
@@ -11916,6 +11905,7 @@ function WashBaysContent() {
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
     const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [showResetModal, setShowResetModal] = useState(false); // Reset bays confirmation
     const [showViewVehicleModal, setShowViewVehicleModal] = useState(false); // View vehicle details
     const [selectedViewVehicle, setSelectedViewVehicle] = useState(null); // Selected vehicle for viewing
     const [confirmAction, setConfirmAction] = useState(null);
@@ -12005,114 +11995,144 @@ function WashBaysContent() {
         maintenance: { label: 'Maintenance', color: '#f59e0b', bg: '#fef3c7' }
     };
 
-    // Subscribe to real-time data
+    // Subscribe to real-time data - STABLE VERSION
     useEffect(() => {
-        const services = window.FirebaseServices;
-        if (!services?.washBayService) {
-            console.error('WashBayService not available');
-            setLoading(false);
-            setError('Wash bay service not available. Please refresh the page.');
-            return;
-        }
-
-        let unsubBays, unsubHistory, unsubQueue, unsubStaff, unsubPackages, unsubRecords, unsubInvoices;
+        let mounted = true;
+        let unsubBays = null;
+        let unsubHistory = null;
+        let unsubQueue = null;
+        let unsubStaff = null;
+        let unsubPackages = null;
+        let unsubRecords = null;
+        let unsubInvoices = null;
 
         const initializeData = async () => {
             try {
+                const services = window.FirebaseServices;
+                if (!services || !services.washBayService) {
+                    if (mounted) {
+                        setError('Wash bay service not available. Please refresh.');
+                        setLoading(false);
+                    }
+                    return;
+                }
+
                 // Initialize bays if needed
                 await services.washBayService.initializeBays();
 
-                // Subscribe to bays
-                unsubBays = services.washBayService.subscribeToBays((data) => {
-                    try {
-                        const baysData = Array.isArray(data)
-                            ? data
-                            : data && typeof data === 'object'
-                                ? Object.values(data)
-                                : [];
-                        console.log('WashBays: Received bays data', baysData.length);
-                        setBays(baysData);
-                        setLoading(false);
-                    } catch (cbErr) {
-                        console.error('WashBays: Error handling bays data', cbErr);
-                        setError('Failed to load wash bays data.');
+                if (!mounted) return;
+
+                // Subscribe to bays with error handling
+                unsubBays = services.washBayService.subscribeToBays(
+                    function(data) {
+                        if (!mounted) return;
+                        try {
+                            var baysData = Array.isArray(data) ? data : [];
+                            setBays(baysData);
+                            setLoading(false);
+                        } catch (err) {
+                            console.error('Error processing bays:', err);
+                            setBays([]);
+                            setLoading(false);
+                        }
+                    },
+                    function(err) {
+                        if (!mounted) return;
+                        console.error('Bays subscription error:', err);
+                        setError('Failed to load wash bays.');
                         setLoading(false);
                     }
-                });
+                );
 
                 // Subscribe to history
-                unsubHistory = services.washBayService.subscribeToHistory((data) => {
-                    setHistory(data);
+                unsubHistory = services.washBayService.subscribeToHistory(function(data) {
+                    if (mounted) setHistory(data || []);
                 });
 
                 // Subscribe to invoices for payment status
-                if (services.billingService?.subscribeToInvoices) {
-                    unsubInvoices = services.billingService.subscribeToInvoices((data) => {
-                        // Filter only wash-related invoices
-                        const washInvoices = data.filter(inv => inv.source === 'wash');
-                        setInvoices(washInvoices);
+                if (services.billingService && services.billingService.subscribeToInvoices) {
+                    unsubInvoices = services.billingService.subscribeToInvoices(function(data) {
+                        if (!mounted) return;
+                        try {
+                            var washInvoices = (data || []).filter(function(inv) { return inv.source === 'wash'; });
+                            setInvoices(washInvoices);
+                        } catch (err) {
+                            setInvoices([]);
+                        }
                     });
                 }
 
-                // Subscribe to intake records (for View functionality)
-                if (services.intakeRecordsService) {
-                    unsubRecords = services.intakeRecordsService.subscribeToRecords((data) => {
-                        setIntakeRecords(data);
+                // Subscribe to intake records
+                if (services.intakeRecordsService && services.intakeRecordsService.subscribeToRecords) {
+                    unsubRecords = services.intakeRecordsService.subscribeToRecords(function(data) {
+                        if (mounted) setIntakeRecords(data || []);
                     });
                 }
 
-                // Subscribe to intake queue (vehicles waiting)
-                if (services.intakeQueueService) {
-                    unsubQueue = services.intakeQueueService.subscribeToQueue((data) => {
-                        // Filter only waiting vehicles
-                        setIntakeQueue(data.filter(v => v.status === 'waiting'));
+                // Subscribe to intake queue
+                if (services.intakeQueueService && services.intakeQueueService.subscribeToQueue) {
+                    unsubQueue = services.intakeQueueService.subscribeToQueue(function(data) {
+                        if (!mounted) return;
+                        try {
+                            var waiting = (data || []).filter(function(v) { return v.status === 'waiting'; });
+                            setIntakeQueue(waiting);
+                        } catch (err) {
+                            setIntakeQueue([]);
+                        }
                     });
                 }
 
                 // Subscribe to staff list
-                if (services.staffService) {
-                    unsubStaff = services.staffService.subscribeToStaff((data) => {
-                        setStaffList(data);
+                if (services.staffService && services.staffService.subscribeToStaff) {
+                    unsubStaff = services.staffService.subscribeToStaff(function(data) {
+                        if (mounted) setStaffList(data || []);
                     });
                 }
 
                 // Subscribe to service packages
-                if (services.packagesService) {
-                    unsubPackages = services.packagesService.subscribeToPackages((data) => {
-                        const activePackages = data.filter(p => p.isActive !== false);
-                        setServicePackages(activePackages);
+                if (services.packagesService && services.packagesService.subscribeToPackages) {
+                    unsubPackages = services.packagesService.subscribeToPackages(function(data) {
+                        if (!mounted) return;
+                        try {
+                            var active = (data || []).filter(function(p) { return p.isActive !== false; });
+                            setServicePackages(active);
+                        } catch (err) {
+                            setServicePackages([]);
+                        }
                     });
                 }
 
                 // Get today's stats
-                const result = await services.washBayService.getTodayStats();
-                if (result.success) setTodayStats(result.data);
+                try {
+                    var result = await services.washBayService.getTodayStats();
+                    if (mounted && result && result.success) {
+                        setTodayStats(result.data || { completed: 0, avgTime: 0 });
+                    }
+                } catch (statsErr) {
+                    console.error('Stats error:', statsErr);
+                }
+
             } catch (err) {
                 console.error('WashBays initialization error:', err);
-                setError('Failed to load wash bays. Please refresh.');
-                setLoading(false);
-            } finally {
-                // In case none of the subscriptions fired yet
-                setLoading((prev) => {
-                    if (prev) {
-                        console.warn('WashBays: Forcing loading false after init');
-                        return false;
-                    }
-                    return prev;
-                });
+                if (mounted) {
+                    setError('Failed to load wash bays. Please refresh.');
+                    setLoading(false);
+                }
             }
         };
 
         initializeData();
 
-        return () => {
-            if (unsubBays) unsubBays();
-            if (unsubHistory) unsubHistory();
-            if (unsubQueue) unsubQueue();
-            if (unsubStaff) unsubStaff();
-            if (unsubPackages) unsubPackages();
-            if (unsubRecords) unsubRecords();
-            if (unsubInvoices) unsubInvoices();
+        // Cleanup
+        return function() {
+            mounted = false;
+            if (unsubBays) try { unsubBays(); } catch(e) {}
+            if (unsubHistory) try { unsubHistory(); } catch(e) {}
+            if (unsubQueue) try { unsubQueue(); } catch(e) {}
+            if (unsubStaff) try { unsubStaff(); } catch(e) {}
+            if (unsubPackages) try { unsubPackages(); } catch(e) {}
+            if (unsubRecords) try { unsubRecords(); } catch(e) {}
+            if (unsubInvoices) try { unsubInvoices(); } catch(e) {}
         };
     }, []);
 
@@ -12227,6 +12247,10 @@ function WashBaysContent() {
             const services = window.FirebaseServices;
             let vehicleData;
             let queueVehicle = null;
+            
+            // Get the current logged-in user who is assigning the vehicle
+            const currentUser = window.currentUserProfile;
+            const assignedByName = (currentUser && currentUser.displayName) || (currentUser && currentUser.email) || 'System';
 
             if (assignMode === 'select' && selectedVehicleId) {
                 // Use selected vehicle from queue
@@ -12241,7 +12265,8 @@ function WashBaysContent() {
                     customerName: queueVehicle.customerName || queueVehicle.ownerName || '',
                     vehicleType: queueVehicle.vehicleType || 'sedan',
                     service: serviceInfo,
-                    assignedBy: assignForm.assignedTo,
+                    assignedBy: assignedByName,
+                    washedBy: assignForm.assignedTo,
                     queueId: queueVehicle.id
                 };
             } else if (assignMode === 'assigned' && selectedVehicleId) {
@@ -12257,7 +12282,8 @@ function WashBaysContent() {
                     customerName: assignedVehicle.customerName || '',
                     vehicleType: assignedVehicle.vehicleType || 'sedan',
                     service: serviceInfo,
-                    assignedBy: assignForm.assignedTo,
+                    assignedBy: assignedByName,
+                    washedBy: assignForm.assignedTo,
                     recordId: assignedVehicle.id, // Keep the existing record ID
                     previousBay: assignedVehicle.assignedBay // Track where it was
                 };
@@ -12273,7 +12299,8 @@ function WashBaysContent() {
                     customerName: assignForm.customerName,
                     vehicleType: assignForm.vehicleType,
                     service: serviceInfo,
-                    assignedBy: assignForm.assignedTo
+                    assignedBy: assignedByName,
+                    washedBy: assignForm.assignedTo
                 };
             }
 
@@ -12384,47 +12411,56 @@ function WashBaysContent() {
         setActionLoading(true);
         try {
             const services = window.FirebaseServices;
-            const currentVehicle = bay.currentVehicle;
+            const currentVehicle = bay.currentVehicle || {};
             
             // 1. Update the intake record in Firestore (main tracking)
-            if (currentVehicle?.recordId && services.intakeRecordsService) {
+            if (currentVehicle.recordId && services.intakeRecordsService) {
                 await services.intakeRecordsService.updateRecord(currentVehicle.recordId, {
                     status: 'completed',
                     timeOut: new Date().toISOString()
                 });
             }
             
-            // 2. If vehicle has queue entry, remove or update it
-            if (currentVehicle?.queueId && services.intakeQueueService) {
+            // 2. If vehicle has queue entry, remove it
+            if (currentVehicle.queueId && services.intakeQueueService) {
                 await services.intakeQueueService.removeFromQueue(currentVehicle.queueId);
             }
             
-            // 3. Complete the wash bay (this sets it to available and logs history)
-            await services.washBayService.completeWash(bay.id);
+            // 3. Complete the wash bay - THIS LOGS TO WASH HISTORY
+            const completeResult = await services.washBayService.completeWash(bay.id, {
+                plateNumber: currentVehicle.plateNumber || 'Unknown',
+                customerName: currentVehicle.customerName || 'Walk-in',
+                vehicleType: currentVehicle.vehicleType || 'Vehicle',
+                service: typeof currentVehicle.service === 'object' ? (currentVehicle.service.name || 'Car Wash') : (currentVehicle.service || 'Car Wash'),
+                assignedBy: currentVehicle.assignedBy || ''
+            });
+            
+            if (!completeResult.success) {
+                throw new Error(completeResult.error || 'Failed to complete wash');
+            }
 
             // 4. Create invoice for the completed wash
-            const washPrice = typeof currentVehicle?.service === 'object' 
-                ? currentVehicle?.service?.price 
-                : (currentVehicle?.servicePrice || 500); // Get price from service object or default
-            const serviceName = typeof currentVehicle?.service === 'object' 
-                ? currentVehicle?.service?.name 
-                : currentVehicle?.service || 'Car Wash';
+            const washPrice = typeof currentVehicle.service === 'object' 
+                ? (currentVehicle.service.price || 500) 
+                : 500;
+            const serviceName = typeof currentVehicle.service === 'object' 
+                ? (currentVehicle.service.name || 'Car Wash') 
+                : (currentVehicle.service || 'Car Wash');
+            
             if (services.billingService) {
                 await services.billingService.createInvoice({
                     source: 'wash',
-                    bayId: bay.id,
-                    bayName: bay.name,
-                    plateNumber: currentVehicle?.plateNumber || 'Unknown',
-                    vehicleType: currentVehicle?.vehicleType || 'Vehicle',
-                    customerName: currentVehicle?.customerName || 'Walk-in',
-                    customerPhone: currentVehicle?.customerPhone || '',
+                    bayId: bay.id || 'unknown',
+                    bayName: bay.name || 'Bay',
+                    plateNumber: currentVehicle.plateNumber || 'Unknown',
+                    vehicleType: currentVehicle.vehicleType || 'Vehicle',
+                    customerName: currentVehicle.customerName || 'Walk-in',
+                    customerPhone: currentVehicle.customerPhone || '',
                     services: [{ name: serviceName, price: washPrice }],
                     totalAmount: washPrice,
-                    assignedTo: currentVehicle?.assignedBy || currentVehicle?.assignedTo || '',
-                    startTime: currentVehicle?.startTime || bay.startTime,
-                    washRecordId: currentVehicle?.recordId || null // Link to intake record for tracking
+                    assignedTo: currentVehicle.assignedBy || '',
+                    startTime: bay.startTime || new Date().toISOString()
                 });
-                console.log('Invoice created for wash:', currentVehicle?.plateNumber, 'Amount:', washPrice);
             }
             
             // Refresh stats
@@ -12437,18 +12473,18 @@ function WashBaysContent() {
                 services.activityService.logActivity({
                     type: 'wash',
                     action: 'Wash Completed',
-                    details: `${currentVehicle?.plateNumber} - ${bay.name} - KSH ${washPrice}`,
+                    details: (currentVehicle.plateNumber || 'Vehicle') + ' - ' + (bay.name || 'Bay'),
                     status: 'success',
-                    loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
-                    loggedByEmail: currentUser?.email || null,
-                    loggedByRole: currentUser?.role || null
+                    loggedBy: (currentUser && currentUser.displayName) || 'System',
+                    loggedByEmail: (currentUser && currentUser.email) || null,
+                    loggedByRole: (currentUser && currentUser.role) || null
                 });
             }
             
-            setSuccessMessage(`${currentVehicle?.plateNumber} wash completed!`);
+            setSuccessMessage((currentVehicle.plateNumber || 'Vehicle') + ' wash completed!');
         } catch (err) {
             console.error('Complete wash error:', err);
-            setError('Failed to complete wash');
+            setError('Failed to complete wash: ' + err.message);
         } finally {
             setActionLoading(false);
             setSelectedBay(null);
@@ -12725,23 +12761,45 @@ function WashBaysContent() {
                     ))}
                 </div>
                 {activeTab === 'bays' && (
-                    <button
-                        onClick={() => setShowAddModal(true)}
-                        style={{
-                            padding: '10px 20px',
-                            borderRadius: '2px',
-                            border: 'none',
-                            backgroundColor: '#10b981',
-                            color: 'white',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px'
-                        }}
-                    >
-                        <span style={{ fontSize: '18px' }}>+</span> Add Bay
-                    </button>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <button
+                            onClick={() => setShowAddModal(true)}
+                            style={{
+                                padding: '10px 20px',
+                                borderRadius: '2px',
+                                border: 'none',
+                                backgroundColor: '#10b981',
+                                color: 'white',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px'
+                            }}
+                        >
+                            <span style={{ fontSize: '18px' }}>+</span> Add Bay
+                        </button>
+                        <button
+                            onClick={() => setShowResetModal(true)}
+                            disabled={actionLoading}
+                            style={{
+                                padding: '10px 16px',
+                                borderRadius: '2px',
+                                border: `1px solid ${theme.border}`,
+                                backgroundColor: theme.bg,
+                                color: theme.textSecondary,
+                                fontWeight: '500',
+                                cursor: actionLoading ? 'wait' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '13px'
+                            }}
+                            title="Reset to 4 default wash bays"
+                        >
+                            🔄 Reset Bays
+                        </button>
+                    </div>
                 )}
             </div>
 
@@ -13287,26 +13345,45 @@ function WashBaysContent() {
                                             </tr>
                                         );
                                     }
-                                    return startedRecords.map(record => (
+                                    return startedRecords.map(record => {
+                                        // Use same helper functions for service
+                                        const svcName = (() => {
+                                            const v = record.vehicle;
+                                            if (!v) return '-';
+                                            const svc = v.service;
+                                            if (typeof svc === 'string') return svc || '-';
+                                            if (typeof svc === 'object' && svc !== null) return svc.name || '-';
+                                            return '-';
+                                        })();
+                                        const svcPrice = (() => {
+                                            const v = record.vehicle;
+                                            if (!v) return 0;
+                                            if (typeof v.servicePrice === 'number') return v.servicePrice;
+                                            const svc = v.service;
+                                            if (typeof svc === 'object' && svc !== null && typeof svc.price === 'number') return svc.price;
+                                            if (v.servicePrice) return Number(v.servicePrice) || 0;
+                                            return 0;
+                                        })();
+                                        return (
                                         <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text, fontWeight: '500' }}>
-                                                {record.bayName || record.bayId}
+                                                {record.bayName || record.bayId || '-'}
                                             </td>
                                             <td style={{ padding: '14px 16px' }}>
-                                                <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber}</div>
+                                                <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber || 'Unknown'}</div>
                                                 <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                                {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
+                                                {svcName}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
-                                                KES {(typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.price : 0)?.toLocaleString() || '0'}
+                                                KES {svcPrice.toLocaleString()}
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                                {record.vehicle?.assignedBy || '-'}
+                                                {record.vehicle?.washedBy || record.vehicle?.assignedBy || '-'}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.text }}>
-                                                {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                {record.timestamp ? new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.textSecondary }}>
                                                 -
@@ -13327,14 +13404,35 @@ function WashBaysContent() {
                                                 </span>
                                             </td>
                                         </tr>
-                                    ));
+                                    )});
                                 }
+                                
+                                // Helper to safely get service name
+                                const getServiceName = (vehicle) => {
+                                    if (!vehicle) return '-';
+                                    const svc = vehicle.service;
+                                    if (typeof svc === 'string') return svc || '-';
+                                    if (typeof svc === 'object' && svc !== null) return svc.name || '-';
+                                    return '-';
+                                };
+                                
+                                // Helper to safely get service price
+                                const getServicePrice = (vehicle) => {
+                                    if (!vehicle) return 0;
+                                    // First check servicePrice (direct field)
+                                    if (typeof vehicle.servicePrice === 'number') return vehicle.servicePrice;
+                                    // Then check service object
+                                    const svc = vehicle.service;
+                                    if (typeof svc === 'object' && svc !== null && typeof svc.price === 'number') return svc.price;
+                                    // Try parsing servicePrice as number
+                                    if (vehicle.servicePrice) return Number(vehicle.servicePrice) || 0;
+                                    return 0;
+                                };
                                 
                                 // Show paginated completed records
                                 const rows = paginatedRecords.map(record => {
-                                    const servicePrice = typeof record.vehicle?.service === 'object' 
-                                        ? record.vehicle?.service?.price 
-                                        : (record.vehicle?.servicePrice || 0);
+                                    const serviceName = getServiceName(record.vehicle);
+                                    const servicePrice = getServicePrice(record.vehicle);
                                     
                                     // Find matching invoice - try multiple matching strategies
                                     const matchingInvoice = invoices.find(inv => {
@@ -13357,17 +13455,17 @@ function WashBaysContent() {
                                             {record.bayName || record.bayId}
                                         </td>
                                         <td style={{ padding: '14px 16px' }}>
-                                            <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber}</div>
+                                            <div style={{ fontWeight: '600', color: theme.text }}>{record.vehicle?.plateNumber || 'Unknown'}</div>
                                             <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicle?.customerName || 'Walk-in'}</div>
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                            {typeof record.vehicle?.service === 'object' ? record.vehicle?.service?.name : record.vehicle?.service || '-'}
+                                            {serviceName}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
-                                            KES {servicePrice?.toLocaleString() || '0'}
+                                            KES {servicePrice.toLocaleString()}
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
-                                            {record.vehicle?.assignedBy || record.completedBy || '-'}
+                                            {record.vehicle?.washedBy || record.completedBy || '-'}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: theme.text }}>
                                             {record.startTime ? new Date(record.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
@@ -13388,7 +13486,7 @@ function WashBaysContent() {
                                                     backgroundColor: '#d1fae5',
                                                     color: '#059669'
                                                 }}>
-                                                    ✓ KES {servicePrice?.toLocaleString() || '0'} Paid
+                                                    ✓ KES {servicePrice.toLocaleString()} Paid
                                                 </span>
                                             ) : (
                                                 <span style={{
@@ -13399,7 +13497,7 @@ function WashBaysContent() {
                                                     backgroundColor: '#fef3c7',
                                                     color: '#d97706'
                                                 }}>
-                                                    💰 KES {servicePrice?.toLocaleString() || '0'} Pending
+                                                    💰 KES {servicePrice.toLocaleString()} Pending
                                                 </span>
                                             )}
                                         </td>
@@ -14396,6 +14494,107 @@ function WashBaysContent() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Reset Bays Modal */}
+            {showResetModal && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1100
+                }} onClick={() => setShowResetModal(false)}>
+                    <div style={{
+                        backgroundColor: theme.bg,
+                        borderRadius: '2px',
+                        width: '100%',
+                        maxWidth: '420px',
+                        margin: '20px',
+                        boxShadow: '0 20px 40px rgba(0,0,0,0.3)'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '24px', textAlign: 'center' }}>
+                            <div style={{ 
+                                fontSize: '48px', 
+                                marginBottom: '16px'
+                            }}>
+                                🔄
+                            </div>
+                            <h3 style={{ 
+                                margin: '0 0 8px 0', 
+                                color: theme.text,
+                                fontSize: '18px',
+                                fontWeight: '600'
+                            }}>
+                                Reset Wash Bays
+                            </h3>
+                            <p style={{ 
+                                margin: '0 0 24px 0', 
+                                color: theme.textSecondary,
+                                fontSize: '14px',
+                                lineHeight: '1.6'
+                            }}>
+                                This will remove all existing wash bays and create 4 default bays. Any vehicles currently assigned to bays will be cleared.
+                            </p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={() => setShowResetModal(false)}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: `1px solid ${theme.border}`,
+                                        backgroundColor: 'transparent',
+                                        color: theme.text,
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        setShowResetModal(false);
+                                        setActionLoading(true);
+                                        try {
+                                            const services = window.FirebaseServices;
+                                            const result = await services.washBayService.resetToDefaultBays();
+                                            if (result.success) {
+                                                setSuccessMessage('Reset to ' + result.baysCount + ' default bays!');
+                                            } else {
+                                                setError('Failed to reset bays: ' + result.error);
+                                            }
+                                        } catch (err) {
+                                            setError('Failed to reset bays');
+                                        } finally {
+                                            setActionLoading(false);
+                                        }
+                                    }}
+                                    disabled={actionLoading}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 20px',
+                                        borderRadius: '2px',
+                                        border: 'none',
+                                        backgroundColor: '#f59e0b',
+                                        color: 'white',
+                                        fontWeight: '600',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {actionLoading ? 'Resetting...' : 'Reset Bays'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
@@ -20346,6 +20545,7 @@ function StaffManagement() {
     const [staffList, setStaffList] = useState([]);
     const [usersList, setUsersList] = useState([]);
     const [auditLogs, setAuditLogs] = useState([]);
+    const [activeSessions, setActiveSessions] = useState([]); // Track who's currently logged in
     const [loading, setLoading] = useState(true);
     const [showAddStaffModal, setShowAddStaffModal] = useState(false);
     const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -20480,9 +20680,30 @@ function StaffManagement() {
         if (!services) { setLoading(false); return; }
         let unsubStaff = services.staffService?.subscribeToAllStaff((data) => { setStaffList(data); setLoading(false); });
         let unsubUsers = services.userService?.subscribeToUsers((data) => { setUsersList(data); });
-        let unsubAudit = services.auditService?.subscribeToAuditLogs((data) => { setAuditLogs(data); });
-        return () => { if (unsubStaff) unsubStaff(); if (unsubUsers) unsubUsers(); if (unsubAudit) unsubAudit(); };
+        let unsubAudit = services.auditService?.subscribeToAuditLogs((data) => { setAuditLogs(data); }, 200);
+        let unsubSessions = services.auditService?.subscribeToActiveSessions((data) => { setActiveSessions(data); });
+        return () => { 
+            if (unsubStaff) unsubStaff(); 
+            if (unsubUsers) unsubUsers(); 
+            if (unsubAudit) unsubAudit(); 
+            if (unsubSessions) unsubSessions();
+        };
     }, []);
+
+    // Helper to check if user is currently online
+    const isUserOnline = (userId) => {
+        const session = activeSessions.find(s => s.odId === userId);
+        if (!session) return false;
+        // Check if last activity was within 5 minutes
+        const lastActivity = new Date(session.lastActivity);
+        const now = new Date();
+        return (now - lastActivity) < 300000; // 5 minutes
+    };
+
+    // Get session info for a user
+    const getUserSession = (userId) => {
+        return activeSessions.find(s => s.odId === userId);
+    };
 
     const filteredAuditLogs = auditLogs.filter(log => {
         const matchesSearch = log.userName?.toLowerCase().includes(searchTerm.toLowerCase()) || log.userEmail?.toLowerCase().includes(searchTerm.toLowerCase()) || log.details?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -20826,6 +21047,48 @@ function StaffManagement() {
 
             {activeTab === 'audit' && (
                 <div>
+                    {/* Active Sessions Panel */}
+                    <div style={{ marginBottom: '20px', background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '20px' }}>🟢</span>
+                            <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '600' }}>Currently Active Users ({activeSessions.length})</h3>
+                        </div>
+                        {activeSessions.length === 0 ? (
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>No users currently logged in</p>
+                        ) : (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                                {activeSessions.map(session => {
+                                    const isActive = isUserOnline(session.odId);
+                                    return (
+                                        <div key={session.odId} style={{ 
+                                            padding: '10px 16px', 
+                                            background: isActive ? '#d1fae520' : '#fef3c720', 
+                                            border: `1px solid ${isActive ? '#10b981' : '#f59e0b'}`,
+                                            borderRadius: '8px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '10px'
+                                        }}>
+                                            <div style={{ 
+                                                width: '10px', 
+                                                height: '10px', 
+                                                borderRadius: '50%', 
+                                                background: isActive ? '#10b981' : '#f59e0b',
+                                                animation: isActive ? 'pulse 2s infinite' : 'none'
+                                            }}></div>
+                                            <div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{session.displayName}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{session.email}</div>
+                                                <div style={{ fontSize: '10px', color: theme.textSecondary }}>Since {new Date(session.loginTime).toLocaleTimeString()}</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                    <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }`}</style>
+
                     <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <input type="text" placeholder={'Search logs...'} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ ...inputStyle, maxWidth: '250px', borderRadius: '8px' }} />
                         <select value={auditFilter.action} onChange={(e) => setAuditFilter(prev => ({ ...prev, action: e.target.value }))} style={{ ...inputStyle, maxWidth: '150px', borderRadius: '8px' }}>
@@ -20840,15 +21103,22 @@ function StaffManagement() {
                         <select value={auditFilter.module} onChange={(e) => setAuditFilter(prev => ({ ...prev, module: e.target.value }))} style={{ ...inputStyle, maxWidth: '180px', borderRadius: '8px' }}>
                             <option value="">All Modules</option>
                             <option value="auth">Authentication</option>
+                            <option value="vehicle-intake">Vehicle Intake</option>
+                            <option value="wash-bays">Wash Bays</option>
+                            <option value="garage">Garage</option>
                             <option value="staff">Staff</option>
                             <option value="users">Users</option>
                             <option value="customers">Customers</option>
-                            <option value="vehicles">Vehicles</option>
                             <option value="billing">Billing</option>
+                            <option value="inventory">Inventory</option>
+                            <option value="expenses">Expenses</option>
                             <option value="settings">Settings</option>
                         </select>
                         <div style={{ flex: 1 }}></div>
-                        <div style={{ color: theme.textSecondary, fontSize: '13px' }}>Showing {filteredAuditLogs.length} of {auditLogs.length} logs</div>
+                        <div style={{ color: theme.textSecondary, fontSize: '13px' }}>
+                            <span style={{ marginRight: '16px' }}>🟢 {activeSessions.length} online</span>
+                            Showing {filteredAuditLogs.length} of {auditLogs.length} logs
+                        </div>
                     </div>
 
                     <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
@@ -20860,15 +21130,31 @@ function StaffManagement() {
                             </div>
                         ) : (
                             <div style={{ maxHeight: '600px', overflow: 'auto' }}>
-                                {filteredAuditLogs.map((log, idx) => (
+                                {filteredAuditLogs.map((log, idx) => {
+                                    const userOnline = isUserOnline(log.userId);
+                                    return (
                                     <div key={log.id || idx} style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: '16px', alignItems: 'flex-start', background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
-                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: `${getActionColor(log.action)}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>
-                                            {getActionIcon(log.action)}
+                                        <div style={{ position: 'relative' }}>
+                                            <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: `${getActionColor(log.action)}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>
+                                                {getActionIcon(log.action)}
+                                            </div>
+                                            {/* Online status indicator */}
+                                            <div style={{ 
+                                                position: 'absolute', 
+                                                bottom: '0', 
+                                                right: '0', 
+                                                width: '12px', 
+                                                height: '12px', 
+                                                borderRadius: '50%', 
+                                                background: userOnline ? '#10b981' : '#6b7280',
+                                                border: `2px solid ${theme.bg}`
+                                            }} title={userOnline ? 'Currently online' : 'Offline'}></div>
                                         </div>
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
                                                 <div>
                                                     <span style={{ fontWeight: '600', color: theme.text }}>{log.userName || 'Unknown'}</span>
+                                                    {userOnline && <span style={{ marginLeft: '6px', fontSize: '10px', padding: '2px 6px', background: '#d1fae5', color: '#059669', borderRadius: '4px', fontWeight: '600' }}>ONLINE</span>}
                                                     <span style={{ color: theme.textSecondary }}> performed </span>
                                                     <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: '600', background: `${getActionColor(log.action)}20`, color: getActionColor(log.action) }}>{log.action?.toUpperCase()}</span>
                                                     <span style={{ color: theme.textSecondary }}> on </span>
@@ -20878,14 +21164,16 @@ function StaffManagement() {
                                                 <div style={{ fontSize: '12px', color: theme.textSecondary, whiteSpace: 'nowrap' }}>{formatTimeAgo(log.timestamp)}</div>
                                             </div>
                                             {log.details && <div style={{ marginTop: '6px', fontSize: '13px', color: theme.textSecondary }}>{log.details}</div>}
-                                            <div style={{ marginTop: '6px', fontSize: '11px', color: theme.textSecondary }}>
+                                            <div style={{ marginTop: '6px', fontSize: '11px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                                 <span>{log.userEmail}</span>
-                                                <span style={{ margin: '0 8px' }}>•</span>
+                                                <span>•</span>
                                                 <span>{new Date(log.timestamp).toLocaleString()}</span>
+                                                {log.action === 'login' && !userOnline && <span style={{ color: '#f59e0b' }}>• Logged out</span>}
+                                                {log.action === 'login' && userOnline && <span style={{ color: '#10b981' }}>• Still active</span>}
                                             </div>
                                         </div>
                                     </div>
-                                ))}
+                                )})}
                             </div>
                         )}
                     </div>
@@ -25049,8 +25337,9 @@ function App() {
     const handleLogout = async () => {
         const services = window.FirebaseServices;
         if (services && services.authService) {
-            // Log logout before signing out
+            // Log logout and end session before signing out
             await services.auditService?.logLogout(currentUser);
+            await services.auditService?.endSession(currentUser?.uid);
             await services.authService.signOut();
         }
         setCurrentUser(null);
