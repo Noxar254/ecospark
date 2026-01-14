@@ -20092,6 +20092,254 @@ function BillingModule() {
     );
 }
 
+// ==================== FACTORY RESET TAB COMPONENT ====================
+function FactoryResetTab({ theme }) {
+    const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [confirmText, setConfirmText] = useState('');
+    const [resetting, setResetting] = useState(false);
+    const [progress, setProgress] = useState(null);
+    const [results, setResults] = useState(null);
+    const [error, setError] = useState(null);
+
+    const CONFIRM_PHRASE = 'DELETE ALL DATA';
+
+    // Firestore collections to delete
+    const FIRESTORE_COLLECTIONS = ['vehicles', 'customers', 'settings', 'invoices', 'vehicleIntake', 'vehicleProfiles', 'mpesa_payments', 'activities', 'servicePackages', 'equipment', 'garageJobs', 'garageServices', 'inventory', 'fleetAccounts', 'expenses', 'users'];
+    
+    // Realtime Database paths to delete
+    const REALTIME_PATHS = ['stats', 'washBays', 'washHistory', 'staff', 'vehicleIntake', 'garage', 'audit_logs'];
+    
+    // Storage folders to delete
+    const STORAGE_FOLDERS = ['uploads', 'images', 'documents', 'receipts', 'vehicle-images'];
+
+    const handleFactoryReset = async () => {
+        if (confirmText !== CONFIRM_PHRASE) {
+            setError(`Please type "${CONFIRM_PHRASE}" to confirm`);
+            return;
+        }
+
+        setResetting(true);
+        setProgress({ phase: 'firestore', current: 0, total: FIRESTORE_COLLECTIONS.length, item: 'Starting...' });
+        setError(null);
+
+        const resetResults = { firestore: { deleted: 0, errors: [] }, realtime: { deleted: 0, errors: [] }, storage: { deleted: 0, errors: [] } };
+
+        try {
+            const services = window.FirebaseServices;
+            
+            // Delete Firestore collections
+            for (let i = 0; i < FIRESTORE_COLLECTIONS.length; i++) {
+                const collName = FIRESTORE_COLLECTIONS[i];
+                setProgress({ phase: 'firestore', current: i + 1, total: FIRESTORE_COLLECTIONS.length, item: collName });
+                try {
+                    const result = await services.factoryResetService.deleteFirestoreCollection(collName);
+                    if (result.success) resetResults.firestore.deleted += result.deleted || 0;
+                    else resetResults.firestore.errors.push({ collection: collName, error: result.error });
+                } catch (e) { resetResults.firestore.errors.push({ collection: collName, error: e.message }); }
+            }
+
+            // Delete Realtime Database paths
+            for (let i = 0; i < REALTIME_PATHS.length; i++) {
+                const path = REALTIME_PATHS[i];
+                setProgress({ phase: 'realtime', current: i + 1, total: REALTIME_PATHS.length, item: path });
+                try {
+                    const result = await services.factoryResetService.deleteRealtimePath(path);
+                    if (result.success) resetResults.realtime.deleted++;
+                    else resetResults.realtime.errors.push({ path, error: result.error });
+                } catch (e) { resetResults.realtime.errors.push({ path, error: e.message }); }
+            }
+
+            // Delete Storage folders
+            for (let i = 0; i < STORAGE_FOLDERS.length; i++) {
+                const folder = STORAGE_FOLDERS[i];
+                setProgress({ phase: 'storage', current: i + 1, total: STORAGE_FOLDERS.length, item: folder });
+                try {
+                    const result = await services.factoryResetService.deleteStorageFolder(folder);
+                    if (result.success) resetResults.storage.deleted += result.deleted || 0;
+                    else resetResults.storage.errors.push({ folder, error: result.error });
+                } catch (e) { resetResults.storage.errors.push({ folder, error: e.message }); }
+            }
+
+            setResults(resetResults);
+            setShowConfirmModal(false);
+            setConfirmText('');
+        } catch (err) {
+            console.error('Factory reset error:', err);
+            setError('Factory reset failed: ' + err.message);
+        }
+        setResetting(false);
+        setProgress(null);
+    };
+
+    return (
+        <div>
+            {/* Header Warning */}
+            <div style={{ background: '#dc2626', padding: '20px', marginBottom: '20px', color: 'white' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <div style={{ fontSize: '40px' }}>⚠️</div>
+                    <div>
+                        <h2 style={{ margin: '0 0 6px', fontSize: '20px', fontWeight: '700' }}>Factory Reset - Danger Zone</h2>
+                        <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
+                            Permanently delete ALL data. <strong>Authentication will be preserved.</strong>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Results Banner */}
+            {results && (
+                <div style={{ background: '#dcfce7', border: '1px solid #86efac', padding: '16px', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '20px' }}>✅</span>
+                        <strong style={{ color: '#166534' }}>Factory Reset Completed</strong>
+                    </div>
+                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '14px', color: '#166534' }}>
+                        <span>Firestore: {results.firestore.deleted} docs</span>
+                        <span>Realtime: {results.realtime.deleted} paths</span>
+                        <span>Storage: {results.storage.deleted} files</span>
+                    </div>
+                    <button onClick={() => setResults(null)} style={{ marginTop: '10px', padding: '6px 12px', background: 'transparent', border: '1px solid #166534', color: '#166534', cursor: 'pointer', fontSize: '12px' }}>Dismiss</button>
+                </div>
+            )}
+
+            {error && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{error}</span>
+                    <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#dc2626' }}>×</button>
+                </div>
+            )}
+
+            {/* Data Categories */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                {/* Firestore */}
+                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                        <span style={{ fontSize: '20px' }}>🗄️</span>
+                        <strong style={{ color: theme.text }}>Firestore Collections</strong>
+                        <span style={{ marginLeft: 'auto', background: '#3b82f620', color: '#3b82f6', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{FIRESTORE_COLLECTIONS.length}</span>
+                    </div>
+                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
+                        {FIRESTORE_COLLECTIONS.map(c => (
+                            <div key={c} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{c}</div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Realtime DB */}
+                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                        <span style={{ fontSize: '20px' }}>⚡</span>
+                        <strong style={{ color: theme.text }}>Realtime Database</strong>
+                        <span style={{ marginLeft: 'auto', background: '#f59e0b20', color: '#f59e0b', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{REALTIME_PATHS.length}</span>
+                    </div>
+                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
+                        {REALTIME_PATHS.map(p => (
+                            <div key={p} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{p}</div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Storage */}
+                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                        <span style={{ fontSize: '20px' }}>📁</span>
+                        <strong style={{ color: theme.text }}>Cloud Storage</strong>
+                        <span style={{ marginLeft: 'auto', background: '#10b98120', color: '#10b981', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{STORAGE_FOLDERS.length}</span>
+                    </div>
+                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
+                        {STORAGE_FOLDERS.map(f => (
+                            <div key={f} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{f}/</div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Preserved Data Notice */}
+            <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', padding: '14px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '18px' }}>🔒</span>
+                    <span style={{ color: '#1e40af', fontSize: '14px' }}><strong>Preserved:</strong> User authentication accounts will NOT be deleted</span>
+                </div>
+            </div>
+
+            {/* Reset Button */}
+            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <button
+                    onClick={() => setShowConfirmModal(true)}
+                    style={{ padding: '14px 40px', background: '#dc2626', color: 'white', border: 'none', fontSize: '16px', fontWeight: '700', cursor: 'pointer' }}
+                >
+                    🔄 Perform Factory Reset
+                </button>
+            </div>
+
+            {/* Confirmation Modal */}
+            {showConfirmModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !resetting && setShowConfirmModal(false)}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '450px', margin: '20px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ background: '#dc2626', padding: '20px', color: 'white', textAlign: 'center' }}>
+                            <div style={{ fontSize: '48px', marginBottom: '8px' }}>⚠️</div>
+                            <h2 style={{ margin: '0 0 4px', fontSize: '18px' }}>Confirm Factory Reset</h2>
+                            <p style={{ margin: 0, opacity: 0.9, fontSize: '13px' }}>This action cannot be undone!</p>
+                        </div>
+
+                        <div style={{ padding: '20px' }}>
+                            {resetting ? (
+                                <div style={{ textAlign: 'center', padding: '20px' }}>
+                                    <div style={{ width: '50px', height: '50px', border: '4px solid #e5e7eb', borderTopColor: '#dc2626', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
+                                    <h3 style={{ margin: '0 0 8px', color: theme.text, fontSize: '16px' }}>Resetting System...</h3>
+                                    {progress && (
+                                        <div style={{ color: theme.textSecondary, fontSize: '13px' }}>
+                                            <p style={{ margin: '6px 0' }}>
+                                                {progress.phase === 'firestore' && '🗄️ Clearing Firestore...'}
+                                                {progress.phase === 'realtime' && '⚡ Clearing Realtime DB...'}
+                                                {progress.phase === 'storage' && '📁 Clearing Storage...'}
+                                            </p>
+                                            <p style={{ margin: '4px 0', fontFamily: 'monospace' }}>{progress.item} ({progress.current}/{progress.total})</p>
+                                            <div style={{ background: theme.border, height: '6px', marginTop: '10px', overflow: 'hidden' }}>
+                                                <div style={{ background: '#dc2626', height: '100%', width: `${(progress.current / progress.total) * 100}%`, transition: 'width 0.2s' }}></div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{ background: '#fef3c7', border: '1px solid #fde047', padding: '12px', marginBottom: '16px', fontSize: '13px', color: '#92400e' }}>
+                                        <strong>You are about to delete:</strong>
+                                        <ul style={{ margin: '6px 0 0', paddingLeft: '18px' }}>
+                                            <li>{FIRESTORE_COLLECTIONS.length} Firestore collections</li>
+                                            <li>{REALTIME_PATHS.length} Realtime Database paths</li>
+                                            <li>{STORAGE_FOLDERS.length} Storage folders</li>
+                                        </ul>
+                                    </div>
+
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', color: theme.text, fontWeight: '600', fontSize: '13px' }}>
+                                            Type <span style={{ color: '#dc2626', fontFamily: 'monospace' }}>{CONFIRM_PHRASE}</span> to confirm:
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={confirmText}
+                                            onChange={(e) => setConfirmText(e.target.value)}
+                                            placeholder={CONFIRM_PHRASE}
+                                            style={{ width: '100%', padding: '10px 12px', border: `2px solid ${confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border}`, fontSize: '14px', fontFamily: 'monospace', background: theme.inputBg, color: theme.text, boxSizing: 'border-box' }}
+                                        />
+                                    </div>
+
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button onClick={() => { setShowConfirmModal(false); setConfirmText(''); }} style={{ flex: 1, padding: '12px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                                        <button onClick={handleFactoryReset} disabled={confirmText !== CONFIRM_PHRASE} style={{ flex: 1, padding: '12px', background: confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border, border: 'none', color: 'white', fontWeight: '700', cursor: confirmText === CONFIRM_PHRASE ? 'pointer' : 'not-allowed' }}>🗑️ Delete All</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+    );
+}
+
 // ==================== STAFF MANAGEMENT COMPONENT ====================
 function StaffManagement() {
     const [activeTab, setActiveTab] = useState('staff');
@@ -20505,6 +20753,7 @@ function StaffManagement() {
                 <button onClick={() => setActiveTab('staff')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'staff' ? '#3b82f6' : 'transparent', color: activeTab === 'staff' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>👷 Staff ({staffList.filter(s => s.status === 'active').length})</button>
                 <button onClick={() => setActiveTab('users')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'users' ? '#3b82f6' : 'transparent', color: activeTab === 'users' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔐 Users ({usersList.filter(u => u.isActive).length})</button>
                 <button onClick={() => setActiveTab('audit')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'audit' ? '#3b82f6' : 'transparent', color: activeTab === 'audit' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>📜 Audit Logs</button>
+                <button onClick={() => setActiveTab('factory-reset')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'factory-reset' ? '#dc2626' : 'transparent', color: activeTab === 'factory-reset' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔄 Factory Reset</button>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -20642,6 +20891,8 @@ function StaffManagement() {
                     </div>
                 </div>
             )}
+
+            {activeTab === 'factory-reset' && <FactoryResetTab theme={theme} />}
 
             {showAddStaffModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowAddStaffModal(false)}>

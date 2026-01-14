@@ -30,7 +30,8 @@ import {
   storageRef,
   uploadBytes,
   getDownloadURL,
-  deleteObject
+  deleteObject,
+  listAll
 } from './firebase-config.js';
 
 // ==================== FIRESTORE OPERATIONS ====================
@@ -4316,6 +4317,210 @@ export const hrService = {
   }
 };
 
+// ==================== FACTORY RESET SERVICE ====================
+
+export const factoryResetService = {
+  // All Firestore collections to delete
+  FIRESTORE_COLLECTIONS: [
+    'vehicles',
+    'customers',
+    'settings',
+    'invoices',
+    'vehicleIntake',
+    'vehicleProfiles',
+    'mpesa_payments',
+    'activities',
+    'servicePackages',
+    'equipment',
+    'garageJobs',
+    'garageServices',
+    'inventory',
+    'fleetAccounts',
+    'expenses'
+  ],
+
+  // Realtime Database paths to delete
+  REALTIME_PATHS: [
+    'stats',
+    'washBays',
+    'washHistory',
+    'staff',
+    'vehicleIntake',
+    'garage',
+    'audit_logs'
+  ],
+
+  // Storage folders to delete
+  STORAGE_FOLDERS: [
+    'uploads',
+    'images',
+    'documents',
+    'receipts',
+    'vehicle-images'
+  ],
+
+  // Get counts of documents in each Firestore collection
+  async getFirestoreCounts() {
+    const counts = {};
+    let total = 0;
+    for (const collName of this.FIRESTORE_COLLECTIONS) {
+      try {
+        const snapshot = await getDocs(collection(db, collName));
+        counts[collName] = snapshot.size;
+        total += snapshot.size;
+      } catch (err) {
+        counts[collName] = 0;
+      }
+    }
+    return { counts, total };
+  },
+
+  // Get counts for Realtime Database paths
+  async getRealtimeCounts() {
+    const counts = {};
+    let total = 0;
+    for (const path of this.REALTIME_PATHS) {
+      try {
+        const snapshot = await get(ref(realtimeDb, path));
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const count = typeof data === 'object' ? Object.keys(data).length : 1;
+          counts[path] = count;
+          total += count;
+        } else {
+          counts[path] = 0;
+        }
+      } catch (err) {
+        counts[path] = 0;
+      }
+    }
+    return { counts, total };
+  },
+
+  // Get Storage file counts
+  async getStorageCounts() {
+    const counts = {};
+    let total = 0;
+    for (const folder of this.STORAGE_FOLDERS) {
+      try {
+        const folderRef = storageRef(storage, folder);
+        const result = await listAll(folderRef);
+        counts[folder] = result.items.length;
+        total += result.items.length;
+      } catch (err) {
+        counts[folder] = 0;
+      }
+    }
+    return { counts, total };
+  },
+
+  // Delete all documents in a Firestore collection
+  async deleteFirestoreCollection(collName) {
+    try {
+      const snapshot = await getDocs(collection(db, collName));
+      // Skip if no documents found
+      if (snapshot.empty || snapshot.size === 0) {
+        return { success: true, deleted: 0 };
+      }
+      const deletePromises = snapshot.docs.map(docSnap => deleteDoc(doc(db, collName, docSnap.id)));
+      await Promise.all(deletePromises);
+      return { success: true, deleted: snapshot.size };
+    } catch (err) {
+      console.error(`Error deleting collection ${collName}:`, err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  // Delete a Realtime Database path
+  async deleteRealtimePath(path) {
+    try {
+      const snapshot = await get(ref(realtimeDb, path));
+      // Skip if path doesn't exist
+      if (!snapshot.exists()) {
+        return { success: true };
+      }
+      await remove(ref(realtimeDb, path));
+      return { success: true };
+    } catch (err) {
+      console.error(`Error deleting realtime path ${path}:`, err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  // Delete all files in a Storage folder
+  async deleteStorageFolder(folder) {
+    try {
+      const folderRef = storageRef(storage, folder);
+      const result = await listAll(folderRef);
+      // Skip if no files found
+      if (!result.items || result.items.length === 0) {
+        return { success: true, deleted: 0 };
+      }
+      const deletePromises = result.items.map(item => deleteObject(item));
+      await Promise.all(deletePromises);
+      return { success: true, deleted: result.items.length };
+    } catch (err) {
+      // If folder doesn't exist or is empty, just pass
+      if (err.code === 'storage/object-not-found' || err.code === 'storage/unknown') {
+        return { success: true, deleted: 0 };
+      }
+      console.error(`Error deleting storage folder ${folder}:`, err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  // Full factory reset - deletes everything except auth
+  async performFullReset(progressCallback) {
+    const results = {
+      firestore: { success: true, deleted: 0, errors: [] },
+      realtime: { success: true, deleted: 0, errors: [] },
+      storage: { success: true, deleted: 0, errors: [] }
+    };
+
+    // Delete Firestore collections
+    for (let i = 0; i < this.FIRESTORE_COLLECTIONS.length; i++) {
+      const collName = this.FIRESTORE_COLLECTIONS[i];
+      progressCallback?.({ phase: 'firestore', current: i + 1, total: this.FIRESTORE_COLLECTIONS.length, item: collName });
+      const result = await this.deleteFirestoreCollection(collName);
+      if (result.success) {
+        results.firestore.deleted += result.deleted || 0;
+      } else {
+        results.firestore.errors.push({ collection: collName, error: result.error });
+      }
+    }
+
+    // Delete Realtime Database paths
+    for (let i = 0; i < this.REALTIME_PATHS.length; i++) {
+      const path = this.REALTIME_PATHS[i];
+      progressCallback?.({ phase: 'realtime', current: i + 1, total: this.REALTIME_PATHS.length, item: path });
+      const result = await this.deleteRealtimePath(path);
+      if (result.success) {
+        results.realtime.deleted++;
+      } else {
+        results.realtime.errors.push({ path, error: result.error });
+      }
+    }
+
+    // Delete Storage folders
+    for (let i = 0; i < this.STORAGE_FOLDERS.length; i++) {
+      const folder = this.STORAGE_FOLDERS[i];
+      progressCallback?.({ phase: 'storage', current: i + 1, total: this.STORAGE_FOLDERS.length, item: folder });
+      const result = await this.deleteStorageFolder(folder);
+      if (result.success) {
+        results.storage.deleted += result.deleted || 0;
+      } else {
+        results.storage.errors.push({ folder, error: result.error });
+      }
+    }
+
+    results.firestore.success = results.firestore.errors.length === 0;
+    results.realtime.success = results.realtime.errors.length === 0;
+    results.storage.success = results.storage.errors.length === 0;
+
+    return results;
+  }
+};
+
 // ==================== MAKE SERVICES GLOBALLY AVAILABLE ====================
 
 // Attach to window for use in non-module scripts (React via Babel)
@@ -4357,7 +4562,8 @@ if (typeof window !== 'undefined') {
     realtimeStatsService,
     washBayService,
     authService,
-    storageService
+    storageService,
+    factoryResetService
   };
   console.log('✅ FirebaseServices attached to window');
 }
