@@ -1740,7 +1740,7 @@ function VehicleIntake() {
     const [bays, setBays] = useState(DEFAULT_BAYS);
     const [servicePackages, setServicePackages] = useState([]);
     const [vehicleProfiles, setVehicleProfiles] = useState([]); // Track all vehicle profiles
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -1833,17 +1833,18 @@ function VehicleIntake() {
 
     // Filter vehicles based on search and date
     const getFilteredVehicles = () => {
-        let filtered = vehicles;
+        if (!Array.isArray(vehicles)) return [];
+        let filtered = vehicles.filter(v => v != null);
 
         // Search filter
         if (searchQuery.trim()) {
             const query = searchQuery.toLowerCase();
             filtered = filtered.filter(v => 
-                v.plateNumber?.toLowerCase().includes(query) ||
-                v.customerName?.toLowerCase().includes(query) ||
+                v.plateNumber?.toLowerCase()?.includes(query) ||
+                v.customerName?.toLowerCase()?.includes(query) ||
                 v.customerPhone?.includes(query) ||
-                v.service?.name?.toLowerCase().includes(query) ||
-                v.vehicleType?.toLowerCase().includes(query)
+                v.service?.name?.toLowerCase()?.includes(query) ||
+                v.vehicleType?.toLowerCase()?.includes(query)
             );
         }
 
@@ -1878,13 +1879,13 @@ function VehicleIntake() {
         return filtered;
     };
 
-    const filteredVehicles = getFilteredVehicles();
+    const filteredVehicles = getFilteredVehicles() || [];
     
-    // Pagination calculations
-    const totalPages = Math.ceil(filteredVehicles.length / itemsPerPage);
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    const paginatedVehicles = filteredVehicles.slice(startIndex, endIndex);
+    // Pagination calculations - with safety
+    const totalPages = Math.ceil((filteredVehicles.length || 0) / (itemsPerPage || 10)) || 1;
+    const startIndex = ((currentPage || 1) - 1) * (itemsPerPage || 10);
+    const endIndex = startIndex + (itemsPerPage || 10);
+    const paginatedVehicles = Array.isArray(filteredVehicles) ? filteredVehicles.slice(startIndex, endIndex) : [];
     
     // Reset to page 1 when filters change
     useEffect(() => {
@@ -2154,13 +2155,14 @@ function VehicleIntake() {
         };
     }, []);
 
-    // Calculate stats from live data
+    // Calculate stats from live data - with null safety
     const stats = {
-        waiting: queue.filter(v => v.status === 'waiting').length,
-        inProgress: vehicles.filter(v => v.status === 'in-progress').length,
-        availableBays: bays.filter(b => b.status === 'available').length,
-        avgWaitTime: queue.length > 0 
+        waiting: Array.isArray(queue) ? queue.filter(v => v && v.status === 'waiting').length : 0,
+        inProgress: Array.isArray(vehicles) ? vehicles.filter(v => v && v.status === 'in-progress').length : 0,
+        availableBays: Array.isArray(bays) ? bays.filter(b => b && b.status === 'available').length : 0,
+        avgWaitTime: Array.isArray(queue) && queue.length > 0 
             ? Math.round(queue.reduce((acc, v) => {
+                if (!v || !v.timeIn) return acc;
                 const timeIn = new Date(v.timeIn);
                 return acc + (new Date() - timeIn) / 1000 / 60;
             }, 0) / queue.length) 
@@ -3002,17 +3004,6 @@ function VehicleIntake() {
         }
     };
 
-    // Loading state
-    if (loading) {
-        return (
-            <div className="vehicle-intake" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></div>
-                <p style={{ color: '#64748b' }}>Loading Vehicle Intake...</p>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            </div>
-        );
-    }
-
     return (
         <div className="vehicle-intake">
             {/* Error Notification */}
@@ -3131,7 +3122,7 @@ function VehicleIntake() {
                     <span className="intake-section-count">{queue.length} items</span>
                 </div>
                 <div className="intake-queue">
-                    {queue.length === 0 ? (
+                    {!Array.isArray(queue) || queue.length === 0 ? (
                         <div className="intake-empty">
                             <p>No items in queue</p>
                             <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
@@ -3139,9 +3130,9 @@ function VehicleIntake() {
                             </button>
                         </div>
                     ) : (
-                        queue.map((vehicle, index) => {
-                            const existingVisits = vehicle.existingVisits || 0;
-                            const isReturning = vehicle.isReturningVehicle || existingVisits >= 1;
+                        queue.filter(v => v != null).map((vehicle, index) => {
+                            const existingVisits = vehicle?.existingVisits || 0;
+                            const isReturning = vehicle?.isReturningVehicle || existingVisits >= 1;
                             return (
                             <div key={vehicle.id} className="queue-card" style={{ borderLeft: isReturning ? '3px solid #16a34a' : undefined }}>
                                 <div className="queue-card-header">
@@ -3165,12 +3156,12 @@ function VehicleIntake() {
                                         className="queue-card-priority" 
                                         style={{ backgroundColor: getPriorityColor(vehicle.priority) }}
                                     >
-                                        {vehicle.priority.toUpperCase()}
+                                        {(vehicle.priority || 'normal').toUpperCase()}
                                     </span>
                                 </div>
                                 <div className="queue-card-body">
                                     <div className="queue-card-info">
-                                        <span className="queue-card-service">{vehicle.service.name}</span>
+                                        <span className="queue-card-service">{vehicle.service?.name || 'No Service'}</span>
                                         <span className="queue-card-time">{Icons.clock} {formatTimeElapsed(vehicle.timeIn)}</span>
                                     </div>
                                     <span className="queue-card-type">{vehicle.itemType || vehicle.vehicleType}</span>
@@ -3301,11 +3292,11 @@ function VehicleIntake() {
                                     </td>
                                 </tr>
                             ) : (
-                                paginatedVehicles.map(vehicle => (
-                                    <tr key={vehicle.id} style={{ backgroundColor: vehicle.isReturningVehicle ? '#f0fdf4' : undefined }}>
+                                paginatedVehicles.filter(v => v != null).map(vehicle => (
+                                    <tr key={vehicle.id || Math.random()} style={{ backgroundColor: vehicle.isReturningVehicle ? '#f0fdf4' : undefined }}>
                                         <td className="intake-table-plate">
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
+                                                {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber || 'N/A'}
                                                 {vehicle.isReturningVehicle && (
                                                     <span style={{
                                                         fontSize: '9px',
@@ -6246,6 +6237,34 @@ function FleetAccounts() {
         );
     };
 
+    const handleSendToQueue = async (vehicle) => {
+        setActionLoading(true);
+        const services = window.FirebaseServices;
+        const vehicleData = {
+            plateNumber: vehicle.plateNumber,
+            vehicleType: vehicle.vehicleType || 'Sedan',
+            make: vehicle.make || '',
+            model: vehicle.model || '',
+            color: vehicle.color || '',
+            customerName: selectedAccount.companyName,
+            customerPhone: selectedAccount.phone,
+            driverName: vehicle.driverName || '',
+            driverPhone: vehicle.driverPhone || '',
+            priority: 'fleet',
+            fleetAccountId: selectedAccount.id,
+            fleetAccountNumber: selectedAccount.accountNumber,
+            discount: selectedAccount.discount || 0,
+            notes: `Fleet vehicle from ${selectedAccount.companyName}`
+        };
+        const result = await services.intakeQueueService.addToQueue(vehicleData);
+        if (result.success) {
+            setSuccessMessage(`${vehicle.plateNumber} sent to queue`);
+        } else {
+            setError(result.error || 'Failed to add to queue');
+        }
+        setActionLoading(false);
+    };
+
     const handleAddContact = async () => {
         if (!contactForm.name || !contactForm.phone) {
             setError('Name and phone are required');
@@ -6972,7 +6991,10 @@ function FleetAccounts() {
                                                     <div style={{ fontSize: '12px', color: theme.textSecondary }}>{v.make} {v.model} • {v.color}</div>
                                                     {v.driverName && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>Driver: {v.driverName}</div>}
                                                 </div>
-                                                <button onClick={() => handleRemoveVehicle(v.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                                <div style={{ display: 'flex', gap: '4px' }}>
+                                                    <button onClick={() => handleSendToQueue(v)} style={{ padding: '4px 8px', background: '#10b981', border: 'none', cursor: 'pointer', color: 'white', fontSize: '11px', fontWeight: '600' }}>Send to Queue</button>
+                                                    <button onClick={() => handleRemoveVehicle(v.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                                </div>
                                             </div>
                                             <div style={{ display: 'flex', gap: '16px', marginTop: '10px', fontSize: '11px' }}>
                                                 <span style={{ color: theme.textSecondary }}>Services: <strong style={{ color: theme.text }}>{v.totalServices || 0}</strong></span>
@@ -25541,6 +25563,62 @@ function App() {
     );
 }
 
-// Render the app
+// Error Boundary to catch React crashes
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null, errorInfo: null };
+    }
+    
+    static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+    }
+    
+    componentDidCatch(error, errorInfo) {
+        console.error('React Error:', error, errorInfo);
+        this.setState({ errorInfo });
+    }
+    
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'system-ui, sans-serif' }}>
+                    <h2 style={{ color: '#dc2626', marginBottom: '16px' }}>Something went wrong</h2>
+                    <pre style={{ 
+                        background: '#f5f5f5', 
+                        padding: '16px', 
+                        borderRadius: '8px', 
+                        textAlign: 'left', 
+                        overflow: 'auto', 
+                        maxWidth: '800px', 
+                        margin: '0 auto 20px',
+                        fontSize: '12px',
+                        color: '#333'
+                    }}>
+                        {this.state.error?.toString()}
+                        {this.state.errorInfo?.componentStack}
+                    </pre>
+                    <button 
+                        onClick={() => window.location.reload()}
+                        style={{ 
+                            padding: '12px 24px', 
+                            background: '#3b82f6', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '8px', 
+                            cursor: 'pointer',
+                            fontSize: '14px'
+                        }}
+                    >
+                        Reload Page
+                    </button>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+// Render the app with Error Boundary
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+root.render(<ErrorBoundary><App /></ErrorBoundary>);
