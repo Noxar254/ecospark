@@ -3199,3 +3199,37 @@ body {
 .notification-item:hover {
     background: var(--bg-secondary, #f8fafc) !important;
 }
+
+/* Shimmer animation for skeleton loading */
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+/* Flash load animation */
+@keyframes flashIn {
+    0% {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.packages-grid .package-card {
+    animation: flashIn 0.2s ease-out forwards;
+}
+
+.packages-grid .package-card:nth-child(1) { animation-delay: 0ms; }
+.packages-grid .package-card:nth-child(2) { animation-delay: 30ms; }
+.packages-grid .package-card:nth-child(3) { animation-delay: 60ms; }
+.packages-grid .package-card:nth-child(4) { animation-delay: 90ms; }
+.packages-grid .package-card:nth-child(5) { animation-delay: 120ms; }
+.packages-grid .package-card:nth-child(6) { animation-delay: 150ms; }
+.packages-grid .package-card:nth-child(n+7) { animation-delay: 180ms; }

@@ -2186,33 +2186,17 @@ function VehicleIntake() {
     const getPaymentStatusForVehicle = (vehicle) => {
         if (!vehicle) return { isPaid: false, invoice: null };
         
-        // Find matching invoice using multiple strategies
-        const matchingInvoice = invoices.find(inv => {
-            // Strategy 1: Match by record ID (most reliable)
-            if (inv.washRecordId && vehicle.id) {
-                return inv.washRecordId === vehicle.id;
-            }
-            // Strategy 2: Match by plateNumber + bay + time window
-            if (inv.plateNumber === vehicle.plateNumber && vehicle.assignedBayId) {
-                const invoiceTime = new Date(inv.createdAt);
-                const vehicleTimeIn = new Date(vehicle.timeIn);
-                const vehicleTimeOut = vehicle.timeOut ? new Date(vehicle.timeOut) : new Date();
-                // Match within 5 minutes of vehicle timeIn or timeOut
-                return Math.abs(invoiceTime - vehicleTimeIn) < 300000 || 
-                       Math.abs(invoiceTime - vehicleTimeOut) < 300000;
-            }
-            // Strategy 3: Match by plateNumber only (less reliable but fallback)
-            if (inv.plateNumber === vehicle.plateNumber) {
-                const invoiceTime = new Date(inv.createdAt);
-                const vehicleTimeIn = new Date(vehicle.timeIn);
-                // Match within 1 hour of vehicle timeIn
-                return Math.abs(invoiceTime - vehicleTimeIn) < 3600000;
-            }
-            return false;
-        });
+        // PRIMARY: Use the vehicle record's own paymentStatus field
+        // This is the source of truth - set to 'pending' on new visit, 'paid' when payment confirmed
+        const isPaidFromRecord = vehicle.paymentStatus === 'paid';
+        
+        // Find matching invoice for reference (by record ID only - most reliable)
+        const matchingInvoice = invoices.find(inv => 
+            inv.washRecordId && inv.washRecordId === vehicle.id
+        );
         
         return {
-            isPaid: matchingInvoice?.paymentStatus === 'paid',
+            isPaid: isPaidFromRecord,
             invoice: matchingInvoice
         };
     };
@@ -2420,6 +2404,7 @@ function VehicleIntake() {
                 ...vehicleData,
                 queueId: queueId,
                 status: 'in-progress',
+                paymentStatus: 'pending', // Always reset to pending for new/returning visits
                 assignedBay: bay.name,
                 assignedBayId: bayId,
                 assignedBy: assignedByUser,
@@ -4540,14 +4525,16 @@ function ServicePackages() {
             return;
         }
 
-        // Initialize default packages if none exist
-        services.packagesService.initializeDefaultPackages();
-
-        // Subscribe to real-time updates
+        // Subscribe to real-time updates FIRST for instant loading
         const unsubscribe = services.packagesService.subscribeToPackages(
             (packagesData) => {
                 setPackages(packagesData);
                 setLoading(false);
+                
+                // Initialize default packages only if none exist (background, non-blocking)
+                if (packagesData.length === 0) {
+                    services.packagesService.initializeDefaultPackages();
+                }
             },
             (error) => {
                 console.error('Error subscribing to packages:', error);
@@ -4733,13 +4720,8 @@ function ServicePackages() {
                 </button>
             </div>
 
-            {/* Packages Grid */}
-            {loading ? (
-                <div className="loading-container">
-                    <div className="loading-spinner"></div>
-                    <p>Loading packages...</p>
-                </div>
-            ) : packages.length === 0 ? (
+            {/* Packages Grid - Instant render with flash effect */}
+            {packages.length === 0 && !loading ? (
                 <div className="empty-state">
                     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                         <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -4751,8 +4733,28 @@ function ServicePackages() {
                     <button className="primary-button" onClick={handleAddNew}>Create Package</button>
                 </div>
             ) : (
-                <div className="packages-grid">
-                    {packages.map(pkg => (
+                <div className="packages-grid" style={{ 
+                    opacity: loading ? 0.6 : 1, 
+                    transition: 'opacity 0.15s ease-out',
+                    animation: !loading && packages.length > 0 ? 'fadeIn 0.2s ease-out' : 'none'
+                }}>
+                    {loading && packages.length === 0 ? (
+                        // Skeleton cards for instant perceived loading
+                        [...Array(6)].map((_, i) => (
+                            <div key={`skeleton-${i}`} className="package-card" style={{ 
+                                background: 'linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-tertiary) 50%, var(--bg-secondary) 75%)',
+                                backgroundSize: '200% 100%',
+                                animation: 'shimmer 1.2s infinite',
+                                minHeight: '200px'
+                            }}>
+                                <div style={{ padding: '16px' }}>
+                                    <div style={{ height: '24px', width: '60px', background: 'var(--bg-tertiary)', borderRadius: '12px', marginBottom: '12px' }}></div>
+                                    <div style={{ height: '20px', width: '70%', background: 'var(--bg-tertiary)', borderRadius: '4px', marginBottom: '8px' }}></div>
+                                    <div style={{ height: '28px', width: '40%', background: 'var(--bg-tertiary)', borderRadius: '4px' }}></div>
+                                </div>
+                            </div>
+                        ))
+                    ) : packages.map(pkg => (
                         <div key={pkg.id} className={`package-card ${!pkg.isActive ? 'inactive' : ''}`}>
                             <div className="package-header">
                                 <span 
@@ -12308,24 +12310,30 @@ function WashBaysContent() {
             let recordId = vehicleData.recordId || null;
             
             if (assignMode === 'assigned' && recordId) {
-                // Update existing record with new bay assignment
+                // Update existing record with new bay assignment - reset status to in-progress
                 if (services.intakeRecordsService) {
                     await services.intakeRecordsService.updateRecord(recordId, {
+                        status: 'in-progress', // Reset to in-progress when assigned to bay
                         assignedBay: selectedBay.name,
                         assignedBayId: selectedBay.id,
                         assignedTime: new Date().toISOString(),
+                        timeIn: new Date().toISOString(), // Reset time in for new wash
+                        timeOut: null, // Clear previous completion time
+                        paymentStatus: 'pending', // Reset payment status to pending (shows 'Waiting')
                         service: vehicleData.service,
                         reassignedFrom: vehicleData.previousBay
                     });
                 }
             } else if (!recordId && services.intakeRecordsService) {
-                // Create new record for queue or new vehicles
+                // Create or update record for queue or new vehicles
+                // Use addOrUpdateRecord to properly handle returning vehicles
                 const recordData = {
                     plateNumber: vehicleData.plateNumber,
                     customerName: vehicleData.customerName,
                     vehicleType: vehicleData.vehicleType,
                     service: vehicleData.service,
                     status: 'in-progress',
+                    paymentStatus: 'pending', // Reset payment status for new visit
                     assignedBay: selectedBay.name,
                     assignedBayId: selectedBay.id,
                     assignedTime: new Date().toISOString(),
@@ -12333,7 +12341,11 @@ function WashBaysContent() {
                     source: assignMode === 'select' ? 'queue' : 'wash-bay-direct',
                     queueId: vehicleData.queueId || null
                 };
-                const recordResult = await services.intakeRecordsService.addRecord(recordData);
+                // Use addOrUpdateRecord - handles returning vehicles automatically
+                const recordResult = await services.intakeRecordsService.addOrUpdateRecord(
+                    vehicleData.plateNumber,
+                    recordData
+                );
                 if (recordResult.success) {
                     recordId = recordResult.id;
                     vehicleData.recordId = recordId;
@@ -15883,8 +15895,8 @@ function HRModule() {
         // Subscribe to wash history (completed washes from wash bays)
         if (services.washBayService?.subscribeToHistory) {
             unsubWashHistory = services.washBayService.subscribeToHistory((data) => {
-                // Filter only completed washes with assigned staff
-                const completedWashes = data.filter(w => w.action === 'completed' && w.vehicle?.assignedBy);
+                // Filter only completed washes with assigned staff (washedBy = staff who washed the car)
+                const completedWashes = data.filter(w => w.action === 'completed' && (w.vehicle?.washedBy || w.vehicle?.assignedBy));
                 setWashHistory(completedWashes);
             });
         }
@@ -15941,9 +15953,9 @@ function HRModule() {
             });
         });
 
-        // Add wash history - match by staff name
+        // Add wash history - match by staff name (washedBy = staff who washed the car)
         washHistory.forEach(w => {
-            const staffName = w.vehicle?.assignedBy || '';
+            const staffName = w.vehicle?.washedBy || w.vehicle?.assignedBy || '';
             const staff = staffList.find(s => s.name?.toLowerCase() === staffName.toLowerCase());
             const servicePrice = parseFloat(w.vehicle?.servicePrice) || parseFloat(w.vehicle?.service?.price) || 0;
             const commissionRate = staff?.commissionRate || 0;

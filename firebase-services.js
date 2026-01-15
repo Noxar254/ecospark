@@ -1998,14 +1998,14 @@ export const intakeRecordsService = {
           customerName: vehicleData.customerName || existingRecord.customerName,
           customerPhone: vehicleData.customerPhone || existingRecord.customerPhone,
           
-          // New visit status and bay
-          status: vehicleData.status || 'in-progress',
+          // New visit status and bay - ALWAYS reset to in-progress for returning vehicles
+          status: 'in-progress', // Force in-progress when assigned (completed only after payment)
           assignedBay: vehicleData.assignedBay || null,
           assignedBayId: vehicleData.assignedBayId || null,
           assignedTime: vehicleData.assignedTime || new Date().toISOString(),
           timeIn: vehicleData.timeIn || new Date().toISOString(),
           
-          // Reset for new visit
+          // Reset for new visit - payment starts as pending (shows as 'Waiting')
           timeOut: null,
           paymentStatus: 'pending',
           
@@ -2069,8 +2069,8 @@ export const intakeRecordsService = {
           customerName: vehicleData.customerName || null,
           customerPhone: vehicleData.customerPhone || null,
           
-          // Status and bay
-          status: vehicleData.status || 'in-progress',
+          // Status and bay - ALWAYS start as in-progress with pending payment
+          status: 'in-progress',
           assignedBay: vehicleData.assignedBay || null,
           assignedBayId: vehicleData.assignedBayId || null,
           assignedTime: vehicleData.assignedTime || now,
