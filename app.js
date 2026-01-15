@@ -1773,6 +1773,12 @@ function VehicleIntake() {
     const [staffList, setStaffList] = useState([]);
     const [selectedStaffId, setSelectedStaffId] = useState('');
     
+    // Additional services for fleet washes
+    const [selectedAdditionalServices, setSelectedAdditionalServices] = useState([]);
+    
+    // Primary service for fleet vehicles (since they come without a service)
+    const [selectedFleetService, setSelectedFleetService] = useState(null);
+    
     // Invoices for payment status tracking
     const [invoices, setInvoices] = useState([]);
     
@@ -2185,20 +2191,39 @@ function VehicleIntake() {
     };
 
     // Get payment status for a vehicle record
+    // Uses BOTH record paymentStatus AND invoice matching (like Wash Bay History)
     const getPaymentStatusForVehicle = (vehicle) => {
         if (!vehicle) return { isPaid: false, invoice: null };
         
-        // PRIMARY: Use the vehicle record's own paymentStatus field
-        // This is the source of truth - set to 'pending' on new visit, 'paid' when payment confirmed
+        // Check 1: Vehicle record's own paymentStatus field
         const isPaidFromRecord = vehicle.paymentStatus === 'paid';
         
-        // Find matching invoice for reference (by record ID only - most reliable)
-        const matchingInvoice = invoices.find(inv => 
-            inv.washRecordId && inv.washRecordId === vehicle.id
-        );
+        // Check 2: Find matching invoice and check its payment status (like Wash Bay History)
+        const matchingInvoice = invoices.find(inv => {
+            // Match by washRecordId or recordId (most reliable)
+            if (inv.washRecordId && inv.washRecordId === vehicle.id) return true;
+            if (inv.recordId && inv.recordId === vehicle.id) return true;
+            
+            // Match by plate number + bay + time window (like Wash Bay History)
+            if (inv.plateNumber === vehicle.plateNumber) {
+                // Check source is wash
+                if (inv.source === 'wash' && inv.bayId === vehicle.assignedBay) {
+                    const invTime = new Date(inv.createdAt);
+                    const vehicleTime = new Date(vehicle.timeOut || vehicle.timeIn);
+                    if (Math.abs(invTime - vehicleTime) < 300000) return true; // 5 min window
+                }
+                // Or just plate match with close time
+                const invTime = new Date(inv.createdAt);
+                const vehicleTime = new Date(vehicle.timeOut || vehicle.timeIn || vehicle.createdAt);
+                if (Math.abs(invTime - vehicleTime) < 600000) return true; // 10 min window
+            }
+            return false;
+        });
+        
+        const isPaidFromInvoice = matchingInvoice?.paymentStatus === 'paid';
         
         return {
-            isPaid: isPaidFromRecord,
+            isPaid: isPaidFromRecord || isPaidFromInvoice,
             invoice: matchingInvoice
         };
     };
@@ -2401,19 +2426,63 @@ function VehicleIntake() {
             const currentUser = window.currentUserProfile;
             const assignedByUser = (currentUser && currentUser.displayName) || (currentUser && currentUser.email) || 'System';
             
+            // For fleet vehicles, use the selected fleet service; otherwise use vehicle service
+            const effectiveService = selectedVehicle.priority === 'fleet' && selectedFleetService 
+                ? selectedFleetService 
+                : selectedVehicle.service;
+            
+            // Calculate total price including additional services for fleet washes
+            const basePrice = effectiveService?.price || 0;
+            const additionalServicesTotal = selectedVehicle.priority === 'fleet' 
+                ? selectedAdditionalServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0)
+                : 0;
+            const totalServicePrice = basePrice + additionalServicesTotal;
+            
+            // Deep sanitize to remove undefined values (Firebase doesn't accept undefined)
+            const deepSanitize = (obj) => {
+                if (obj === null || obj === undefined) return null;
+                if (Array.isArray(obj)) {
+                    return obj.map(item => deepSanitize(item)).filter(item => item !== undefined);
+                }
+                if (typeof obj === 'object') {
+                    const sanitized = {};
+                    for (const [key, value] of Object.entries(obj)) {
+                        if (value !== undefined) {
+                            sanitized[key] = deepSanitize(value);
+                        }
+                    }
+                    return sanitized;
+                }
+                return obj;
+            };
+            
+            // Sanitize vehicleData to remove undefined values
+            const sanitizedVehicleData = deepSanitize(vehicleData);
+            
             // Prepare vehicle record data
             const recordData = {
-                ...vehicleData,
-                queueId: queueId,
+                ...sanitizedVehicleData,
+                queueId: queueId || null,
                 status: 'in-progress',
                 paymentStatus: 'pending', // Always reset to pending for new/returning visits
-                assignedBay: bay.name,
-                assignedBayId: bayId,
-                assignedBy: assignedByUser,
-                washedBy: washedBy,
+                assignedBay: bay.name || '',
+                assignedBayId: bayId || null,
+                assignedBy: assignedByUser || 'System',
+                washedBy: washedBy || '',
                 assignedStaffId: selectedStaffId || null,
                 assignedTime: new Date().toISOString(),
-                timeIn: new Date().toISOString()
+                timeIn: new Date().toISOString(),
+                // Additional services for fleet washes
+                additionalServices: selectedVehicle.priority === 'fleet' ? selectedAdditionalServices : [],
+                totalServicePrice: totalServicePrice,
+                // Use effective service (fleet selected service or vehicle's original service)
+                service: effectiveService || { name: 'Unknown', price: 0 },
+                // Fleet account info - stored in record for tracking
+                fleetAccountId: selectedVehicle.fleetAccountId || null,
+                fleetAccountNumber: selectedVehicle.fleetAccountNumber || null,
+                isFleetWash: selectedVehicle.priority === 'fleet',
+                driverName: selectedVehicle.driverName || '',
+                driverPhone: selectedVehicle.driverPhone || ''
             };
             
             // Use addOrUpdateRecord - it handles returning vehicles automatically
@@ -2448,15 +2517,24 @@ function VehicleIntake() {
                 const vehicleDataForBay = {
                     plateNumber: selectedVehicle.plateNumber,
                     customerName: selectedVehicle.customerName || '',
-                    vehicleType: selectedVehicle.vehicleType || 'sedan',
-                    service: selectedVehicle.service || selectedVehicle.selectedService || 'Car Wash',
-                    servicePrice: selectedVehicle.service?.price || selectedVehicle.servicePrice || 0,
+                    customerPhone: selectedVehicle.customerPhone || '',
+                    vehicleType: selectedVehicle.vehicleType || selectedVehicle.itemType || 'sedan',
+                    service: effectiveService || { name: 'Car Wash', price: 0 },
+                    servicePrice: totalServicePrice,
+                    additionalServices: selectedVehicle.priority === 'fleet' ? selectedAdditionalServices : [],
                     recordId: result.id,
                     queueId: queueId,
                     assignedBy: assignedByUser,
                     washedBy: washedBy,
                     assignedStaffId: selectedStaffId || null,
-                    startTime: new Date().toISOString()
+                    startTime: new Date().toISOString(),
+                    // Fleet account info for tracking
+                    fleetAccountId: selectedVehicle.fleetAccountId || null,
+                    fleetAccountNumber: selectedVehicle.fleetAccountNumber || null,
+                    isFleetWash: selectedVehicle.priority === 'fleet',
+                    // Driver info for fleet vehicles
+                    driverName: selectedVehicle.driverName || '',
+                    driverPhone: selectedVehicle.driverPhone || ''
                 };
                 await services.washBayService.assignVehicle(bayId, vehicleDataForBay);
                 console.log('✅ Wash bay updated to occupied:', bayId, 'Assigned by:', assignedByUser, 'Washed by:', washedBy);
@@ -2468,6 +2546,8 @@ function VehicleIntake() {
             setShowAssignModal(false);
             setSelectedVehicle(null);
             setSelectedStaffId(''); // Reset staff selection
+            setSelectedAdditionalServices([]); // Reset additional services
+            setSelectedFleetService(null); // Reset fleet service selection
             
         } catch (err) {
             console.error('Error assigning bay:', err);
@@ -2647,6 +2727,77 @@ function VehicleIntake() {
             console.error('FAILED:', err);
             setError('Complete failed: ' + err.message);
             showAlert('Action Failed', 'Failed to complete: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Mark vehicle as paid - Updates payment status and marks as completed
+    const handleMarkAsPaid = async (vehicle) => {
+        console.log('=== MARK AS PAID ===');
+        console.log('Vehicle:', vehicle.plateNumber, 'ID:', vehicle.id);
+        
+        const svc = window.FirebaseServices;
+        if (!svc?.intakeRecordsService) {
+            showAlert('Connection Error', 'Firebase not ready. Please refresh the page.', 'error');
+            return;
+        }
+        
+        setActionLoading(true);
+        setError(null);
+        
+        try {
+            // Update record with both status: completed and paymentStatus: paid
+            const updatePayload = {
+                status: 'completed',
+                paymentStatus: 'paid',
+                paidAt: new Date().toISOString(),
+                timeOut: vehicle.timeOut || new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+            
+            const result = await svc.intakeRecordsService.updateRecord(vehicle.id, updatePayload);
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Update failed');
+            }
+
+            // Free up the bay if assigned
+            if (vehicle.assignedBayId && svc.washBayService) {
+                await svc.washBayService.releaseBay(vehicle.assignedBayId);
+            }
+
+            // Record visit in vehicle history
+            if (vehicle.category === 'vehicle' && vehicle.plateNumber && svc.vehicleHistoryService) {
+                try {
+                    await svc.vehicleHistoryService.recordVehicleVisit(vehicle.plateNumber, {
+                        service: vehicle.service,
+                        amount: vehicle.service?.price || 0,
+                        vehicleType: vehicle.vehicleType || vehicle.itemType,
+                        category: vehicle.category,
+                        status: 'completed',
+                        assignedBay: vehicle.assignedBay,
+                        timeIn: vehicle.timeIn,
+                        timeOut: new Date().toISOString(),
+                        customerName: vehicle.customerName,
+                        customerPhone: vehicle.customerPhone,
+                        recordId: vehicle.id
+                    });
+                } catch (historyErr) {
+                    console.error('Failed to record visit history:', historyErr);
+                }
+            }
+
+            showAlert('Payment Confirmed', `${vehicle.plateNumber} has been marked as paid and completed.`, 'success');
+            
+            // Auto-close alert after 2 seconds
+            setTimeout(() => closeAlert(), 2000);
+            
+            console.log('SUCCESS: Vehicle marked as paid');
+        } catch (err) {
+            console.error('FAILED:', err);
+            setError('Mark as paid failed: ' + err.message);
+            showAlert('Action Failed', 'Failed to mark as paid: ' + err.message, 'error');
         } finally {
             setActionLoading(false);
         }
@@ -3431,6 +3582,18 @@ function VehicleIntake() {
                                                 >
                                                     {Icons.printer}
                                                 </button>
+                                                {/* Mark as Paid button - show if not already paid */}
+                                                {vehicle.paymentStatus !== 'paid' && (
+                                                    <button 
+                                                        className="table-action-btn" 
+                                                        title="Mark as Paid"
+                                                        onClick={() => handleMarkAsPaid(vehicle)}
+                                                        disabled={actionLoading}
+                                                        style={{ color: '#10b981', fontWeight: '600' }}
+                                                    >
+                                                        💰
+                                                    </button>
+                                                )}
                                                 {vehicle.status !== 'completed' && (
                                                     <button 
                                                         className="table-action-btn table-action-complete" 
@@ -3881,7 +4044,7 @@ function VehicleIntake() {
                     <div className="modal modal-small" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2>Assign Bay & Staff</h2>
-                            <button className="modal-close" onClick={() => { setShowAssignModal(false); setSelectedStaffId(''); }}>
+                            <button className="modal-close" onClick={() => { setShowAssignModal(false); setSelectedStaffId(''); setSelectedAdditionalServices([]); }}>
                                 {Icons.x}
                             </button>
                         </div>
@@ -3926,6 +4089,119 @@ function VehicleIntake() {
                                 )}
                             </div>
                             
+                            {/* Primary Service - Required for Fleet Washes */}
+                            {selectedVehicle.priority === 'fleet' && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-primary)' }}>
+                                        🚗 Select Service <span style={{ color: '#ef4444' }}>*</span>
+                                    </label>
+                                    <select 
+                                        value={selectedFleetService ? selectedFleetService.id : ''}
+                                        onChange={(e) => {
+                                            const service = servicePackages.find(s => s.id === e.target.value);
+                                            setSelectedFleetService(service || null);
+                                            // Remove from additional services if selected as primary
+                                            if (service) {
+                                                setSelectedAdditionalServices(prev => prev.filter(s => s.id !== service.id));
+                                            }
+                                        }}
+                                        style={{
+                                            width: '100%',
+                                            padding: '12px',
+                                            border: '2px solid var(--border-color)',
+                                            borderRadius: '8px',
+                                            fontSize: '14px',
+                                            background: 'var(--bg-primary)',
+                                            color: 'var(--text-primary)',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        <option value="">-- Select Service Package --</option>
+                                        {servicePackages.map(service => (
+                                            <option key={service.id} value={service.id}>
+                                                {service.name} - KSH {service.price || 0}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {servicePackages.length === 0 && (
+                                        <p style={{ fontSize: '12px', color: '#f59e0b', marginTop: '6px' }}>
+                                            ⚠️ No service packages found. Add services in Service Packages.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                            
+                            {/* Additional Services - Only for Fleet Washes */}
+                            {selectedVehicle.priority === 'fleet' && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-primary)' }}>
+                                        🛠️ Additional Services (Fleet)
+                                    </label>
+                                    <div style={{ 
+                                        border: '2px solid var(--border-color)', 
+                                        borderRadius: '8px', 
+                                        maxHeight: '150px', 
+                                        overflowY: 'auto',
+                                        background: 'var(--bg-primary)'
+                                    }}>
+                                        {servicePackages.length > 0 ? servicePackages.map(service => {
+                                            const isSelected = selectedAdditionalServices.some(s => s.id === service.id);
+                                            const isMainService = selectedFleetService?.id === service.id;
+                                            return (
+                                                <label 
+                                                    key={service.id}
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        padding: '10px 12px',
+                                                        cursor: isMainService ? 'not-allowed' : 'pointer',
+                                                        borderBottom: '1px solid var(--border-color)',
+                                                        background: isSelected ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
+                                                        opacity: isMainService ? 0.5 : 1,
+                                                        transition: 'background 0.2s'
+                                                    }}
+                                                >
+                                                    <input 
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        disabled={isMainService}
+                                                        onChange={() => {
+                                                            if (isMainService) return;
+                                                            setSelectedAdditionalServices(prev => {
+                                                                if (isSelected) {
+                                                                    return prev.filter(s => s.id !== service.id);
+                                                                } else {
+                                                                    return [...prev, { id: service.id, name: service.name, price: service.price }];
+                                                                }
+                                                            });
+                                                        }}
+                                                        style={{ marginRight: '10px', cursor: isMainService ? 'not-allowed' : 'pointer' }}
+                                                    />
+                                                    <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)' }}>
+                                                        {service.name}
+                                                        {isMainService && <span style={{ color: '#8b5cf6', marginLeft: '8px', fontSize: '11px' }}>(Primary)</span>}
+                                                    </span>
+                                                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#22c55e' }}>
+                                                        KSH {service.price || 0}
+                                                    </span>
+                                                </label>
+                                            );
+                                        }) : (
+                                            <p style={{ padding: '12px', fontSize: '13px', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                                                No services available
+                                            </p>
+                                        )}
+                                    </div>
+                                    {selectedAdditionalServices.length > 0 && (
+                                        <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(139, 92, 246, 0.1)', borderRadius: '6px' }}>
+                                            <span style={{ fontSize: '12px', color: '#8b5cf6', fontWeight: '600' }}>
+                                                +{selectedAdditionalServices.length} additional service(s): KSH {selectedAdditionalServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0)}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            
                             {/* Available Bays Count */}
                             <div style={{ marginBottom: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                                 <span style={{ color: bays.filter(b => b.status === 'available').length > 0 ? '#22c55e' : '#ef4444', fontWeight: '600' }}>
@@ -3937,7 +4213,9 @@ function VehicleIntake() {
                                 {bays.map(bay => {
                                     const isAvailable = bay.status === 'available';
                                     const isOccupied = bay.status === 'occupied';
-                                    const canAssign = isAvailable && selectedStaffId; // Require staff selection
+                                    // For fleet vehicles, require service selection in addition to staff
+                                    const fleetServiceRequired = selectedVehicle.priority === 'fleet' && !selectedFleetService;
+                                    const canAssign = isAvailable && selectedStaffId && !fleetServiceRequired;
                                     const isMaintenance = bay.status === 'maintenance';
                                     
                                     return (
@@ -3945,7 +4223,7 @@ function VehicleIntake() {
                                             key={bay.id}
                                             onClick={() => canAssign && handleAssignBay(bay.id)}
                                             disabled={!canAssign}
-                                            title={isAvailable && !selectedStaffId ? 'Please select a staff member first' : ''}
+                                            title={isAvailable && !selectedStaffId ? 'Please select a staff member first' : (fleetServiceRequired ? 'Please select a service first' : '')}
                                             style={{
                                                 padding: '16px',
                                                 border: canAssign ? '2px solid #22c55e' : isAvailable ? '2px solid #94a3b8' : isOccupied ? '2px solid #3b82f6' : '2px solid #f59e0b',
@@ -6044,6 +6322,36 @@ function FleetAccounts() {
     const [error, setError] = useState(null);
     const [stats, setStats] = useState({ total: 0, active: 0, suspended: 0, totalVehicles: 0, totalBalance: 0, totalSpent: 0, totalServices: 0, totalExpenditures: 0 });
     
+    // Realtime global fleet stats (for main stat cards - uses invoice matching)
+    const [globalFleetStats, setGlobalFleetStats] = useState({
+        totalSpent: 0,
+        awaitingPayment: 0,
+        totalServices: 0,
+        paidWashes: 0,
+        unpaidWashes: 0
+    });
+    
+    // Vehicle expenditure from intake records (unpaid washes)
+    const [vehicleExpenditures, setVehicleExpenditures] = useState({});
+    const [loadingExpenditures, setLoadingExpenditures] = useState(false);
+    
+    // Realtime fleet stats for view modal (uses invoice matching like wash bay history)
+    const [realtimeFleetStats, setRealtimeFleetStats] = useState({
+        totalSpent: 0,
+        awaitingPayment: 0,
+        monthlySpendByVehicle: {},  // { plateNumber: { total, count } }
+        paidWashes: 0,
+        unpaidWashes: 0
+    });
+    const [fleetStatsUnsubscribers, setFleetStatsUnsubscribers] = useState([]);
+    
+    // Wash history modal state
+    const [showWashHistoryModal, setShowWashHistoryModal] = useState(false);
+    const [washHistoryAccount, setWashHistoryAccount] = useState(null);
+    const [washHistory, setWashHistory] = useState([]);
+    const [loadingWashHistory, setLoadingWashHistory] = useState(false);
+    const [washHistoryUnsubscribers, setWashHistoryUnsubscribers] = useState([]);
+    
     // Alert modal state
     const [alertModal, setAlertModal] = useState({
         isOpen: false,
@@ -6131,6 +6439,342 @@ function FleetAccounts() {
         init();
         return () => unsub && unsub();
     }, []);
+
+    // Subscribe to global fleet stats in realtime (uses invoice matching like wash bay history)
+    useEffect(() => {
+        if (accounts.length === 0) return;
+
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService?.subscribeToFleetWashHistory) return;
+
+        // Get ALL plate numbers from ALL fleet accounts
+        const allPlateNumbers = [];
+        const allVehiclesMap = {};
+        
+        accounts.forEach(account => {
+            if (account.vehicles && account.vehicles.length > 0) {
+                account.vehicles.forEach(v => {
+                    const normalizedPlate = (v.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim();
+                    if (normalizedPlate && !allPlateNumbers.includes(normalizedPlate)) {
+                        allPlateNumbers.push(normalizedPlate);
+                        allVehiclesMap[normalizedPlate] = v;
+                    }
+                });
+            }
+        });
+
+        if (allPlateNumbers.length === 0) return;
+
+        // Subscribe to all fleet vehicles wash history
+        const unsub = services.intakeRecordsService.subscribeToFleetWashHistory(
+            allPlateNumbers,
+            allVehiclesMap,
+            (history) => {
+                // Calculate global stats from history (already has invoice matching)
+                let totalSpent = 0;
+                let awaitingPayment = 0;
+                let paidWashes = 0;
+                let unpaidWashes = 0;
+
+                history.forEach(wash => {
+                    const price = wash.price || 0;
+                    const isPaid = wash.paymentStatus === 'paid';
+
+                    if (isPaid) {
+                        totalSpent += price;
+                        paidWashes++;
+                    } else {
+                        awaitingPayment += price;
+                        unpaidWashes++;
+                    }
+                });
+
+                setGlobalFleetStats({
+                    totalSpent,
+                    awaitingPayment,
+                    totalServices: paidWashes + unpaidWashes,
+                    paidWashes,
+                    unpaidWashes
+                });
+            },
+            (error) => {
+                console.error('Error in global fleet stats:', error);
+            }
+        );
+
+        return () => {
+            if (unsub) try { unsub(); } catch(e) {}
+        };
+    }, [accounts]);
+
+    // Function to load unpaid wash expenditures for fleet vehicles from intake records
+    const loadVehicleExpenditures = async (account) => {
+        if (!account || !account.vehicles || account.vehicles.length === 0) return {};
+        
+        setLoadingExpenditures(true);
+        try {
+            const services = window.FirebaseServices;
+            if (!services?.intakeRecordsService) return {};
+            
+            // Get all plate numbers from this fleet account
+            const plateNumbers = account.vehicles.map(v => v.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim());
+            
+            // Fetch intake records and filter for this account's vehicles with pending payment
+            const expenditures = {};
+            let totalUnpaid = 0;
+            
+            // Query all intake records - we'll filter by plate number and payment status
+            const { collection, getDocs, query, where } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
+            const db = services.db || window.db;
+            
+            for (const plate of plateNumbers) {
+                try {
+                    const q = query(
+                        collection(db, 'vehicleIntake'),
+                        where('plateNumber', '==', plate)
+                    );
+                    const querySnapshot = await getDocs(q);
+                    
+                    let vehicleUnpaidTotal = 0;
+                    let unpaidRecords = [];
+                    
+                    querySnapshot.forEach((doc) => {
+                        const data = doc.data();
+                        // Only count unpaid/pending records for this fleet account
+                        if (data.paymentStatus === 'pending' || data.paymentStatus === 'awaiting') {
+                            // Use totalServicePrice if available, otherwise use service price
+                            const cost = data.totalServicePrice || data.service?.price || 0;
+                            vehicleUnpaidTotal += cost;
+                            unpaidRecords.push({
+                                id: doc.id,
+                                ...data,
+                                cost: cost
+                            });
+                        }
+                        // Also check visit history for unpaid visits
+                        if (data.visitHistoryLog && Array.isArray(data.visitHistoryLog)) {
+                            data.visitHistoryLog.forEach(visit => {
+                                if (visit.paymentStatus === 'pending' || visit.paymentStatus === 'awaiting') {
+                                    const visitCost = visit.price || visit.service?.price || 0;
+                                    vehicleUnpaidTotal += visitCost;
+                                }
+                            });
+                        }
+                    });
+                    
+                    expenditures[plate] = {
+                        total: vehicleUnpaidTotal,
+                        records: unpaidRecords,
+                        count: unpaidRecords.length
+                    };
+                    totalUnpaid += vehicleUnpaidTotal;
+                } catch (err) {
+                    console.error('Error fetching expenditure for', plate, err);
+                    expenditures[plate] = { total: 0, records: [], count: 0 };
+                }
+            }
+            
+            expenditures._totalUnpaid = totalUnpaid;
+            setVehicleExpenditures(expenditures);
+            return expenditures;
+        } catch (error) {
+            console.error('Error loading vehicle expenditures:', error);
+            return {};
+        } finally {
+            setLoadingExpenditures(false);
+        }
+    };
+
+    // Load expenditures when viewing an account
+    useEffect(() => {
+        if (showViewModal && selectedAccount) {
+            loadVehicleExpenditures(selectedAccount);
+        }
+    }, [showViewModal, selectedAccount?.id]);
+
+    // Subscribe to realtime fleet stats when viewing an account (uses invoice matching like wash bay history)
+    useEffect(() => {
+        if (!showViewModal || !selectedAccount || !selectedAccount.vehicles?.length) {
+            return;
+        }
+
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService?.subscribeToFleetWashHistory) {
+            return;
+        }
+
+        // Get all plate numbers from this fleet account
+        const plateNumbers = selectedAccount.vehicles.map(v => 
+            (v.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim()
+        ).filter(p => p.length > 0);
+
+        // Create a map of vehicles by plate for quick lookup
+        const vehiclesMap = {};
+        selectedAccount.vehicles.forEach(v => {
+            const normalizedPlate = (v.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim();
+            if (normalizedPlate) {
+                vehiclesMap[normalizedPlate] = v;
+            }
+        });
+
+        // Subscribe to fleet wash history - this already uses invoice matching for payment status
+        const unsub = services.intakeRecordsService.subscribeToFleetWashHistory(
+            plateNumbers,
+            vehiclesMap,
+            (history) => {
+                // Calculate realtime stats from the history data
+                // Get current month boundaries
+                const now = new Date();
+                const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                
+                let totalSpent = 0;
+                let awaitingPayment = 0;
+                let paidWashes = 0;
+                let unpaidWashes = 0;
+                const monthlySpendByVehicle = {};
+                const awaitingByVehicle = {};
+
+                history.forEach(wash => {
+                    const price = wash.price || 0;
+                    const washDate = wash.date ? new Date(wash.date) : null;
+                    const isThisMonth = washDate && washDate >= monthStart;
+                    const plateKey = (wash.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+                    // Payment status is already resolved via invoice matching in subscribeToFleetWashHistory
+                    const isPaid = wash.paymentStatus === 'paid';
+
+                    if (isPaid) {
+                        totalSpent += price;
+                        paidWashes++;
+                        
+                        // Track monthly spend per vehicle
+                        if (isThisMonth && plateKey) {
+                            if (!monthlySpendByVehicle[plateKey]) {
+                                monthlySpendByVehicle[plateKey] = { total: 0, count: 0 };
+                            }
+                            monthlySpendByVehicle[plateKey].total += price;
+                            monthlySpendByVehicle[plateKey].count++;
+                        }
+                    } else {
+                        awaitingPayment += price;
+                        unpaidWashes++;
+                        
+                        // Track awaiting payment per vehicle
+                        if (plateKey) {
+                            if (!awaitingByVehicle[plateKey]) {
+                                awaitingByVehicle[plateKey] = { total: 0, count: 0 };
+                            }
+                            awaitingByVehicle[plateKey].total += price;
+                            awaitingByVehicle[plateKey].count++;
+                        }
+                    }
+                });
+
+                setRealtimeFleetStats({
+                    totalSpent,
+                    awaitingPayment,
+                    monthlySpendByVehicle,
+                    awaitingByVehicle,
+                    paidWashes,
+                    unpaidWashes
+                });
+
+                // Also set washHistory so print function can use it
+                setWashHistory(history);
+
+                // Also update vehicleExpenditures for the vehicle cards (awaiting payment)
+                const expenditures = { _totalUnpaid: awaitingPayment };
+                Object.keys(awaitingByVehicle).forEach(plate => {
+                    expenditures[plate] = awaitingByVehicle[plate];
+                });
+                setVehicleExpenditures(expenditures);
+                setLoadingExpenditures(false);
+            },
+            (error) => {
+                console.error('Error in realtime fleet stats:', error);
+            }
+        );
+
+        setFleetStatsUnsubscribers([unsub]);
+
+        // Cleanup
+        return () => {
+            if (unsub) try { unsub(); } catch(e) {}
+        };
+    }, [showViewModal, selectedAccount?.id]);
+
+    // Function to load wash history for a fleet account - REALTIME with Firestore
+    const loadWashHistory = (account) => {
+        if (!account || !account.vehicles || account.vehicles.length === 0) {
+            setWashHistory([]);
+            setLoadingWashHistory(false);
+            return;
+        }
+        
+        setLoadingWashHistory(true);
+        
+        // Cleanup previous listeners
+        washHistoryUnsubscribers.forEach(unsub => {
+            try { unsub(); } catch(e) {}
+        });
+        setWashHistoryUnsubscribers([]);
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService?.subscribeToFleetWashHistory) {
+            console.error('Fleet wash history service not available');
+            setWashHistory([]);
+            setLoadingWashHistory(false);
+            return;
+        }
+        
+        // Get all plate numbers from this fleet account (normalized)
+        const plateNumbers = account.vehicles.map(v => 
+            (v.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim()
+        ).filter(p => p.length > 0);
+        
+        // Create a map of vehicles by plate for quick lookup
+        const vehiclesMap = {};
+        account.vehicles.forEach(v => {
+            const normalizedPlate = (v.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim();
+            if (normalizedPlate) {
+                vehiclesMap[normalizedPlate] = v;
+            }
+        });
+        
+        console.log('🚗 Fleet plates to search:', plateNumbers);
+        
+        // Subscribe to fleet wash history
+        const unsub = services.intakeRecordsService.subscribeToFleetWashHistory(
+            plateNumbers,
+            vehiclesMap,
+            (history) => {
+                setWashHistory(history);
+                setLoadingWashHistory(false);
+            },
+            (error) => {
+                console.error('Error loading fleet wash history:', error);
+                setWashHistory([]);
+                setLoadingWashHistory(false);
+            }
+        );
+        
+        setWashHistoryUnsubscribers([unsub]);
+    };
+
+    // Cleanup wash history listeners when modal closes
+    useEffect(() => {
+        if (!showWashHistoryModal) {
+            washHistoryUnsubscribers.forEach(unsub => unsub());
+            setWashHistoryUnsubscribers([]);
+        }
+    }, [showWashHistoryModal]);
+
+    // Open wash history modal
+    const openWashHistoryModal = (account) => {
+        setWashHistoryAccount(account);
+        setShowWashHistoryModal(true);
+        loadWashHistory(account);
+    };
 
     const filteredAccounts = accounts.filter(acc => {
         const matchesSearch = acc.companyName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -6257,12 +6901,32 @@ function FleetAccounts() {
             notes: `Fleet vehicle from ${selectedAccount.companyName}`
         };
         const result = await services.intakeQueueService.addToQueue(vehicleData);
+        setActionLoading(false);
+        
         if (result.success) {
-            setSuccessMessage(`${vehicle.plateNumber} sent to queue`);
+            // Close all open modals first
+            setShowViewModal(false);
+            setShowVehicleModal(false);
+            setShowContactModal(false);
+            setShowTopUpModal(false);
+            setShowExpenditureModal(false);
+            setShowReceiptModal(false);
+            setShowWashHistoryModal(false);
+            
+            // Show success alert with auto-dismiss
+            showAlert(
+                '✅ Vehicle Sent to Queue',
+                `${vehicle.plateNumber} (${vehicle.make || ''} ${vehicle.model || ''}) has been sent to the intake queue.\n\nCompany: ${selectedAccount.companyName}\nDriver: ${vehicle.driverName || 'Not specified'}`,
+                'success'
+            );
+            
+            // Auto-dismiss after 3 seconds
+            setTimeout(() => {
+                closeAlert();
+            }, 3000);
         } else {
             setError(result.error || 'Failed to add to queue');
         }
-        setActionLoading(false);
     };
 
     const handleAddContact = async () => {
@@ -6406,224 +7070,269 @@ function FleetAccounts() {
     };
 
     // Print receipt/invoice function
+    // Generate Fleet Invoice using realtime wash history data
     const printReceipt = (account, period = 'all') => {
         const now = new Date();
-        let filteredTransactions = account.transactions || [];
-        let filteredExpenditures = account.expenditures || [];
         let periodLabel = 'All Time';
+        let periodStart = null;
 
         if (period === 'month') {
-            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-            filteredTransactions = filteredTransactions.filter(t => new Date(t.date) >= monthStart);
-            filteredExpenditures = filteredExpenditures.filter(e => new Date(e.date) >= monthStart);
+            periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
             periodLabel = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
         } else if (period === 'week') {
-            const weekStart = new Date(now);
-            weekStart.setDate(now.getDate() - 7);
-            filteredTransactions = filteredTransactions.filter(t => new Date(t.date) >= weekStart);
-            filteredExpenditures = filteredExpenditures.filter(e => new Date(e.date) >= weekStart);
+            periodStart = new Date(now);
+            periodStart.setDate(now.getDate() - 7);
             periodLabel = 'Last 7 Days';
         }
 
-        const totalCredits = filteredTransactions.filter(t => t.type === 'credit').reduce((s, t) => s + (t.amount || 0), 0);
-        const totalDebits = filteredTransactions.filter(t => t.type === 'debit').reduce((s, t) => s + (t.amount || 0), 0);
-        const totalExp = filteredExpenditures.reduce((s, e) => s + (e.amount || 0), 0);
+        // Filter wash history by period
+        const filteredHistory = periodStart 
+            ? washHistory.filter(w => w.date && new Date(w.date) >= periodStart)
+            : washHistory;
+
+        // Group washes by vehicle
+        const vehicleWashes = {};
+        filteredHistory.forEach(wash => {
+            const plate = wash.plateNumber || 'Unknown';
+            if (!vehicleWashes[plate]) {
+                vehicleWashes[plate] = {
+                    vehicle: account.vehicles?.find(v => v.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim() === plate) || { plateNumber: plate },
+                    washes: [],
+                    totalAmount: 0,
+                    paidAmount: 0,
+                    unpaidAmount: 0
+                };
+            }
+            vehicleWashes[plate].washes.push(wash);
+            const price = wash.price || 0;
+            vehicleWashes[plate].totalAmount += price;
+            if (wash.paymentStatus === 'paid') {
+                vehicleWashes[plate].paidAmount += price;
+            } else {
+                vehicleWashes[plate].unpaidAmount += price;
+            }
+        });
+
+        // Calculate totals
+        const totalAmount = filteredHistory.reduce((sum, w) => sum + (w.price || 0), 0);
+        const paidAmount = filteredHistory.filter(w => w.paymentStatus === 'paid').reduce((sum, w) => sum + (w.price || 0), 0);
+        const unpaidAmount = totalAmount - paidAmount;
+        const totalWashes = filteredHistory.length;
+
+        // Invoice number
+        const invoiceNo = `INV-${account.accountNumber?.slice(-4) || '0000'}-${Date.now().toString().slice(-6)}`;
+
+        // Due date (30 days for postpaid)
+        const dueDate = new Date(now);
+        dueDate.setDate(dueDate.getDate() + 30);
 
         const printContent = `
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Fleet Account Statement - ${account.companyName}</title>
+    <title>Fleet Invoice - ${account.companyName}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1e293b; line-height: 1.5; padding: 20px; }
-        .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; }
-        .logo { font-size: 24px; font-weight: 800; color: #10b981; }
-        .logo span { color: #1e293b; }
-        .doc-info { text-align: right; }
-        .doc-title { font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
-        .account-section { display: flex; justify-content: space-between; margin-bottom: 24px; }
-        .account-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; width: 48%; }
-        .account-box h4 { font-size: 10px; text-transform: uppercase; color: #64748b; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.5px; }
-        .account-box p { margin-bottom: 4px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
-        .summary-card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 14px; text-align: center; }
-        .summary-card .value { font-size: 20px; font-weight: 800; }
-        .summary-card .label { font-size: 9px; text-transform: uppercase; color: #64748b; margin-top: 4px; }
-        .green { color: #10b981; }
-        .red { color: #ef4444; }
-        .blue { color: #3b82f6; }
-        .purple { color: #8b5cf6; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th { background: #1e293b; color: white; padding: 10px 12px; text-align: left; font-size: 10px; text-transform: uppercase; font-weight: 700; }
-        td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
-        tr:nth-child(even) { background: #f8fafc; }
-        .section-title { font-size: 14px; font-weight: 700; margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 11px; color: #1e293b; line-height: 1.5; background: #fff; padding: 20px; }
+        
+        .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 16px; margin-bottom: 20px; }
+        .logo { font-size: 24px; font-weight: 800; }
+        .logo .eco { color: #10b981; }
+        .invoice-info { text-align: right; }
+        .invoice-title { font-size: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+        .invoice-no { font-family: monospace; color: #64748b; margin-top: 4px; }
+        
+        .info-row { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .info-block { width: 48%; }
+        .info-label { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 6px; letter-spacing: 0.5px; }
+        .company-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+        .info-line { margin-bottom: 2px; color: #475569; }
+        
+        .summary-table { width: 100%; margin-bottom: 20px; border-collapse: collapse; }
+        .summary-table td { padding: 8px 12px; border: 1px solid #e2e8f0; }
+        .summary-table .label { color: #64748b; font-size: 10px; text-transform: uppercase; }
+        .summary-table .value { font-size: 14px; font-weight: 700; }
+        
+        .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+        
+        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+        th { background: #f8fafc; padding: 8px 10px; text-align: left; font-size: 9px; text-transform: uppercase; font-weight: 700; color: #64748b; border-bottom: 2px solid #e2e8f0; }
+        td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; font-size: 11px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 2px solid #1e293b; text-align: center; font-size: 11px; color: #64748b; }
-        .totals-box { background: #1e293b; color: white; padding: 16px; margin-top: 20px; display: flex; justify-content: space-between; }
-        .totals-box .item { text-align: center; }
-        .totals-box .val { font-size: 18px; font-weight: 700; }
-        .totals-box .lbl { font-size: 9px; text-transform: uppercase; opacity: 0.8; }
-        @media print { body { padding: 0; } }
+        .mono { font-family: monospace; }
+        
+        .vehicle-row { background: #f8fafc; font-weight: 600; }
+        .vehicle-row td { border-bottom: 1px solid #e2e8f0; padding: 10px; }
+        .wash-row td { padding-left: 24px; color: #475569; }
+        .subtotal-row { background: #f8fafc; }
+        .subtotal-row td { font-weight: 600; border-top: 1px solid #e2e8f0; }
+        
+        .totals { margin-top: 20px; border-top: 2px solid #1e293b; padding-top: 12px; }
+        .totals-row { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+        .totals-label { width: 150px; text-align: right; padding-right: 20px; color: #64748b; }
+        .totals-value { width: 120px; text-align: right; font-weight: 600; font-family: monospace; }
+        .totals-final { font-size: 14px; font-weight: 700; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 8px; }
+        .totals-final .totals-value { font-size: 14px; }
+        
+        .unpaid-notice { background: #fef3c7; border: 1px solid #fcd34d; padding: 12px 16px; margin-top: 20px; }
+        .unpaid-notice .title { font-weight: 700; color: #92400e; margin-bottom: 4px; }
+        .unpaid-notice .detail { color: #78350f; font-size: 10px; }
+        
+        .footer { margin-top: 30px; padding-top: 16px; border-top: 1px solid #e2e8f0; text-align: center; color: #64748b; font-size: 10px; }
+        
+        @media print { body { padding: 10px; } }
     </style>
 </head>
 <body>
+    <!-- Header -->
     <div class="header">
         <div>
-            <div class="logo">Eco<span>Spark</span></div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Professional Car Wash Services</div>
+            <div class="logo"><span class="eco">Eco</span>Spark</div>
+            <div style="font-size: 10px; color: #64748b;">Professional Car Wash Services</div>
         </div>
-        <div class="doc-info">
-            <div class="doc-title">Fleet Account Statement</div>
-            <div style="margin-top: 8px;">Date: ${now.toLocaleDateString()}</div>
-            <div>Period: ${periodLabel}</div>
-            <div style="font-family: monospace; margin-top: 4px;">${account.accountNumber}</div>
-        </div>
-    </div>
-
-    <div class="account-section">
-        <div class="account-box">
-            <h4>Account Details</h4>
-            <p><strong>${account.companyName}</strong></p>
-            <p>${account.contactPerson || ''}</p>
-            <p>${account.phone}</p>
-            <p>${account.email || ''}</p>
-            <p>${account.address || ''}</p>
-        </div>
-        <div class="account-box">
-            <h4>Account Summary</h4>
-            <p>Payment Terms: <strong>${(account.paymentTerms || 'prepaid').toUpperCase()}</strong></p>
-            <p>Credit Limit: <strong>KSH ${(account.creditLimit || 0).toLocaleString()}</strong></p>
-            <p>Discount Rate: <strong>${account.discount || 0}%</strong></p>
-            <p>Status: <strong style="color: ${account.status === 'active' ? '#10b981' : '#ef4444'}">${(account.status || 'active').toUpperCase()}</strong></p>
-            <p>Total Vehicles: <strong>${account.vehicles?.length || 0}</strong></p>
+        <div class="invoice-info">
+            <div class="invoice-title">Invoice</div>
+            <div class="invoice-no">${invoiceNo}</div>
+            <div style="font-size: 10px; color: #64748b; margin-top: 4px;">${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
         </div>
     </div>
-
-    <div class="summary-grid">
-        <div class="summary-card">
-            <div class="value green">KSH ${(account.balance || 0).toLocaleString()}</div>
-            <div class="label">Current Balance</div>
+    
+    <!-- Account Info -->
+    <div class="info-row">
+        <div class="info-block">
+            <div class="info-label">Bill To</div>
+            <div class="company-name">${account.companyName}</div>
+            <div class="info-line">${account.contactPerson || ''}</div>
+            <div class="info-line">${account.phone || ''}</div>
+            <div class="info-line">${account.email || ''}</div>
+            <div class="info-line mono" style="margin-top: 6px;">Account: ${account.accountNumber}</div>
         </div>
-        <div class="summary-card">
-            <div class="value blue">KSH ${totalCredits.toLocaleString()}</div>
-            <div class="label">Total Top-ups</div>
-        </div>
-        <div class="summary-card">
-            <div class="value purple">KSH ${totalDebits.toLocaleString()}</div>
-            <div class="label">Services Used</div>
-        </div>
-        <div class="summary-card">
-            <div class="value red">KSH ${totalExp.toLocaleString()}</div>
-            <div class="label">Expenditures</div>
+        <div class="info-block">
+            <div class="info-label">Invoice Details</div>
+            <div class="info-line"><strong>Period:</strong> ${periodLabel}</div>
+            <div class="info-line"><strong>Payment Terms:</strong> ${(account.paymentTerms || 'Prepaid').toUpperCase()}</div>
+            <div class="info-line"><strong>Due Date:</strong> ${dueDate.toLocaleDateString()}</div>
+            <div class="info-line"><strong>Fleet Size:</strong> ${account.vehicles?.length || 0} vehicles</div>
+            <div class="info-line"><strong>Discount:</strong> ${account.discount || 0}%</div>
         </div>
     </div>
-
-    ${account.vehicles?.length > 0 ? `
-    <div class="section-title">Fleet Vehicles</div>
+    
+    <!-- Summary -->
+    <table class="summary-table">
+        <tr>
+            <td><div class="label">Total Washes</div><div class="value">${totalWashes}</div></td>
+            <td><div class="label">Vehicles Serviced</div><div class="value">${Object.keys(vehicleWashes).length}</div></td>
+            <td><div class="label">Amount Paid</div><div class="value" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</div></td>
+            <td><div class="label">Amount Due</div><div class="value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">KES ${unpaidAmount.toLocaleString()}</div></td>
+        </tr>
+    </table>
+    
+    <!-- Vehicle Summary -->
+    <div class="section-title">Vehicle Summary</div>
     <table>
         <thead>
             <tr>
                 <th>Plate Number</th>
                 <th>Vehicle</th>
                 <th>Driver</th>
-                <th class="text-center">Services</th>
+                <th class="text-center">Washes</th>
                 <th class="text-right">Total Spent</th>
+                <th class="text-right">Paid</th>
+                <th class="text-right">Unpaid</th>
             </tr>
         </thead>
         <tbody>
-            ${account.vehicles.map(v => `
-                <tr>
-                    <td><strong>${v.plateNumber}</strong></td>
-                    <td>${v.make || ''} ${v.model || ''} ${v.color ? '(' + v.color + ')' : ''}</td>
-                    <td>${v.driverName || '-'}</td>
-                    <td class="text-center">${v.totalServices || 0}</td>
-                    <td class="text-right"><strong>KSH ${(v.totalSpent || 0).toLocaleString()}</strong></td>
-                </tr>
+            ${Object.entries(vehicleWashes).map(([plate, data]) => `
+            <tr>
+                <td class="mono" style="font-weight: 600;">${plate}</td>
+                <td>${data.vehicle.make || ''} ${data.vehicle.model || ''}</td>
+                <td>${data.vehicle.driverName || '-'}</td>
+                <td class="text-center">${data.washes.length}</td>
+                <td class="text-right mono">KES ${data.totalAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: #10b981;">KES ${data.paidAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: ${data.unpaidAmount > 0 ? '#dc2626' : '#64748b'};">KES ${data.unpaidAmount.toLocaleString()}</td>
+            </tr>
             `).join('')}
+            <tr class="subtotal-row">
+                <td colspan="3" class="text-right">TOTAL</td>
+                <td class="text-center">${totalWashes}</td>
+                <td class="text-right mono">KES ${totalAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#64748b'};">KES ${unpaidAmount.toLocaleString()}</td>
+            </tr>
         </tbody>
     </table>
-    ` : ''}
-
-    ${filteredExpenditures.length > 0 ? `
-    <div class="section-title">Expenditures</div>
+    
+    <!-- Wash History Detail -->
+    <div class="section-title">Wash History</div>
     <table>
         <thead>
             <tr>
                 <th>Date</th>
-                <th>Description</th>
-                <th>Category</th>
+                <th>Time</th>
                 <th>Vehicle</th>
+                <th>Driver</th>
+                <th>Service</th>
+                <th>Bay</th>
                 <th class="text-right">Amount</th>
+                <th class="text-center">Status</th>
             </tr>
         </thead>
         <tbody>
-            ${filteredExpenditures.map(e => `
-                <tr>
-                    <td>${new Date(e.date).toLocaleDateString()}</td>
-                    <td>${e.description}</td>
-                    <td>${e.category}</td>
-                    <td>${e.vehicle || '-'}</td>
-                    <td class="text-right red"><strong>KSH ${(e.amount || 0).toLocaleString()}</strong></td>
-                </tr>
-            `).join('')}
-        </tbody>
-    </table>
-    ` : ''}
-
-    ${filteredTransactions.length > 0 ? `
-    <div class="section-title">Transactions (${periodLabel})</div>
-    <table>
-        <thead>
+            ${filteredHistory.length > 0 ? filteredHistory.map(wash => `
             <tr>
-                <th>Date</th>
-                <th>Description</th>
-                <th>Type</th>
-                <th class="text-right">Amount</th>
-                <th class="text-right">Balance</th>
+                <td>${wash.date ? new Date(wash.date).toLocaleDateString() : '-'}</td>
+                <td>${wash.date ? new Date(wash.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                <td class="mono" style="font-weight: 500;">${wash.plateNumber || '-'}</td>
+                <td>${wash.driverName || '-'}</td>
+                <td>${wash.service || 'Car Wash'}${wash.additionalServices?.length > 0 ? ` (+${wash.additionalServices.length})` : ''}</td>
+                <td>${wash.bay || '-'}</td>
+                <td class="text-right mono">KES ${(wash.price || 0).toLocaleString()}</td>
+                <td class="text-center" style="color: ${wash.paymentStatus === 'paid' ? '#10b981' : '#dc2626'}; font-weight: 600;">
+                    ${wash.paymentStatus === 'paid' ? 'PAID' : 'UNPAID'}
+                </td>
             </tr>
-        </thead>
-        <tbody>
-            ${filteredTransactions.slice(0, 50).map(t => `
-                <tr>
-                    <td>${new Date(t.date).toLocaleDateString()}</td>
-                    <td>${t.note || t.serviceDetails?.service || (t.type === 'credit' ? 'Top-up' : 'Service Charge')}</td>
-                    <td>${t.type === 'credit' ? 'CREDIT' : 'DEBIT'}</td>
-                    <td class="text-right ${t.type === 'credit' ? 'green' : 'red'}">
-                        <strong>${t.type === 'credit' ? '+' : '-'}KSH ${(t.amount || 0).toLocaleString()}</strong>
-                    </td>
-                    <td class="text-right">KSH ${(t.balanceAfter || 0).toLocaleString()}</td>
-                </tr>
-            `).join('')}
+            `).join('') : `
+            <tr><td colspan="8" style="text-align: center; padding: 20px; color: #64748b;">No wash records for this period</td></tr>
+            `}
         </tbody>
     </table>
-    ` : '<p style="text-align: center; color: #64748b; padding: 20px;">No transactions in this period.</p>'}
-
-    <div class="totals-box">
-        <div class="item">
-            <div class="val">KSH ${totalCredits.toLocaleString()}</div>
-            <div class="lbl">Total Credits</div>
+    
+    <!-- Totals -->
+    <div class="totals">
+        <div class="totals-row">
+            <div class="totals-label">Subtotal (${totalWashes} washes):</div>
+            <div class="totals-value">KES ${totalAmount.toLocaleString()}</div>
         </div>
-        <div class="item">
-            <div class="val">KSH ${totalDebits.toLocaleString()}</div>
-            <div class="lbl">Total Debits</div>
+        ${account.discount > 0 ? `
+        <div class="totals-row">
+            <div class="totals-label">Discount (${account.discount}%):</div>
+            <div class="totals-value" style="color: #10b981;">-KES ${Math.round(unpaidAmount * account.discount / 100).toLocaleString()}</div>
         </div>
-        <div class="item">
-            <div class="val">KSH ${totalExp.toLocaleString()}</div>
-            <div class="lbl">Total Expenditures</div>
+        ` : ''}
+        <div class="totals-row">
+            <div class="totals-label">Amount Paid:</div>
+            <div class="totals-value" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</div>
         </div>
-        <div class="item">
-            <div class="val" style="color: ${account.balance >= 0 ? '#10b981' : '#ef4444'}">KSH ${(account.balance || 0).toLocaleString()}</div>
-            <div class="lbl">Current Balance</div>
+        <div class="totals-row totals-final">
+            <div class="totals-label">BALANCE DUE:</div>
+            <div class="totals-value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">KES ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()}</div>
         </div>
     </div>
-
+    
+    ${unpaidAmount > 0 ? `
+    <div class="unpaid-notice">
+        <div class="title">Payment Required</div>
+        <div class="detail">Please settle the outstanding balance of KES ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()} by ${dueDate.toLocaleDateString()}.</div>
+        <div class="detail" style="margin-top: 6px;">Bank: Equity Bank | Account: 0123456789 | M-Pesa Paybill: 123456 | Ref: ${account.accountNumber}</div>
+    </div>
+    ` : ''}
+    
+    <!-- Footer -->
     <div class="footer">
-        <p>Thank you for your business with EcoSpark Car Wash</p>
-        <p style="margin-top: 8px;">This is a computer-generated document. No signature required.</p>
-        <p style="margin-top: 4px;">Generated on ${now.toLocaleString()}</p>
+        <div>Thank you for your business with EcoSpark Car Wash</div>
+        <div style="margin-top: 4px;">Invoice generated on ${now.toLocaleString()} | ${invoiceNo}</div>
     </div>
 </body>
 </html>`;
@@ -6692,7 +7401,7 @@ function FleetAccounts() {
             )}
 
             {/* Stats Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
                     <div style={{ fontSize: '24px' }}>🏢</div>
                     <div>
@@ -6724,14 +7433,21 @@ function FleetAccounts() {
                 <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
                     <div style={{ fontSize: '24px' }}>📊</div>
                     <div>
-                        <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(stats.totalSpent)}</div>
+                        <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(globalFleetStats.totalSpent || stats.totalSpent)}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Spent</div>
+                    </div>
+                </div>
+                <div style={{ ...statCardStyle, borderRight: `1px solid ${theme.border}` }}>
+                    <div style={{ fontSize: '24px' }}>⏳</div>
+                    <div>
+                        <div style={{ fontSize: '20px', fontWeight: '800', color: globalFleetStats.awaitingPayment > 0 ? '#ef4444' : theme.textSecondary }}>{formatCurrency(globalFleetStats.awaitingPayment)}</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Awaiting Payment</div>
                     </div>
                 </div>
                 <div style={{ ...statCardStyle }}>
                     <div style={{ fontSize: '24px' }}>🧾</div>
                     <div>
-                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{stats.totalServices}</div>
+                        <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{globalFleetStats.totalServices || stats.totalServices}</div>
                         <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Services</div>
                     </div>
                 </div>
@@ -6832,8 +7548,9 @@ function FleetAccounts() {
                                         </span>
                                     </td>
                                     <td style={{ padding: '16px 20px', textAlign: 'center' }}>
-                                        <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                        <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
                                             <button onClick={() => openViewModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="View">View</button>
+                                            <button onClick={() => openWashHistoryModal(acc)} style={{ padding: '8px 12px', background: '#8b5cf6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Wash History">History</button>
                                             <button onClick={() => openEditModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="Edit">Edit</button>
                                             <button onClick={() => { setSelectedAccount(acc); setShowTopUpModal(true); }} style={{ padding: '8px 12px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Top Up">Top Up</button>
                                             <button onClick={() => handleDeleteAccount(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid #ef4444`, cursor: 'pointer', fontSize: '12px', color: '#ef4444' }} title="Delete">Delete</button>
@@ -6940,10 +7657,16 @@ function FleetAccounts() {
                         </div>
 
                         {/* Account Summary Cards */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
                             <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
                                 <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Balance</div>
                                 <div style={{ fontSize: '22px', fontWeight: '800', color: selectedAccount.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(selectedAccount.balance)}</div>
+                            </div>
+                            <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Awaiting Payment</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: realtimeFleetStats.awaitingPayment > 0 ? '#ef4444' : theme.textSecondary }}>
+                                    {loadingExpenditures ? '...' : formatCurrency(realtimeFleetStats.awaitingPayment || 0)}
+                                </div>
                             </div>
                             <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
                                 <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Credit Limit</div>
@@ -6951,7 +7674,7 @@ function FleetAccounts() {
                             </div>
                             <div style={{ padding: '16px 20px', borderRight: `1px solid ${theme.border}` }}>
                                 <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Spent</div>
-                                <div style={{ fontSize: '22px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(selectedAccount.totalSpent)}</div>
+                                <div style={{ fontSize: '22px', fontWeight: '800', color: '#8b5cf6' }}>{formatCurrency(realtimeFleetStats.totalSpent || selectedAccount.totalSpent || 0)}</div>
                             </div>
                             <div style={{ padding: '16px 20px' }}>
                                 <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Discount</div>
@@ -6981,27 +7704,68 @@ function FleetAccounts() {
                                 <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>Fleet Vehicles ({selectedAccount.vehicles?.length || 0})</h4>
                                 <button onClick={() => setShowVehicleModal(true)} style={{ padding: '8px 16px', background: '#3b82f6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }}>+ Add Vehicle</button>
                             </div>
+                            
+                            {/* Total Unpaid Expenditure Summary - REALTIME */}
+                            {realtimeFleetStats.awaitingPayment > 0 && (
+                                <div style={{ 
+                                    marginBottom: '12px', 
+                                    padding: '12px 16px', 
+                                    background: 'rgba(239, 68, 68, 0.1)', 
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center'
+                                }}>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: '#ef4444', textTransform: 'uppercase', fontWeight: '600' }}>Total Awaiting Payment ({realtimeFleetStats.unpaidWashes} wash{realtimeFleetStats.unpaidWashes !== 1 ? 'es' : ''})</div>
+                                        <div style={{ fontSize: '18px', fontWeight: '800', color: '#ef4444' }}>{formatCurrency(realtimeFleetStats.awaitingPayment)}</div>
+                                    </div>
+                                    {loadingExpenditures && <span style={{ fontSize: '12px', color: theme.textSecondary }}>Loading...</span>}
+                                </div>
+                            )}
+                            
                             {selectedAccount.vehicles?.length > 0 ? (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
-                                    {selectedAccount.vehicles.map(v => (
-                                        <div key={v.id} style={{ background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '14px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                <div>
-                                                    <div style={{ fontWeight: '700', color: theme.text, fontSize: '15px', fontFamily: 'monospace' }}>{v.plateNumber}</div>
-                                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>{v.make} {v.model} • {v.color}</div>
-                                                    {v.driverName && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>Driver: {v.driverName}</div>}
+                                    {selectedAccount.vehicles.map(v => {
+                                        const plateKey = v.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+                                        const vehicleExp = realtimeFleetStats.awaitingByVehicle?.[plateKey] || { total: 0, count: 0 };
+                                        const monthlySpend = realtimeFleetStats.monthlySpendByVehicle?.[plateKey] || { total: 0, count: 0 };
+                                        return (
+                                            <div key={v.id} style={{ background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '14px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                    <div>
+                                                        <div style={{ fontWeight: '700', color: theme.text, fontSize: '15px', fontFamily: 'monospace' }}>{v.plateNumber}</div>
+                                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>{v.make} {v.model} • {v.color}</div>
+                                                        {v.driverName && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>Driver: {v.driverName}</div>}
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '4px' }}>
+                                                        <button onClick={() => handleSendToQueue(v)} style={{ padding: '4px 8px', background: '#10b981', border: 'none', cursor: 'pointer', color: 'white', fontSize: '11px', fontWeight: '600' }}>Send to Queue</button>
+                                                        <button onClick={() => handleRemoveVehicle(v.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                                    </div>
                                                 </div>
-                                                <div style={{ display: 'flex', gap: '4px' }}>
-                                                    <button onClick={() => handleSendToQueue(v)} style={{ padding: '4px 8px', background: '#10b981', border: 'none', cursor: 'pointer', color: 'white', fontSize: '11px', fontWeight: '600' }}>Send to Queue</button>
-                                                    <button onClick={() => handleRemoveVehicle(v.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.textSecondary, fontSize: '11px' }}>Remove</button>
+                                                <div style={{ display: 'flex', gap: '12px', marginTop: '10px', fontSize: '11px', flexWrap: 'wrap' }}>
+                                                    <span style={{ color: theme.textSecondary }}>This Month: <strong style={{ color: '#10b981' }}>{formatCurrency(monthlySpend.total)}</strong> ({monthlySpend.count} wash{monthlySpend.count !== 1 ? 'es' : ''})</span>
                                                 </div>
+                                                {/* Awaiting Payment Section - REALTIME */}
+                                                {vehicleExp.total > 0 && (
+                                                    <div style={{ 
+                                                        marginTop: '10px', 
+                                                        padding: '8px 10px', 
+                                                        background: 'rgba(239, 68, 68, 0.1)', 
+                                                        border: '1px dashed rgba(239, 68, 68, 0.4)',
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center'
+                                                    }}>
+                                                        <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: '600' }}>
+                                                            💰 Awaiting Payment ({vehicleExp.count} wash{vehicleExp.count > 1 ? 'es' : ''})
+                                                        </span>
+                                                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(vehicleExp.total)}</span>
+                                                    </div>
+                                                )}
                                             </div>
-                                            <div style={{ display: 'flex', gap: '16px', marginTop: '10px', fontSize: '11px' }}>
-                                                <span style={{ color: theme.textSecondary }}>Services: <strong style={{ color: theme.text }}>{v.totalServices || 0}</strong></span>
-                                                <span style={{ color: theme.textSecondary }}>Spent: <strong style={{ color: '#10b981' }}>{formatCurrency(v.totalSpent)}</strong></span>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             ) : (
                                 <div style={{ padding: '30px', textAlign: 'center', color: theme.textSecondary, background: theme.bgSecondary }}>
@@ -7120,34 +7884,75 @@ function FleetAccounts() {
                 </div>
             )}
 
-            {/* Print Receipt Modal */}
+            {/* Print Invoice Modal */}
             {showReceiptModal && selectedAccount && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002 }} onClick={() => setShowReceiptModal(false)}>
-                    <div style={{ background: theme.bg, width: '400px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
-                            <h4 style={{ margin: 0, color: theme.text }}>Print Account Statement</h4>
+                    <div style={{ background: theme.bg, width: '420px', maxWidth: '95vw', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                            <div>
+                                <h4 style={{ margin: 0, color: theme.text, fontWeight: '700' }}>🧾 Generate Invoice</h4>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>Fleet wash services invoice</div>
+                            </div>
                             <button onClick={() => setShowReceiptModal(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
                         </div>
                         <div style={{ padding: '20px' }}>
                             <div style={{ marginBottom: '16px', padding: '16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>Account</div>
-                                <div style={{ fontWeight: '700', color: theme.text }}>{selectedAccount.companyName}</div>
-                                <div style={{ fontSize: '12px', color: theme.textSecondary, fontFamily: 'monospace' }}>{selectedAccount.accountNumber}</div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div>
+                                        <div style={{ fontWeight: '700', color: theme.text, fontSize: '15px' }}>{selectedAccount.companyName}</div>
+                                        <div style={{ fontSize: '12px', color: theme.textSecondary, fontFamily: 'monospace', marginTop: '4px' }}>{selectedAccount.accountNumber}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <span style={{ 
+                                            padding: '4px 10px', 
+                                            fontSize: '10px', 
+                                            fontWeight: '600',
+                                            background: selectedAccount.paymentTerms === 'postpaid' ? '#dbeafe' : '#f3e8ff',
+                                            color: selectedAccount.paymentTerms === 'postpaid' ? '#1e40af' : '#7c3aed',
+                                            textTransform: 'uppercase'
+                                        }}>
+                                            {selectedAccount.paymentTerms || 'Prepaid'}
+                                        </span>
+                                    </div>
+                                </div>
+                                {washHistory.length > 0 && (
+                                    <div style={{ display: 'flex', gap: '16px', marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Total Washes</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700', color: theme.text }}>{washHistory.length}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Paid</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700', color: '#10b981' }}>
+                                                {formatCurrency(washHistory.filter(w => w.paymentStatus === 'paid').reduce((s, w) => s + (w.price || 0), 0))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase' }}>Unpaid</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700', color: '#ef4444' }}>
+                                                {formatCurrency(washHistory.filter(w => w.paymentStatus !== 'paid').reduce((s, w) => s + (w.price || 0), 0))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>Select the period for your statement:</div>
+                            <div style={{ fontSize: '13px', color: theme.text, marginBottom: '12px', fontWeight: '600' }}>Select invoice period:</div>
                             <div style={{ display: 'grid', gap: '10px' }}>
-                                <button onClick={() => { printReceipt(selectedAccount, 'week'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left' }}>
-                                    Last 7 Days
+                                <button onClick={() => { printReceipt(selectedAccount, 'week'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>📅 Last 7 Days</span>
+                                    <span style={{ fontSize: '11px', color: theme.textSecondary }}>Weekly invoice</span>
                                 </button>
-                                <button onClick={() => { printReceipt(selectedAccount, 'month'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left' }}>
-                                    This Month
+                                <button onClick={() => { printReceipt(selectedAccount, 'month'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: theme.bgSecondary, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px', color: theme.text, fontWeight: '600', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>📆 This Month</span>
+                                    <span style={{ fontSize: '11px', color: theme.textSecondary }}>Monthly invoice</span>
                                 </button>
-                                <button onClick={() => { printReceipt(selectedAccount, 'all'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: '#1e293b', border: 'none', cursor: 'pointer', fontSize: '14px', color: 'white', fontWeight: '600', textAlign: 'left' }}>
-                                    Full Statement (All Time)
+                                <button onClick={() => { printReceipt(selectedAccount, 'all'); setShowReceiptModal(false); }} style={{ padding: '14px 20px', background: '#0f172a', border: 'none', cursor: 'pointer', fontSize: '14px', color: 'white', fontWeight: '600', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>📋 Full Statement</span>
+                                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>All time</span>
                                 </button>
                             </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
                             <button onClick={() => setShowReceiptModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
                         </div>
                     </div>
@@ -7338,6 +8143,140 @@ function FleetAccounts() {
                         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', padding: '16px 20px', borderTop: `1px solid ${theme.border}` }}>
                             <button onClick={() => setShowTopUpModal(false)} style={{ padding: '10px 20px', background: 'none', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
                             <button onClick={handleTopUp} disabled={actionLoading} style={{ padding: '10px 20px', background: '#10b981', border: 'none', color: 'white', fontWeight: '600', cursor: 'pointer', opacity: actionLoading ? 0.7 : 1 }}>{actionLoading ? 'Processing...' : 'Add Balance'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Wash History Modal */}
+            {showWashHistoryModal && washHistoryAccount && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }} onClick={() => setShowWashHistoryModal(false)}>
+                    <div style={{ background: theme.bg, width: '950px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.border}` }} onClick={(e) => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', borderBottom: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                            <div>
+                                <h3 style={{ margin: 0, color: theme.text, fontWeight: '700', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    📋 Wash History
+                                </h3>
+                                <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px' }}>
+                                    {washHistoryAccount.companyName} • {washHistoryAccount.accountNumber}
+                                </div>
+                            </div>
+                            <button onClick={() => setShowWashHistoryModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                        </div>
+                        
+                        {/* Summary Stats */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ padding: '14px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Washes</div>
+                                <div style={{ fontSize: '20px', fontWeight: '800', color: '#8b5cf6' }}>{washHistory.length}</div>
+                            </div>
+                            <div style={{ padding: '14px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Vehicles</div>
+                                <div style={{ fontSize: '20px', fontWeight: '800', color: '#3b82f6' }}>{washHistoryAccount.vehicles?.length || 0}</div>
+                            </div>
+                            <div style={{ padding: '14px 20px', borderRight: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Total Spent</div>
+                                <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(washHistory.reduce((sum, w) => sum + (w.price || 0), 0))}</div>
+                            </div>
+                            <div style={{ padding: '14px 20px' }}>
+                                <div style={{ fontSize: '10px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Pending Payment</div>
+                                <div style={{ fontSize: '20px', fontWeight: '800', color: '#ef4444' }}>
+                                    {formatCurrency(washHistory.filter(w => w.paymentStatus === 'pending' || w.paymentStatus === 'awaiting').reduce((sum, w) => sum + (w.price || 0), 0))}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* History Table */}
+                        <div style={{ flex: 1, overflow: 'auto' }}>
+                            {loadingWashHistory ? (
+                                <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                                    <div style={{ fontSize: '24px', marginBottom: '12px' }}>⏳</div>
+                                    <div>Loading wash history...</div>
+                                </div>
+                            ) : washHistory.length === 0 ? (
+                                <div style={{ padding: '60px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.5 }}>🚿</div>
+                                    <div style={{ fontSize: '14px', fontWeight: '600' }}>No wash history found</div>
+                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>Wash records will appear here once vehicles are serviced</div>
+                                </div>
+                            ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead>
+                                        <tr style={{ background: theme.bgTertiary, position: 'sticky', top: 0 }}>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Date</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Plate</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Driver</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Service</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Amount</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Bay</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Payment</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {washHistory.map((wash, idx) => (
+                                            <tr key={wash.id} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? theme.bg : theme.bgSecondary }}>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    <div style={{ fontWeight: '500', color: theme.text }}>
+                                                        {wash.date ? new Date(wash.date).toLocaleDateString() : '-'}
+                                                    </div>
+                                                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                                        {wash.date ? new Date(wash.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    <div style={{ fontWeight: '700', color: '#3b82f6', fontFamily: 'monospace' }}>{wash.plateNumber}</div>
+                                                    {wash.vehicleInfo && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{wash.vehicleInfo}</div>}
+                                                </td>
+                                                <td style={{ padding: '12px 16px', color: theme.text }}>{wash.driverName || '-'}</td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    <div style={{ color: theme.text, fontWeight: '500' }}>{wash.service}</div>
+                                                    {wash.additionalServices && wash.additionalServices.length > 0 && (
+                                                        <div style={{ fontSize: '10px', color: '#8b5cf6', marginTop: '2px' }}>
+                                                            +{wash.additionalServices.length} add-on{wash.additionalServices.length > 1 ? 's' : ''}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: '700', color: '#10b981' }}>{formatCurrency(wash.price)}</td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center', color: theme.textSecondary }}>{wash.bay}</td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                    <span style={{
+                                                        padding: '3px 8px',
+                                                        fontSize: '10px',
+                                                        fontWeight: '600',
+                                                        textTransform: 'uppercase',
+                                                        background: wash.status === 'completed' ? '#dcfce7' : wash.status === 'in-progress' ? '#dbeafe' : '#f1f5f9',
+                                                        color: wash.status === 'completed' ? '#166534' : wash.status === 'in-progress' ? '#1d4ed8' : theme.textSecondary
+                                                    }}>
+                                                        {wash.status}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                    <span style={{
+                                                        padding: '3px 8px',
+                                                        fontSize: '10px',
+                                                        fontWeight: '600',
+                                                        textTransform: 'uppercase',
+                                                        background: wash.paymentStatus === 'paid' ? '#dcfce7' : wash.paymentStatus === 'pending' ? '#fef3c7' : '#fee2e2',
+                                                        color: wash.paymentStatus === 'paid' ? '#166534' : wash.paymentStatus === 'pending' ? '#92400e' : '#dc2626'
+                                                    }}>
+                                                        {wash.paymentStatus}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                        
+                        {/* Footer */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderTop: `1px solid ${theme.border}`, background: theme.bgSecondary }}>
+                            <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                Showing {washHistory.length} record{washHistory.length !== 1 ? 's' : ''}
+                            </div>
+                            <button onClick={() => setShowWashHistoryModal(false)} style={{ padding: '10px 24px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '13px', color: theme.text, fontWeight: '600' }}>Close</button>
                         </div>
                     </div>
                 </div>

@@ -2212,6 +2212,173 @@ export const intakeRecordsService = {
     return unsubscribe;
   },
 
+  // Subscribe to fleet wash history - realtime updates for specific plate numbers
+  // Uses invoice matching for payment status (like Wash Bay History)
+  subscribeToFleetWashHistory(plateNumbers, vehiclesMap, callback, onError) {
+    if (!plateNumbers || plateNumbers.length === 0) {
+      callback([]);
+      return () => {};
+    }
+
+    console.log('📋 Setting up fleet wash history for plates:', plateNumbers);
+    
+    let intakeRecords = [];
+    let invoices = [];
+    let unsubIntake = null;
+    let unsubInvoices = null;
+    
+    // Helper to process and return combined data
+    const processAndCallback = () => {
+      const allHistory = [];
+      
+      intakeRecords.forEach((data) => {
+        const recordPlate = (data.plateNumber || '').toUpperCase().replace(/\s+/g, ' ').trim();
+        
+        // Check if this plate belongs to the fleet
+        if (plateNumbers.includes(recordPlate)) {
+          const vehicle = vehiclesMap[recordPlate];
+          
+          // Find matching invoice for payment status detection
+          const findMatchingInvoice = (recordId, plate, bayId, timestamp) => {
+            return invoices.find(inv => {
+              // Match by washRecordId or recordId (most reliable)
+              if (inv.washRecordId && recordId) {
+                return inv.washRecordId === recordId;
+              }
+              if (inv.recordId && recordId) {
+                return inv.recordId === recordId;
+              }
+              // Match by plateNumber (for fleet invoices)
+              if (inv.plateNumber === plate) {
+                // If bay and time match within 5 minutes
+                if (inv.bayId === bayId && timestamp) {
+                  const timeDiff = Math.abs(new Date(inv.createdAt) - new Date(timestamp));
+                  if (timeDiff < 300000) return true;
+                }
+                // Or just plate match with close time
+                if (timestamp) {
+                  const timeDiff = Math.abs(new Date(inv.createdAt) - new Date(timestamp));
+                  if (timeDiff < 600000) return true; // 10 min window for fleet
+                }
+              }
+              return false;
+            });
+          };
+          
+          // Add current/latest visit
+          if (data.service || data.status) {
+            const matchingInvoice = findMatchingInvoice(
+              data.id, 
+              recordPlate, 
+              data.assignedBay, 
+              data.timeOut || data.timeIn
+            );
+            const isPaid = matchingInvoice?.paymentStatus === 'paid' || data.paymentStatus === 'paid';
+            
+            allHistory.push({
+              id: data.id,
+              plateNumber: recordPlate,
+              vehicleInfo: vehicle ? `${vehicle.make || ''} ${vehicle.model || ''}`.trim() : '',
+              driverName: data.driverName || vehicle?.driverName || '-',
+              service: data.service?.name || 'Car Wash',
+              price: data.totalServicePrice || data.service?.price || 0,
+              status: data.status || 'unknown',
+              paymentStatus: isPaid ? 'paid' : 'pending',
+              date: data.timeIn || data.createdAt || data.assignedTime,
+              bay: data.assignedBay || '-',
+              washedBy: data.washedBy || '-',
+              visitNumber: data.visitNumber || 1,
+              additionalServices: data.additionalServices || [],
+              invoiceId: matchingInvoice?.id || null
+            });
+          }
+          
+          // Add visit history entries
+          if (data.visitHistoryLog && Array.isArray(data.visitHistoryLog)) {
+            data.visitHistoryLog.forEach((visit, idx) => {
+              const visitInvoice = findMatchingInvoice(
+                visit.recordId || `${data.id}_history_${idx}`,
+                recordPlate,
+                visit.assignedBay,
+                visit.completedAt || visit.archivedAt
+              );
+              const visitPaid = visitInvoice?.paymentStatus === 'paid' || visit.paymentStatus === 'paid';
+              
+              allHistory.push({
+                id: `${data.id}_history_${idx}`,
+                plateNumber: recordPlate,
+                vehicleInfo: vehicle ? `${vehicle.make || ''} ${vehicle.model || ''}`.trim() : '',
+                driverName: visit.driverName || vehicle?.driverName || '-',
+                service: visit.serviceName || visit.service?.name || 'Car Wash',
+                price: visit.price || visit.service?.price || 0,
+                status: visit.status || 'completed',
+                paymentStatus: visitPaid ? 'paid' : 'pending',
+                date: visit.timeIn || visit.completedAt || visit.archivedAt,
+                bay: visit.assignedBay || '-',
+                washedBy: visit.washedBy || '-',
+                visitNumber: visit.visitNumber || idx + 1,
+                additionalServices: visit.additionalServices || [],
+                invoiceId: visitInvoice?.id || null
+              });
+            });
+          }
+        }
+      });
+      
+      // Sort by date (newest first)
+      allHistory.sort((a, b) => {
+        const dateA = a.date ? new Date(a.date) : new Date(0);
+        const dateB = b.date ? new Date(b.date) : new Date(0);
+        return dateB - dateA;
+      });
+      
+      console.log('📋 Fleet wash history loaded:', allHistory.length, 'records');
+      callback(allHistory);
+    };
+    
+    // Subscribe to intake records
+    const intakeQuery = query(
+      collection(db, 'vehicleIntake'),
+      orderBy('createdAt', 'desc')
+    );
+    
+    unsubIntake = onSnapshot(intakeQuery, (querySnapshot) => {
+      intakeRecords = [];
+      querySnapshot.forEach((docSnap) => {
+        intakeRecords.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      processAndCallback();
+    }, (error) => {
+      console.error('Fleet intake records subscription error:', error);
+      if (onError) onError(error);
+    });
+    
+    // Subscribe to invoices for payment status matching
+    const invoicesQuery = query(
+      collection(db, 'invoices'),
+      orderBy('createdAt', 'desc')
+    );
+    
+    unsubInvoices = onSnapshot(invoicesQuery, (querySnapshot) => {
+      invoices = [];
+      querySnapshot.forEach((docSnap) => {
+        invoices.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      processAndCallback();
+    }, (error) => {
+      console.error('Fleet invoices subscription error:', error);
+      // Don't fail completely, just work without invoice matching
+      invoices = [];
+      processAndCallback();
+    });
+    
+    // Return cleanup function that unsubscribes from both
+    return () => {
+      if (unsubIntake) try { unsubIntake(); } catch(e) {}
+      if (unsubInvoices) try { unsubInvoices(); } catch(e) {}
+    };
+  },
+
   // Get records once
   async getRecords() {
     try {
