@@ -4956,6 +4956,213 @@ export const factoryResetService = {
   }
 };
 
+// ==================== TEAM CHAT SERVICE ====================
+export const teamChatService = {
+  // Send a message (to specific user or broadcast to all)
+  async sendMessage(messageData) {
+    try {
+      const messageId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+      const messageRef = ref(realtimeDb, `teamChat/messages/${messageId}`);
+      await set(messageRef, {
+        id: messageId,
+        senderId: messageData.senderId,
+        senderName: messageData.senderName,
+        senderRole: messageData.senderRole || 'User',
+        recipientId: messageData.recipientId || 'all', // 'all' for broadcast
+        recipientName: messageData.recipientName || 'All Users',
+        message: messageData.message,
+        type: messageData.recipientId === 'all' ? 'broadcast' : 'direct',
+        timestamp: new Date().toISOString(),
+        status: 'sent', // sent, delivered, read
+        readBy: { [messageData.senderId]: true },
+        deliveredTo: { [messageData.senderId]: true }
+      });
+      return { success: true, id: messageId };
+    } catch (error) {
+      console.error('Error sending message:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get messages for a user (includes broadcasts and direct messages to/from them)
+  async getMessages(userId, limitCount = 50) {
+    try {
+      const messagesRef = ref(realtimeDb, 'teamChat/messages');
+      const snapshot = await get(messagesRef);
+      const data = snapshot.val();
+      if (data) {
+        const messages = Object.values(data)
+          .filter(m => 
+            m.recipientId === 'all' || 
+            m.senderId === userId || 
+            m.recipientId === userId
+          )
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, limitCount);
+        return { success: true, data: messages };
+      }
+      return { success: true, data: [] };
+    } catch (error) {
+      console.error('Error getting messages:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to messages (real-time)
+  subscribeToMessages(userId, callback) {
+    const messagesRef = ref(realtimeDb, 'teamChat/messages');
+    return onValue(messagesRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const messages = Object.values(data)
+          .filter(m => 
+            m.recipientId === 'all' || 
+            m.senderId === userId || 
+            m.recipientId === userId
+          )
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)); // oldest first for display
+        callback(messages);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  // Mark message as read
+  async markAsRead(messageId, userId) {
+    try {
+      const readRef = ref(realtimeDb, `teamChat/messages/${messageId}/readBy/${userId}`);
+      await set(readRef, true);
+      // Update message status to 'read' if all recipients have read
+      const statusRef = ref(realtimeDb, `teamChat/messages/${messageId}/status`);
+      await set(statusRef, 'read');
+      return { success: true };
+    } catch (error) {
+      console.error('Error marking message as read:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Mark message as delivered
+  async markAsDelivered(messageId, userId) {
+    try {
+      const deliveredRef = ref(realtimeDb, `teamChat/messages/${messageId}/deliveredTo/${userId}`);
+      await set(deliveredRef, true);
+      // Update status to delivered if not already read
+      const msgRef = ref(realtimeDb, `teamChat/messages/${messageId}`);
+      const snapshot = await get(msgRef);
+      const msg = snapshot.val();
+      if (msg && msg.status === 'sent') {
+        const statusRef = ref(realtimeDb, `teamChat/messages/${messageId}/status`);
+        await set(statusRef, 'delivered');
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error marking message as delivered:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get unread count for a user
+  getUnreadCount(messages, userId) {
+    return messages.filter(m => 
+      m.senderId !== userId && 
+      (!m.readBy || !m.readBy[userId])
+    ).length;
+  },
+
+  // Delete a message (only sender can delete)
+  async deleteMessage(messageId, userId) {
+    try {
+      const messageRef = ref(realtimeDb, `teamChat/messages/${messageId}`);
+      const snapshot = await get(messageRef);
+      const message = snapshot.val();
+      if (message && message.senderId === userId) {
+        await remove(messageRef);
+        return { success: true };
+      }
+      return { success: false, error: 'Not authorized to delete this message' };
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all logged-in users (from Firestore users collection)
+  async getLoggedInUsers() {
+    try {
+      const usersSnapshot = await getDocs(query(collection(db, 'users'), orderBy('createdAt', 'desc')));
+      const users = usersSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })).filter(u => u.isActive !== false);
+      return { success: true, data: users };
+    } catch (error) {
+      console.error('Error getting users:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to users for real-time list
+  subscribeToUsers(callback) {
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    return onSnapshot(q, (snapshot) => {
+      const users = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })).filter(u => u.isActive !== false);
+      callback(users);
+    });
+  },
+
+  // Clear all chat messages
+  async clearAllMessages() {
+    try {
+      const messagesRef = ref(realtimeDb, 'teamChat/messages');
+      await remove(messagesRef);
+      return { success: true };
+    } catch (error) {
+      console.error('Error clearing messages:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
+// ==================== SETTINGS SERVICE ====================
+export const settingsService = {
+  // Save support contacts
+  async saveSupportContacts(contacts) {
+    try {
+      const contactsRef = doc(db, 'settings', 'supportContacts');
+      await setDoc(contactsRef, {
+        email: contacts.email || '',
+        phone: contacts.phone || '',
+        whatsapp: contacts.whatsapp || '',
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error saving support contacts:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get support contacts
+  async getSupportContacts() {
+    try {
+      const contactsRef = doc(db, 'settings', 'supportContacts');
+      const snapshot = await getDoc(contactsRef);
+      if (snapshot.exists()) {
+        return { success: true, data: snapshot.data() };
+      }
+      return { success: true, data: null };
+    } catch (error) {
+      console.error('Error getting support contacts:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
 // ==================== MAKE SERVICES GLOBALLY AVAILABLE ====================
 
 // Attach to window for use in non-module scripts (React via Babel)
@@ -4988,6 +5195,10 @@ if (typeof window !== 'undefined') {
     staffService,
     // HR Service
     hrService,
+    // Team Chat
+    teamChatService,
+    // Settings
+    settingsService,
     // Audit Trail
     auditService,
     // Original Services

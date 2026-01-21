@@ -1055,6 +1055,729 @@ function NotificationDropdown({ isOpen, onClose, onModuleClick, notifications, u
     );
 }
 
+// Team Chat Dropdown Component
+function TeamChatDropdown({ isOpen, onClose, userProfile }) {
+    const [messages, setMessages] = useState([]);
+    const [usersList, setUsersList] = useState([]);
+    const [newMessage, setNewMessage] = useState('');
+    const [selectedRecipient, setSelectedRecipient] = useState('all');
+    const [isComposing, setIsComposing] = useState(false);
+    const [lastMessageCount, setLastMessageCount] = useState(0);
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [isClearing, setIsClearing] = useState(false);
+    const messagesEndRef = React.useRef(null);
+    const chatContainerRef = React.useRef(null);
+    const audioContextRef = React.useRef(null);
+
+    const currentUserId = userProfile?.id || userProfile?.uid || 'user';
+    const currentUserName = userProfile?.name || userProfile?.displayName || userProfile?.email?.split('@')[0] || 'Unknown User';
+    const currentUserRole = userProfile?.role || 'User';
+
+    // Handle clear all chats
+    const handleClearAllChats = async () => {
+        setIsClearing(true);
+        const svc = window.FirebaseServices;
+        if (svc?.teamChatService?.clearAllMessages) {
+            await svc.teamChatService.clearAllMessages();
+        }
+        setIsClearing(false);
+        setShowClearConfirm(false);
+    };
+
+    // Play send sound
+    const playSendSound = () => {
+        try {
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioContextRef.current;
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+            gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+            oscillator.start(ctx.currentTime);
+            oscillator.stop(ctx.currentTime + 0.15);
+        } catch (e) { console.log('Sound not supported'); }
+    };
+
+    // Play receive sound
+    const playReceiveSound = () => {
+        try {
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioContextRef.current;
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            oscillator.frequency.setValueAtTime(600, ctx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + 0.08);
+            oscillator.frequency.exponentialRampToValueAtTime(700, ctx.currentTime + 0.15);
+            gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+            oscillator.start(ctx.currentTime);
+            oscillator.stop(ctx.currentTime + 0.2);
+        } catch (e) { console.log('Sound not supported'); }
+    };
+
+    // Subscribe to messages and users
+    useEffect(() => {
+        let unsubMessages = null;
+        let unsubUsers = null;
+        const init = async () => {
+            const svc = window.FirebaseServices;
+            if (!svc?.teamChatService) return;
+            
+            // Subscribe to users list
+            unsubUsers = svc.teamChatService.subscribeToUsers((users) => {
+                setUsersList(users.filter(u => u.id !== currentUserId));
+            });
+
+            // Subscribe to messages
+            unsubMessages = svc.teamChatService.subscribeToMessages(currentUserId, (msgs) => {
+                // Check for new messages (play sound)
+                if (msgs.length > lastMessageCount && lastMessageCount > 0) {
+                    const newestMsg = msgs[msgs.length - 1];
+                    if (newestMsg && newestMsg.senderId !== currentUserId) {
+                        playReceiveSound();
+                    }
+                }
+                setLastMessageCount(msgs.length);
+                setMessages(msgs);
+                
+                // Mark as delivered
+                msgs.forEach(msg => {
+                    if (msg.senderId !== currentUserId && (!msg.deliveredTo || !msg.deliveredTo[currentUserId])) {
+                        svc.teamChatService.markAsDelivered(msg.id, currentUserId);
+                    }
+                });
+                
+                // Auto-scroll to bottom on new messages
+                setTimeout(() => {
+                    if (chatContainerRef.current) {
+                        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+                    }
+                }, 100);
+            });
+        };
+        init();
+        return () => { 
+            if (unsubMessages) unsubMessages(); 
+            if (unsubUsers) unsubUsers();
+        };
+    }, [currentUserId, lastMessageCount]);
+
+    // Mark messages as read when dropdown is open
+    useEffect(() => {
+        if (!isOpen) return;
+        const svc = window.FirebaseServices;
+        if (!svc?.teamChatService) return;
+        
+        messages.forEach(msg => {
+            if (msg.senderId !== currentUserId && (!msg.readBy || !msg.readBy[currentUserId])) {
+                svc.teamChatService.markAsRead(msg.id, currentUserId);
+            }
+        });
+    }, [isOpen, messages, currentUserId]);
+
+    const handleSendMessage = async () => {
+        if (!newMessage.trim()) return;
+        const svc = window.FirebaseServices;
+        if (!svc?.teamChatService) return;
+
+        const recipient = selectedRecipient === 'all' 
+            ? { id: 'all', name: 'All Users' }
+            : usersList.find(u => u.id === selectedRecipient) || { id: selectedRecipient, name: 'User' };
+
+        playSendSound();
+
+        await svc.teamChatService.sendMessage({
+            senderId: currentUserId,
+            senderName: currentUserName,
+            senderRole: currentUserRole,
+            recipientId: recipient.id,
+            recipientName: recipient.name || recipient.displayName || recipient.email?.split('@')[0],
+            message: newMessage.trim()
+        });
+
+        setNewMessage('');
+        setIsComposing(false);
+    };
+
+    const formatTime = (timestamp) => {
+        if (!timestamp) return '';
+        try {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const isToday = date.toDateString() === now.toDateString();
+            if (isToday) {
+                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + 
+                   date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } catch { return ''; }
+    };
+
+    // Message status ticks component
+    const MessageTicks = ({ msg, isOwn }) => {
+        if (!isOwn) return null;
+        
+        const status = msg.status || 'sent';
+        const hasBeenRead = msg.readBy && Object.keys(msg.readBy).length > 1;
+        const hasBeenDelivered = msg.deliveredTo && Object.keys(msg.deliveredTo).length > 1;
+        
+        let tickColor = '#94a3b8'; // gray for sent
+        let tickCount = 1;
+        
+        if (hasBeenRead) {
+            tickColor = '#3b82f6'; // blue for read
+            tickCount = 2;
+        } else if (hasBeenDelivered || status === 'delivered') {
+            tickColor = '#94a3b8'; // gray double tick for delivered
+            tickCount = 2;
+        }
+        
+        return (
+            <span style={{ marginLeft: '6px', display: 'inline-flex', alignItems: 'center' }}>
+                {tickCount === 2 ? (
+                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+                        <path d="M1 6l3 3 5-6" stroke={tickColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M6 6l3 3 5-6" stroke={tickColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                ) : (
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 6l3 3 5-6" stroke={tickColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                )}
+            </span>
+        );
+    };
+
+    const unreadCount = messages.filter(m => 
+        m.senderId !== currentUserId && (!m.readBy || !m.readBy[currentUserId])
+    ).length;
+
+    if (!isOpen) return null;
+
+    return (
+        <>
+            <div className="dropdown-overlay" onClick={onClose}></div>
+            <div className="dropdown team-chat-dropdown" style={{ 
+                width: '400px', 
+                maxHeight: '550px',
+                borderRadius: '0',
+                display: 'flex',
+                flexDirection: 'column'
+            }}>
+                {/* Header */}
+                <div style={{ 
+                    padding: '14px 16px', 
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexShrink: 0
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>Team Chat</h3>
+                        {unreadCount > 0 && (
+                            <span style={{ 
+                                fontSize: '11px', 
+                                padding: '2px 8px', 
+                                background: '#3b82f6',
+                                color: 'white',
+                                borderRadius: '10px',
+                                fontWeight: '600'
+                            }}>
+                                {unreadCount} new
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {messages.length > 0 && (
+                            <button 
+                                onClick={() => setShowClearConfirm(true)}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#ef4444',
+                                    padding: '6px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    fontWeight: '500',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                }}
+                                title="Clear all chats"
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                </svg>
+                                Clear
+                            </button>
+                        )}
+                        <button 
+                            onClick={() => setIsComposing(!isComposing)}
+                            style={{
+                                background: isComposing ? 'var(--bg-secondary)' : '#3b82f6',
+                                border: 'none',
+                                color: isComposing ? 'var(--text-primary)' : 'white',
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                            }}
+                        >
+                            {isComposing ? '✕ Cancel' : '+ New'}
+                        </button>
+                    </div>
+                </div>
+
+                {/* Compose Area */}
+                {isComposing && (
+                    <div style={{ 
+                        padding: '12px 16px', 
+                        borderBottom: '1px solid var(--border-color)',
+                        background: 'var(--bg-secondary)',
+                        flexShrink: 0
+                    }}>
+                        <div style={{ marginBottom: '10px' }}>
+                            <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
+                                Send to:
+                            </label>
+                            <select 
+                                value={selectedRecipient} 
+                                onChange={(e) => setSelectedRecipient(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 10px',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '6px',
+                                    background: 'var(--bg-primary)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '13px'
+                                }}
+                            >
+                                <option value="all">📢 All Users (Broadcast)</option>
+                                {usersList.map(user => (
+                                    <option key={user.id} value={user.id}>
+                                        👤 {user.name || user.displayName || user.email?.split('@')[0]} ({user.role || 'User'})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <textarea
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
+                                placeholder="Type your message..."
+                                style={{
+                                    flex: 1,
+                                    padding: '10px',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '6px',
+                                    background: 'var(--bg-primary)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '13px',
+                                    resize: 'none',
+                                    minHeight: '60px',
+                                    fontFamily: 'inherit'
+                                }}
+                            />
+                            <button
+                                onClick={handleSendMessage}
+                                disabled={!newMessage.trim()}
+                                style={{
+                                    background: newMessage.trim() ? '#3b82f6' : 'var(--border-color)',
+                                    border: 'none',
+                                    color: 'white',
+                                    padding: '0 16px',
+                                    borderRadius: '6px',
+                                    cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"/>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Messages List */}
+                <div 
+                    ref={chatContainerRef}
+                    style={{ 
+                        flex: 1,
+                        overflowY: 'auto',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        minHeight: '200px',
+                        maxHeight: '350px'
+                    }}
+                >
+                    {messages.length === 0 ? (
+                        <div style={{ 
+                            flex: 1, 
+                            display: 'flex', 
+                            flexDirection: 'column',
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            color: 'var(--text-secondary)',
+                            gap: '12px',
+                            padding: '40px 0'
+                        }}>
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
+                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                            </svg>
+                            <p style={{ margin: 0, fontSize: '14px' }}>No messages yet</p>
+                            <p style={{ margin: 0, fontSize: '12px', opacity: 0.7 }}>Start a conversation with your team</p>
+                        </div>
+                    ) : (
+                        messages.map((msg) => {
+                            const isOwn = msg.senderId === currentUserId;
+                            const isBroadcast = msg.type === 'broadcast' || msg.recipientId === 'all';
+                            return (
+                                <div 
+                                    key={msg.id}
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: isOwn ? 'flex-end' : 'flex-start',
+                                        maxWidth: '85%',
+                                        alignSelf: isOwn ? 'flex-end' : 'flex-start'
+                                    }}
+                                >
+                                    {/* Sender info */}
+                                    <div style={{ 
+                                        fontSize: '11px', 
+                                        color: 'var(--text-secondary)',
+                                        marginBottom: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}>
+                                        {!isOwn && (
+                                            <span style={{ fontWeight: '600', color: '#3b82f6' }}>
+                                                {msg.senderName}
+                                            </span>
+                                        )}
+                                        {isBroadcast && (
+                                            <span style={{ 
+                                                background: '#f59e0b20', 
+                                                color: '#f59e0b', 
+                                                padding: '1px 6px', 
+                                                borderRadius: '4px',
+                                                fontSize: '10px',
+                                                fontWeight: '600'
+                                            }}>
+                                                📢 Broadcast
+                                            </span>
+                                        )}
+                                        {!isBroadcast && !isOwn && (
+                                            <span style={{ 
+                                                background: '#3b82f620', 
+                                                color: '#3b82f6', 
+                                                padding: '1px 6px', 
+                                                borderRadius: '4px',
+                                                fontSize: '10px',
+                                                fontWeight: '600'
+                                            }}>
+                                                Direct
+                                            </span>
+                                        )}
+                                    </div>
+                                    {/* Message bubble */}
+                                    <div style={{
+                                        background: isOwn 
+                                            ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' 
+                                            : 'var(--bg-secondary)',
+                                        color: isOwn ? 'white' : 'var(--text-primary)',
+                                        padding: '10px 14px',
+                                        borderRadius: isOwn ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                                        fontSize: '13px',
+                                        lineHeight: '1.4',
+                                        wordBreak: 'break-word',
+                                        boxShadow: isOwn ? '0 2px 8px rgba(59, 130, 246, 0.3)' : 'none'
+                                    }}>
+                                        {msg.message}
+                                    </div>
+                                    {/* Time and ticks */}
+                                    <div style={{ 
+                                        fontSize: '10px', 
+                                        color: 'var(--text-secondary)',
+                                        marginTop: '4px',
+                                        opacity: 0.7,
+                                        display: 'flex',
+                                        alignItems: 'center'
+                                    }}>
+                                        {formatTime(msg.timestamp)}
+                                        <MessageTicks msg={msg} isOwn={isOwn} />
+                                    </div>
+                                </div>
+                            );
+                        })
+                    )}
+                    <div ref={messagesEndRef} />
+                </div>
+
+                {/* Quick Reply (when not composing) */}
+                {!isComposing && messages.length > 0 && (
+                    <div style={{ 
+                        padding: '12px 16px', 
+                        borderTop: '1px solid var(--border-color)',
+                        display: 'flex',
+                        gap: '8px',
+                        flexShrink: 0
+                    }}>
+                        <input
+                            type="text"
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }}
+                            placeholder="Quick reply to all..."
+                            style={{
+                                flex: 1,
+                                padding: '10px 14px',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '20px',
+                                background: 'var(--bg-secondary)',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                outline: 'none'
+                            }}
+                            onFocus={() => setSelectedRecipient('all')}
+                        />
+                        <button
+                            onClick={handleSendMessage}
+                            disabled={!newMessage.trim()}
+                            style={{
+                                width: '40px',
+                                height: '40px',
+                                background: newMessage.trim() ? '#3b82f6' : 'var(--bg-secondary)',
+                                border: 'none',
+                                borderRadius: '50%',
+                                color: newMessage.trim() ? 'white' : 'var(--text-secondary)',
+                                cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+                )}
+
+                {/* Clear Chats Confirmation Modal */}
+                {showClearConfirm && (
+                    <div style={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: 'rgba(0, 0, 0, 0.5)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 10,
+                        backdropFilter: 'blur(4px)'
+                    }}>
+                        <div style={{
+                            background: 'var(--bg-primary)',
+                            borderRadius: '16px',
+                            padding: '24px',
+                            width: '320px',
+                            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.3)',
+                            animation: 'modalSlideIn 0.2s ease-out'
+                        }}>
+                            {/* Icon */}
+                            <div style={{
+                                width: '56px',
+                                height: '56px',
+                                background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                margin: '0 auto 16px'
+                            }}>
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                    <line x1="10" y1="11" x2="10" y2="17"/>
+                                    <line x1="14" y1="11" x2="14" y2="17"/>
+                                </svg>
+                            </div>
+
+                            {/* Title */}
+                            <h3 style={{
+                                margin: '0 0 8px',
+                                fontSize: '18px',
+                                fontWeight: '700',
+                                textAlign: 'center',
+                                color: 'var(--text-primary)'
+                            }}>
+                                Clear All Chats?
+                            </h3>
+
+                            {/* Description */}
+                            <p style={{
+                                margin: '0 0 24px',
+                                fontSize: '14px',
+                                color: 'var(--text-secondary)',
+                                textAlign: 'center',
+                                lineHeight: '1.5'
+                            }}>
+                                This will permanently delete all messages for everyone. This action cannot be undone.
+                            </p>
+
+                            {/* Buttons */}
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={() => setShowClearConfirm(false)}
+                                    disabled={isClearing}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 16px',
+                                        background: 'var(--bg-secondary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '10px',
+                                        color: 'var(--text-primary)',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleClearAllChats}
+                                    disabled={isClearing}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px 16px',
+                                        background: isClearing ? '#f87171' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                                        border: 'none',
+                                        borderRadius: '10px',
+                                        color: 'white',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: isClearing ? 'not-allowed' : 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px',
+                                        boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {isClearing ? (
+                                        <>
+                                            <svg width="16" height="16" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
+                                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="31.4 31.4" strokeLinecap="round"/>
+                                            </svg>
+                                            Clearing...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <polyline points="3 6 5 6 21 6"/>
+                                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
+                                            </svg>
+                                            Clear All
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </>
+    );
+}
+
+// Team Chat Unread Badge Hook with notification
+function useTeamChatUnread(userId) {
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [hasNewMessage, setHasNewMessage] = useState(false);
+    const prevCountRef = React.useRef(0);
+    const audioContextRef = React.useRef(null);
+    
+    // Play notification sound for new messages
+    const playNotificationSound = () => {
+        try {
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioContextRef.current;
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            // Two-tone notification
+            oscillator.frequency.setValueAtTime(523, ctx.currentTime); // C5
+            oscillator.frequency.setValueAtTime(659, ctx.currentTime + 0.1); // E5
+            oscillator.frequency.setValueAtTime(784, ctx.currentTime + 0.2); // G5
+            gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            oscillator.start(ctx.currentTime);
+            oscillator.stop(ctx.currentTime + 0.4);
+        } catch (e) { console.log('Notification sound not supported'); }
+    };
+    
+    useEffect(() => {
+        if (!userId) return;
+        let unsub = null;
+        const init = async () => {
+            const svc = window.FirebaseServices;
+            if (!svc?.teamChatService) return;
+            unsub = svc.teamChatService.subscribeToMessages(userId, (msgs) => {
+                const unread = msgs.filter(m => 
+                    m.senderId !== userId && (!m.readBy || !m.readBy[userId])
+                ).length;
+                
+                // Check if there's a new message
+                if (unread > prevCountRef.current) {
+                    setHasNewMessage(true);
+                    playNotificationSound();
+                    // Reset animation after 3 seconds
+                    setTimeout(() => setHasNewMessage(false), 3000);
+                }
+                
+                prevCountRef.current = unread;
+                setUnreadCount(unread);
+            });
+        };
+        init();
+        return () => { if (unsub) unsub(); };
+    }, [userId]);
+    
+    return { unreadCount, hasNewMessage };
+}
+
 // Profile Dropdown Component
 function ProfileDropdown({ isOpen, onClose }) {
     if (!isOpen) return null;
@@ -1104,6 +1827,7 @@ function ProfileDropdown({ isOpen, onClose }) {
 // Top Bar Component
 function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLogout, onModuleClick }) {
     const [notificationOpen, setNotificationOpen] = useState(false);
+    const [chatOpen, setChatOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
     const [notifications, setNotifications] = useState([]);
     const [readNotifications, setReadNotifications] = useState(() => {
@@ -1112,6 +1836,9 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
             return saved ? JSON.parse(saved) : [];
         } catch { return []; }
     });
+
+    // Team chat unread count with notification state
+    const { unreadCount: chatUnreadCount, hasNewMessage: chatHasNewMessage } = useTeamChatUnread(userProfile?.id || userProfile?.uid || 'user');
 
     // Real-time notification subscriptions
     useEffect(() => {
@@ -1330,12 +2057,20 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
 
     const handleNotificationClick = () => {
         setNotificationOpen(!notificationOpen);
+        setChatOpen(false);
+        setProfileOpen(false);
+    };
+
+    const handleChatClick = () => {
+        setChatOpen(!chatOpen);
+        setNotificationOpen(false);
         setProfileOpen(false);
     };
 
     const handleProfileClick = () => {
         setProfileOpen(!profileOpen);
         setNotificationOpen(false);
+        setChatOpen(false);
     };
 
     const handleLogoutClick = () => {
@@ -1399,6 +2134,49 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                         onMarkAsRead={handleMarkAsRead}
                         onMarkAllRead={handleMarkAllRead}
                         onClearAll={handleClearAll}
+                    />
+                </div>
+                {/* Team Chat Button */}
+                <div className="dropdown-container">
+                    <button 
+                        className="topbar-button" 
+                        onClick={handleChatClick} 
+                        title="Team Chat" 
+                        style={{ 
+                            position: 'relative',
+                            animation: chatHasNewMessage ? 'shake 0.5s ease-in-out' : 'none'
+                        }}
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={chatHasNewMessage ? '#3b82f6' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        {chatUnreadCount > 0 && (
+                            <span style={{
+                                position: 'absolute',
+                                top: '2px',
+                                right: '2px',
+                                background: chatHasNewMessage ? '#ef4444' : '#3b82f6',
+                                color: 'white',
+                                fontSize: '10px',
+                                fontWeight: '700',
+                                minWidth: '16px',
+                                height: '16px',
+                                borderRadius: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '0 4px',
+                                animation: chatHasNewMessage ? 'bounce 0.5s ease-in-out' : 'pulse 2s infinite',
+                                boxShadow: chatHasNewMessage ? '0 0 10px rgba(239, 68, 68, 0.5)' : 'none'
+                            }}>
+                                {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                            </span>
+                        )}
+                    </button>
+                    <TeamChatDropdown 
+                        isOpen={chatOpen} 
+                        onClose={() => setChatOpen(false)} 
+                        userProfile={userProfile}
                     />
                 </div>
                 <button className="topbar-button" onClick={onToggleTheme} title="Toggle Theme">
@@ -1782,6 +2560,19 @@ function VehicleIntake() {
     // Invoices for payment status tracking
     const [invoices, setInvoices] = useState([]);
     
+    // Garage services modal state
+    const [showGarageModal, setShowGarageModal] = useState(false);
+    const [garageVehicle, setGarageVehicle] = useState(null);
+    const [garageServices, setGarageServices] = useState([]);
+    const [selectedGarageServices, setSelectedGarageServices] = useState([]);
+    const [garageNotes, setGarageNotes] = useState('');
+    
+    // Customer items notes modal state
+    const [showItemsNotesModal, setShowItemsNotesModal] = useState(false);
+    const [itemsNotesVehicle, setItemsNotesVehicle] = useState(null);
+    const [customerItemsNotes, setCustomerItemsNotes] = useState('');
+    const [showItemsHistory, setShowItemsHistory] = useState(false);
+    
     // Alert modal state
     const [alertModal, setAlertModal] = useState({
         isOpen: false,
@@ -2135,6 +2926,17 @@ function VehicleIntake() {
                     );
                 }
 
+                // Garage Services - load async
+                if (services.garageServicesService?.subscribeToServices) {
+                    subscriptionsRef.current.garageServices = services.garageServicesService.subscribeToServices(
+                        (servicesData) => {
+                            if (subscriptionsRef.current.mounted) {
+                                setGarageServices(servicesData.filter(s => s.isActive !== false));
+                            }
+                        }
+                    );
+                }
+
                 console.log('✅ VehicleIntake: Subscriptions active');
                 
             } catch (err) {
@@ -2158,6 +2960,7 @@ function VehicleIntake() {
             if (subscriptionsRef.current.packages) subscriptionsRef.current.packages();
             if (subscriptionsRef.current.vehicleProfiles) subscriptionsRef.current.vehicleProfiles();
             if (subscriptionsRef.current.invoices) subscriptionsRef.current.invoices();
+            if (subscriptionsRef.current.garageServices) subscriptionsRef.current.garageServices();
         };
     }, []);
 
@@ -2557,8 +3360,35 @@ function VehicleIntake() {
         }
     };
 
-    // Send to garage
-    const handleSendToGarage = async (vehicle) => {
+    // Open garage services modal
+    const handleSendToGarage = (vehicle) => {
+        setGarageVehicle(vehicle);
+        setSelectedGarageServices([]);
+        setGarageNotes('');
+        setShowGarageModal(true);
+    };
+
+    // Toggle garage service selection
+    const toggleGarageService = (service) => {
+        setSelectedGarageServices(prev => {
+            const exists = prev.find(s => s.id === service.id);
+            if (exists) {
+                return prev.filter(s => s.id !== service.id);
+            } else {
+                return [...prev, service];
+            }
+        });
+    };
+
+    // Calculate total cost of selected garage services
+    const getGarageServicesTotal = () => {
+        return selectedGarageServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
+    };
+
+    // Confirm send to garage with selected services
+    const handleConfirmSendToGarage = async () => {
+        if (!garageVehicle || selectedGarageServices.length === 0) return;
+        
         const services = window.FirebaseServices;
         if (!services || !services.intakeRecordsService) {
             setError('Firebase not ready. Please wait and try again.');
@@ -2567,33 +3397,36 @@ function VehicleIntake() {
         
         setActionLoading(true);
         try {
-            const { id: queueId, ...vehicleData } = vehicle;
+            const { id: queueId, ...vehicleData } = garageVehicle;
+            const totalCost = getGarageServicesTotal();
             
-            // Create a "Garage" service placeholder
+            // Create a "Garage" service with selected services and total cost
             const garageService = {
                 id: 'garage-service',
-                name: 'Garage Service',
-                price: 0,
-                description: 'Vehicle sent to garage for repairs/service'
+                name: selectedGarageServices.map(s => s.name).join(', '),
+                price: totalCost,
+                description: 'Garage services: ' + selectedGarageServices.map(s => s.name).join(', ')
             };
             
             // Prepare record data for garage
             const recordData = {
                 ...vehicleData,
                 queueId: queueId,
-                service: garageService, // Change service to Garage
+                service: garageService,
                 status: 'garage',
                 assignedBay: 'Garage',
                 assignedBayId: null,
                 assignedTime: new Date().toISOString(),
                 timeIn: new Date().toISOString(),
                 sentToGarage: true,
-                garageTimeIn: new Date().toISOString()
+                garageTimeIn: new Date().toISOString(),
+                garageServices: selectedGarageServices,
+                garageNotes: garageNotes
             };
             
             // Use addOrUpdateRecord - handles returning vehicles automatically
             const result = await services.intakeRecordsService.addOrUpdateRecord(
-                vehicle.plateNumber,
+                garageVehicle.plateNumber,
                 recordData
             );
             
@@ -2605,37 +3438,42 @@ function VehicleIntake() {
             if (services.garageQueueService) {
                 try {
                     await services.garageQueueService.addToQueue({
-                        plateNumber: vehicle.plateNumber,
-                        vehicleType: vehicle.vehicleType || vehicle.itemType,
-                        customerName: vehicle.customerName || '',
-                        customerPhone: vehicle.customerPhone || '',
-                        services: [], // No services selected yet - to be selected in garage module
-                        notes: `From Vehicle Intake - ${vehicle.service?.name || 'N/A'}`,
-                        priority: vehicle.priority || 'normal',
-                        sourceId: result.recordId || vehicle.id,
+                        plateNumber: garageVehicle.plateNumber,
+                        vehicleType: garageVehicle.vehicleType || garageVehicle.itemType,
+                        customerName: garageVehicle.customerName || '',
+                        customerPhone: garageVehicle.customerPhone || '',
+                        services: selectedGarageServices,
+                        notes: garageNotes || `From Vehicle Intake`,
+                        priority: garageVehicle.priority || 'normal',
+                        sourceId: result.recordId || garageVehicle.id,
                         source: 'intake-queue',
-                        totalCost: 0,
-                        intakeTimeIn: vehicle.timeIn || new Date().toISOString(),
-                        originalService: vehicle.service // Keep track of original service
+                        totalCost: totalCost,
+                        intakeTimeIn: garageVehicle.timeIn || new Date().toISOString(),
+                        originalService: garageVehicle.service
                     });
-                    console.log('✅ Vehicle added to garage queue:', vehicle.plateNumber);
+                    console.log('✅ Vehicle added to garage queue:', garageVehicle.plateNumber);
                 } catch (garageErr) {
                     console.error('Failed to add to garage queue (non-critical):', garageErr);
-                    // Don't fail the whole operation if garage queue fails
                 }
             }
             
             // Remove from intake queue
-            await services.intakeQueueService.removeFromQueue(vehicle.id);
+            await services.intakeQueueService.removeFromQueue(garageVehicle.id);
             
             console.log(result.isReturning 
                 ? `✅ RETURNING vehicle sent to garage - Visit #${result.visitNumber}` 
                 : `✅ NEW vehicle sent to garage - Visit #1`
             );
             
+            // Close modal and reset
+            setShowGarageModal(false);
+            setGarageVehicle(null);
+            setSelectedGarageServices([]);
+            setGarageNotes('');
+            
             showAlert(
                 '🔧 Sent to Garage',
-                `${vehicle.plateNumber} has been sent to the Garage.\nCheck the Garage Management module to assign services.`,
+                `${garageVehicle.plateNumber} has been sent to the Garage with ${selectedGarageServices.length} service(s).\nTotal: KSh ${totalCost.toLocaleString()}`,
                 'success'
             );
             
@@ -2895,6 +3733,256 @@ function VehicleIntake() {
     const openAssignModal = (vehicle) => {
         setSelectedVehicle(vehicle);
         setShowAssignModal(true);
+    };
+
+    // Open customer items notes modal
+    const openItemsNotesModal = (vehicle) => {
+        setItemsNotesVehicle(vehicle);
+        setCustomerItemsNotes(vehicle.customerItems || '');
+        setShowItemsNotesModal(true);
+    };
+
+    // Save customer items notes
+    const handleSaveItemsNotes = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                customerItems: customerItemsNotes,
+                customerItemsUpdatedAt: new Date().toISOString()
+            });
+            
+            showAlert('✅ Items Saved', 'Customer items have been recorded successfully.', 'success');
+            setShowItemsNotesModal(false);
+            setItemsNotesVehicle(null);
+        } catch (err) {
+            console.error('Error saving items notes:', err);
+            setError('Failed to save items: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Clear customer items notes (upon issuance)
+    const handleClearItemsNotes = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                customerItems: '',
+                customerItemsIssuedAt: new Date().toISOString()
+            });
+            
+            showAlert('✅ Items Issued', 'Customer items have been cleared/issued.', 'success');
+            setShowItemsNotesModal(false);
+            setItemsNotesVehicle(null);
+            setCustomerItemsNotes('');
+        } catch (err) {
+            console.error('Error clearing items:', err);
+            setError('Failed to clear items: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Mark car key as issued
+    const handleKeyIssued = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                keyIssued: true,
+                keyIssuedAt: new Date().toISOString()
+            });
+            
+            // Update local state
+            setItemsNotesVehicle(prev => ({ ...prev, keyIssued: true, keyIssuedAt: new Date().toISOString() }));
+            showAlert('✅ Key Issued', 'Car key has been marked as returned to customer.', 'success');
+        } catch (err) {
+            console.error('Error marking key issued:', err);
+            setError('Failed to update key status: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Print key tag label
+    const printKeyTag = (vehicle) => {
+        const printWindow = window.open('', '_blank', 'width=300,height=200');
+        if (!printWindow) {
+            showAlert('Print Blocked', 'Please allow popups to print the key tag.', 'warning');
+            return;
+        }
+        
+        const tagContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Key Tag - ${vehicle.plateNumber}</title>
+                <style>
+                    @media print {
+                        @page { size: 60mm 30mm; margin: 2mm; }
+                        body { margin: 0; }
+                    }
+                    body {
+                        font-family: Arial, sans-serif;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        margin: 0;
+                        background: #f5f5f5;
+                    }
+                    .key-tag {
+                        width: 55mm;
+                        height: 25mm;
+                        background: white;
+                        border: 2px solid #333;
+                        border-radius: 4px;
+                        padding: 3mm;
+                        box-sizing: border-box;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                    }
+                    .plate-number {
+                        font-size: 16px;
+                        font-weight: bold;
+                        font-family: monospace;
+                        letter-spacing: 1px;
+                        margin-bottom: 2mm;
+                    }
+                    .vehicle-type {
+                        font-size: 9px;
+                        color: #666;
+                    }
+                    .logo {
+                        font-size: 8px;
+                        color: #999;
+                        margin-top: 1mm;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="key-tag">
+                    <div class="plate-number">${vehicle.plateNumber}</div>
+                    <div class="vehicle-type">${vehicle.itemType || vehicle.vehicleType || 'Vehicle'}</div>
+                    <div class="logo">🚗 EcoSpark</div>
+                </div>
+                <script>
+                    window.onload = function() {
+                        window.print();
+                        setTimeout(function() { window.close(); }, 500);
+                    };
+                <\/script>
+            </body>
+            </html>
+        `;
+        
+        printWindow.document.write(tagContent);
+        printWindow.document.close();
+    };
+
+    // Reset all (items + key status) for next wash
+    const handleResetForNextWash = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            // Save current items to history before clearing
+            const currentHistory = itemsNotesVehicle.itemsHistory || [];
+            const newHistoryEntry = customerItemsNotes ? {
+                items: customerItemsNotes,
+                date: new Date().toISOString(),
+                keyIssued: itemsNotesVehicle.keyIssued || false
+            } : null;
+            
+            const updatedHistory = newHistoryEntry 
+                ? [...currentHistory, newHistoryEntry].slice(-10) // Keep last 10 entries
+                : currentHistory;
+            
+            await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                customerItems: '',
+                keyIssued: false,
+                keyIssuedAt: null,
+                itemsHistory: updatedHistory,
+                lastResetAt: new Date().toISOString()
+            });
+            
+            // Update local state
+            setItemsNotesVehicle(prev => ({ 
+                ...prev, 
+                customerItems: '',
+                keyIssued: false,
+                keyIssuedAt: null,
+                itemsHistory: updatedHistory
+            }));
+            setCustomerItemsNotes('');
+            
+            showAlert('✅ Reset Complete', 'Items and key status have been reset for next wash.', 'success');
+        } catch (err) {
+            console.error('Error resetting:', err);
+            setError('Failed to reset: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Clear all items history
+    const handleClearItemsHistory = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                itemsHistory: []
+            });
+            
+            // Update local state
+            setItemsNotesVehicle(prev => ({ ...prev, itemsHistory: [] }));
+            setShowItemsHistory(false);
+            
+            showAlert('✅ History Cleared', 'All items history has been cleared.', 'success');
+        } catch (err) {
+            console.error('Error clearing history:', err);
+            setError('Failed to clear history: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
     };
 
     // Open view modal
@@ -3564,6 +4652,29 @@ function VehicleIntake() {
                                                     onClick={() => openEditModal(vehicle)}
                                                 >
                                                     {Icons.edit}
+                                                </button>
+                                                {/* Customer Items Notes Button */}
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title={vehicle.customerItems ? 'View/Edit Items (' + vehicle.customerItems.split('\n').filter(i => i.trim()).length + ')' : 'Add Customer Items'}
+                                                    onClick={() => openItemsNotesModal(vehicle)}
+                                                    style={{ 
+                                                        color: vehicle.customerItems ? '#f59e0b' : '#94a3b8',
+                                                        position: 'relative'
+                                                    }}
+                                                >
+                                                    📋
+                                                    {vehicle.customerItems && (
+                                                        <span style={{
+                                                            position: 'absolute',
+                                                            top: '-2px',
+                                                            right: '-2px',
+                                                            width: '8px',
+                                                            height: '8px',
+                                                            backgroundColor: '#f59e0b',
+                                                            borderRadius: '50%'
+                                                        }}></span>
+                                                    )}
                                                 </button>
                                                 {/* Visit History Button */}
                                                 <button 
@@ -4743,6 +5854,461 @@ function VehicleIntake() {
                             <button className="modal-btn modal-btn-primary" onClick={() => { setShowHistoryModal(false); setSelectedVehicleHistory(null); }}>
                                 Close
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Garage Services Selection Modal */}
+            {showGarageModal && garageVehicle && (
+                <div className="modal-overlay" onClick={() => { setShowGarageModal(false); setGarageVehicle(null); }}>
+                    <div className="modal" style={{ maxWidth: '600px', maxHeight: '85vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>🔧 Send to Garage</h2>
+                            <button className="modal-close" onClick={() => { setShowGarageModal(false); setGarageVehicle(null); }}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            {/* Vehicle Info */}
+                            <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <span style={{ fontSize: '20px', fontWeight: '700', fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                                            {garageVehicle.plateNumber}
+                                        </span>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                            {garageVehicle.customerName || 'Walk-in'} • {garageVehicle.itemType || garageVehicle.vehicleType}
+                                        </div>
+                                    </div>
+                                    <span style={{ padding: '4px 12px', background: '#fef3c7', color: '#92400e', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+                                        {garageVehicle.priority?.toUpperCase() || 'NORMAL'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Select Services */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '12px' }}>
+                                    Select Garage Services <span style={{ color: '#ef4444' }}>*</span>
+                                </label>
+                                
+                                {garageServices.length === 0 ? (
+                                    <div style={{ padding: '24px', textAlign: 'center', background: '#fef2f2', borderRadius: '8px', color: '#991b1b' }}>
+                                        <p style={{ margin: 0, fontWeight: '500' }}>No garage services available</p>
+                                        <p style={{ margin: '8px 0 0', fontSize: '13px' }}>Please add services in Garage Management first.</p>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', maxHeight: '300px', overflowY: 'auto', padding: '4px' }}>
+                                        {garageServices.map(service => {
+                                            const isSelected = selectedGarageServices.some(s => s.id === service.id);
+                                            return (
+                                                <div
+                                                    key={service.id}
+                                                    onClick={() => toggleGarageService(service)}
+                                                    style={{
+                                                        padding: '14px',
+                                                        border: isSelected ? '2px solid #10b981' : '1px solid var(--border-color)',
+                                                        borderRadius: '8px',
+                                                        cursor: 'pointer',
+                                                        background: isSelected ? '#ecfdf5' : 'var(--bg-primary)',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                >
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontWeight: '600', color: 'var(--text-primary)', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                {isSelected && <span style={{ color: '#10b981', fontWeight: '700' }}>✓</span>}
+                                                                {service.name}
+                                                            </div>
+                                                            {service.duration && (
+                                                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                                                    ⏱️ {service.duration} mins
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div style={{ fontWeight: '700', color: isSelected ? '#059669' : '#10b981', fontSize: '14px', whiteSpace: 'nowrap' }}>
+                                                            KSh {(parseFloat(service.price) || 0).toLocaleString()}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                                
+                                {/* Selected Summary */}
+                                {selectedGarageServices.length > 0 && (
+                                    <div style={{ marginTop: '14px', padding: '14px 16px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ color: '#065f46', fontSize: '14px', fontWeight: '500' }}>
+                                            {selectedGarageServices.length} service(s) selected
+                                        </span>
+                                        <span style={{ fontWeight: '700', color: '#065f46', fontSize: '18px' }}>
+                                            Total: KSh {getGarageServicesTotal().toLocaleString()}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Notes */}
+                            <div>
+                                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px' }}>
+                                    Notes (Optional)
+                                </label>
+                                <textarea
+                                    value={garageNotes}
+                                    onChange={(e) => setGarageNotes(e.target.value)}
+                                    placeholder="Any special instructions for the garage..."
+                                    rows={3}
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        border: '2px solid var(--border-color)',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        resize: 'vertical',
+                                        background: 'var(--bg-primary)',
+                                        color: 'var(--text-primary)'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '13px', color: '#ef4444' }}>
+                                {selectedGarageServices.length === 0 && '⚠️ Please select at least one service'}
+                            </span>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    className="modal-btn"
+                                    onClick={() => { setShowGarageModal(false); setGarageVehicle(null); }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    className="modal-btn modal-btn-primary"
+                                    onClick={handleConfirmSendToGarage}
+                                    disabled={actionLoading || selectedGarageServices.length === 0}
+                                    style={{
+                                        background: selectedGarageServices.length === 0 ? '#94a3b8' : '#10b981',
+                                        cursor: selectedGarageServices.length === 0 ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {actionLoading ? 'Sending...' : `🔧 Send to Garage (KSh ${getGarageServicesTotal().toLocaleString()})`}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Customer Items Notes Modal */}
+            {showItemsNotesModal && itemsNotesVehicle && (
+                <div className="modal-overlay" onClick={() => { setShowItemsNotesModal(false); setItemsNotesVehicle(null); }}>
+                    <div className="modal" style={{ maxWidth: '500px' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>📋 Customer Items</h2>
+                            <button className="modal-close" onClick={() => { setShowItemsNotesModal(false); setItemsNotesVehicle(null); }}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            {/* Vehicle Info */}
+                            <div style={{ marginBottom: '20px', padding: '14px 16px', background: 'var(--bg-secondary)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <span style={{ fontSize: '18px', fontWeight: '700', fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                                            {itemsNotesVehicle.plateNumber}
+                                        </span>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                            {itemsNotesVehicle.customerName || 'Walk-in'} • {itemsNotesVehicle.service?.name || 'Service'}
+                                        </div>
+                                    </div>
+                                    <span style={{
+                                        padding: '4px 10px',
+                                        borderRadius: '6px',
+                                        fontSize: '11px',
+                                        fontWeight: '600',
+                                        background: itemsNotesVehicle.status === 'completed' ? '#d1fae5' : itemsNotesVehicle.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
+                                        color: itemsNotesVehicle.status === 'completed' ? '#059669' : itemsNotesVehicle.status === 'in-progress' ? '#2563eb' : '#d97706'
+                                    }}>
+                                        {itemsNotesVehicle.status?.toUpperCase() || 'PENDING'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Items Notes Input */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px' }}>
+                                    📦 Items Left by Customer
+                                </label>
+                                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', margin: '0 0 10px 0' }}>
+                                    List items the customer has left in the vehicle (one per line)
+                                </p>
+                                <textarea
+                                    value={customerItemsNotes}
+                                    onChange={(e) => setCustomerItemsNotes(e.target.value)}
+                                    placeholder="e.g.&#10;- Phone charger&#10;- Sunglasses&#10;- Umbrella&#10;- Laptop bag"
+                                    rows={6}
+                                    style={{
+                                        width: '100%',
+                                        padding: '12px',
+                                        border: '2px solid var(--border-color)',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        resize: 'vertical',
+                                        background: 'var(--bg-primary)',
+                                        color: 'var(--text-primary)',
+                                        fontFamily: 'inherit',
+                                        lineHeight: '1.5'
+                                    }}
+                                />
+                            </div>
+
+                            {/* Items Count */}
+                            {customerItemsNotes && (
+                                <div style={{ 
+                                    padding: '10px 14px', 
+                                    background: '#fef3c7', 
+                                    border: '1px solid #fcd34d', 
+                                    borderRadius: '8px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    marginBottom: '16px'
+                                }}>
+                                    <span style={{ fontSize: '16px' }}>⚠️</span>
+                                    <span style={{ fontSize: '13px', color: '#92400e', fontWeight: '500' }}>
+                                        {customerItemsNotes.split('\n').filter(i => i.trim()).length} item(s) recorded - Remember to return upon completion
+                                    </span>
+                                </div>
+                            )}
+
+                            {/* Car Key Section */}
+                            <div style={{ 
+                                padding: '16px', 
+                                background: 'var(--bg-secondary)', 
+                                border: '1px solid var(--border-color)', 
+                                borderRadius: '10px'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ fontSize: '20px' }}>🔑</span>
+                                        <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>Car Key</span>
+                                    </div>
+                                    {itemsNotesVehicle.keyIssued ? (
+                                        <span style={{
+                                            padding: '4px 10px',
+                                            background: '#d1fae5',
+                                            color: '#059669',
+                                            borderRadius: '6px',
+                                            fontSize: '11px',
+                                            fontWeight: '600'
+                                        }}>
+                                            ✅ Issued
+                                        </span>
+                                    ) : (
+                                        <button
+                                            onClick={handleKeyIssued}
+                                            disabled={actionLoading}
+                                            style={{
+                                                padding: '6px 12px',
+                                                background: '#10b981',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '6px',
+                                                fontSize: '12px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px'
+                                            }}
+                                        >
+                                            🔑 Mark as Issued
+                                        </button>
+                                    )}
+                                </div>
+                                
+                                {/* Key Tag Label */}
+                                <div style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'space-between',
+                                    padding: '12px',
+                                    background: 'white',
+                                    border: '2px dashed #d1d5db',
+                                    borderRadius: '8px'
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <div style={{
+                                            padding: '8px 14px',
+                                            background: '#f8fafc',
+                                            border: '2px solid #1e293b',
+                                            borderRadius: '4px',
+                                            textAlign: 'center'
+                                        }}>
+                                            <div style={{ 
+                                                fontSize: '14px', 
+                                                fontWeight: '700', 
+                                                fontFamily: 'monospace',
+                                                letterSpacing: '1px',
+                                                color: '#1e293b'
+                                            }}>
+                                                {itemsNotesVehicle.plateNumber}
+                                            </div>
+                                            <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>
+                                                {itemsNotesVehicle.itemType || itemsNotesVehicle.vehicleType || 'Vehicle'}
+                                            </div>
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                            Key Tag Label
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => printKeyTag(itemsNotesVehicle)}
+                                        style={{
+                                            padding: '8px 14px',
+                                            background: '#3b82f6',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            fontSize: '12px',
+                                            fontWeight: '600',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px'
+                                        }}
+                                    >
+                                        🖨️ Print Tag
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Items History Section */}
+                            <div style={{ marginTop: '16px' }}>
+                                <div 
+                                    onClick={() => setShowItemsHistory(!showItemsHistory)}
+                                    style={{ 
+                                        display: 'flex', 
+                                        justifyContent: 'space-between', 
+                                        alignItems: 'center',
+                                        padding: '10px 14px',
+                                        background: 'var(--bg-secondary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: showItemsHistory ? '8px 8px 0 0' : '8px',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ fontSize: '14px' }}>📜</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                                            Previous Items History ({(itemsNotesVehicle.itemsHistory || []).length})
+                                        </span>
+                                    </div>
+                                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                        {showItemsHistory ? '▲' : '▼'}
+                                    </span>
+                                </div>
+                                
+                                {showItemsHistory && (
+                                    <div style={{ 
+                                        border: '1px solid var(--border-color)',
+                                        borderTop: 'none',
+                                        borderRadius: '0 0 8px 8px',
+                                        maxHeight: '200px',
+                                        overflowY: 'auto'
+                                    }}>
+                                        {(itemsNotesVehicle.itemsHistory || []).length === 0 ? (
+                                            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                                                No previous items recorded
+                                            </div>
+                                        ) : (
+                                            <>
+                                                {(itemsNotesVehicle.itemsHistory || []).slice().reverse().map((entry, idx) => (
+                                                    <div key={idx} style={{ 
+                                                        padding: '12px 14px', 
+                                                        borderBottom: idx < (itemsNotesVehicle.itemsHistory || []).length - 1 ? '1px solid var(--border-color)' : 'none',
+                                                        background: idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)'
+                                                    }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                                                {new Date(entry.date).toLocaleDateString()} {new Date(entry.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                            </span>
+                                                            {entry.keyIssued && (
+                                                                <span style={{ fontSize: '10px', padding: '2px 6px', background: '#d1fae5', color: '#059669', borderRadius: '4px' }}>
+                                                                    🔑 Key Issued
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>
+                                                            {entry.items || 'No items'}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                <div style={{ padding: '10px 14px', background: '#fef2f2', borderTop: '1px solid #fecaca' }}>
+                                                    <button
+                                                        onClick={handleClearItemsHistory}
+                                                        disabled={actionLoading}
+                                                        style={{
+                                                            width: '100%',
+                                                            padding: '8px',
+                                                            background: 'white',
+                                                            border: '1px solid #fca5a5',
+                                                            borderRadius: '6px',
+                                                            color: '#dc2626',
+                                                            fontSize: '12px',
+                                                            fontWeight: '600',
+                                                            cursor: 'pointer',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            gap: '6px'
+                                                        }}
+                                                    >
+                                                        ✕ Clear All History
+                                                    </button>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                {(itemsNotesVehicle.customerItems || itemsNotesVehicle.keyIssued) && (
+                                    <button
+                                        className="modal-btn"
+                                        onClick={handleResetForNextWash}
+                                        disabled={actionLoading}
+                                        style={{ 
+                                            background: '#e0e7ff', 
+                                            color: '#4338ca',
+                                            border: 'none',
+                                            fontSize: '13px'
+                                        }}
+                                    >
+                                        🔄 Reset for Next Wash
+                                    </button>
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    className="modal-btn"
+                                    onClick={() => { setShowItemsNotesModal(false); setItemsNotesVehicle(null); }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    className="modal-btn modal-btn-primary"
+                                    onClick={handleSaveItemsNotes}
+                                    disabled={actionLoading}
+                                    style={{ background: '#f59e0b' }}
+                                >
+                                    {actionLoading ? 'Saving...' : '💾 Save Items'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -10564,29 +12130,46 @@ function GarageManagement() {
 
         setActionLoading(true);
         try {
-            // Calculate total cost from services
+            // Calculate total cost from services - handle both service objects and IDs
             let totalCost = 0;
             let serviceDetails = [];
+            
             if (job.services && job.services.length > 0) {
-                serviceDetails = job.services.map(sId => {
-                    const service = garageServices.find(s => s.id === sId);
-                    return { id: sId, name: service?.name || 'Service', price: service?.price || 0 };
+                serviceDetails = job.services.map(svc => {
+                    // Handle both service objects (from intake) and service IDs
+                    if (typeof svc === 'object') {
+                        return { 
+                            id: svc.id, 
+                            name: svc.name || 'Service', 
+                            price: parseFloat(svc.price) || 0 
+                        };
+                    }
+                    const service = garageServices.find(s => s.id === svc);
+                    return { 
+                        id: svc, 
+                        name: service?.name || 'Service', 
+                        price: service?.price || 0 
+                    };
                 });
                 totalCost = serviceDetails.reduce((sum, s) => sum + s.price, 0);
-            } else {
-                totalCost = job.totalCost || 0;
+            }
+            
+            // Use job.totalCost if available and no services calculated
+            if (totalCost === 0 && job.totalCost) {
+                totalCost = parseFloat(job.totalCost) || 0;
             }
 
             console.log('Completing job:', job.id, 'with total:', totalCost);
 
             const result = await services.garageJobsService.completeJob(job.id, {
-                totalCost: totalCost
+                totalCost: totalCost,
+                completedServices: serviceDetails
             });
             
             console.log('Complete result:', result);
 
             if (result.success) {
-                // Try to find the intake record for this vehicle
+                // Try to find and update the intake record for this vehicle
                 let intakeRecordId = null;
                 if (services.intakeRecordsService && job.plateNumber) {
                     try {
@@ -10599,14 +12182,22 @@ function GarageManagement() {
                             );
                             if (matchingRecord) {
                                 intakeRecordId = matchingRecord.id;
+                                // Update the intake record status to completed
+                                await services.intakeRecordsService.updateRecord(intakeRecordId, {
+                                    status: 'completed',
+                                    timeOut: new Date().toISOString(),
+                                    garageCompletedAt: new Date().toISOString(),
+                                    garageTotalCost: totalCost
+                                });
+                                console.log('Updated intake record:', intakeRecordId);
                             }
                         }
                     } catch (findErr) {
-                        console.warn('Could not find intake record:', findErr);
+                        console.warn('Could not find/update intake record:', findErr);
                     }
                 }
                 
-                // Create invoice for the completed job
+                // Create invoice for the completed job - sends to billing as pending
                 if (services.billingService && totalCost > 0) {
                     await services.billingService.createInvoice({
                         source: 'garage',
@@ -10617,11 +12208,34 @@ function GarageManagement() {
                         customerPhone: job.customerPhone || '',
                         services: serviceDetails,
                         totalAmount: totalCost,
-                        notes: job.notes || '',
-                        garageRecordId: intakeRecordId // Link to intake record for auto-completion
+                        notes: job.notes || job.technicianNotes || '',
+                        garageRecordId: intakeRecordId,
+                        startTime: job.startedAt || job.addedAt || new Date().toISOString(),
+                        completedAt: new Date().toISOString()
                     });
-                    console.log('Invoice created for garage job:', job.id, 'with intake record:', intakeRecordId);
+                    console.log('✅ Invoice created for garage job:', job.id, 'Amount:', totalCost);
                 }
+                
+                // Log activity
+                if (services.activityService) {
+                    const currentUser = window.currentUserProfile;
+                    services.activityService.logActivity({
+                        type: 'garage',
+                        action: 'Garage Job Completed',
+                        details: `${job.plateNumber} - ${serviceDetails.map(s => s.name).join(', ') || 'Garage Service'}`,
+                        amount: totalCost,
+                        status: 'success',
+                        loggedBy: (currentUser && currentUser.displayName) || 'System',
+                        loggedByEmail: (currentUser && currentUser.email) || null,
+                        loggedByRole: (currentUser && currentUser.role) || null
+                    });
+                }
+                
+                showAlert(
+                    '✅ Job Completed',
+                    `${job.plateNumber} garage job completed!\nTotal: KSh ${totalCost.toLocaleString()}\n\nInvoice sent to Billing for payment.`,
+                    'success'
+                );
                 
                 // Wait for Firebase to sync, then switch tab
                 setTimeout(() => {
@@ -10933,7 +12547,9 @@ function GarageManagement() {
     // Open edit services modal
     const handleOpenEditServices = (item) => {
         setEditServicesItem(item);
-        setEditServices(item.services || []);
+        // Handle both service objects (from intake) and service IDs
+        const serviceIds = (item.services || []).map(svc => typeof svc === 'object' ? svc.id : svc);
+        setEditServices(serviceIds);
         setShowEditServicesModal(true);
     };
 
@@ -11262,11 +12878,12 @@ function GarageManagement() {
                                     <td style={{ padding: '14px 16px' }}>
                                         {item.services?.length > 0 ? (
                                             <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                                {item.services.slice(0, 2).map((sId, idx) => {
-                                                    const service = garageServices.find(s => s.id === sId);
-                                                    return service ? (
+                                                {item.services.slice(0, 2).map((svc, idx) => {
+                                                    // Handle both service objects (from intake) and service IDs
+                                                    const serviceName = typeof svc === 'object' ? svc.name : garageServices.find(s => s.id === svc)?.name;
+                                                    return serviceName ? (
                                                         <span key={idx} style={{ fontSize: '12px', padding: '2px 8px', backgroundColor: theme.bgTertiary, borderRadius: '0', color: theme.text }}>
-                                                            {service.name}
+                                                            {serviceName}
                                                         </span>
                                                     ) : null;
                                                 })}
@@ -11336,10 +12953,17 @@ function GarageManagement() {
                                     </td>
                                     <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                         <span style={{ fontWeight: '600', color: '#10b981', fontSize: '14px' }}>
-                                            {formatCurrency(item.services?.reduce((sum, sId) => {
-                                                const service = garageServices.find(s => s.id === sId);
-                                                return sum + (service?.price || 0);
-                                            }, 0) || item.totalCost || 0)}
+                                            {formatCurrency(
+                                                item.totalCost || 
+                                                item.services?.reduce((sum, svc) => {
+                                                    // Handle both service objects (from intake) and service IDs
+                                                    if (typeof svc === 'object') {
+                                                        return sum + (parseFloat(svc.price) || 0);
+                                                    }
+                                                    const service = garageServices.find(s => s.id === svc);
+                                                    return sum + (service?.price || 0);
+                                                }, 0) || 0
+                                            )}
                                         </span>
                                     </td>
                                     <td style={{ padding: '14px 16px', color: theme.textSecondary, fontSize: '13px' }}>
@@ -11838,25 +13462,32 @@ function GarageManagement() {
                                 <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text, marginBottom: '12px' }}>Services</div>
                                 {selectedItem.services?.length > 0 ? (
                                     <div style={{ border: `1px solid ${theme.border}` }}>
-                                        {selectedItem.services.map((sId, idx) => {
-                                            const service = garageServices.find(s => s.id === sId);
+                                        {selectedItem.services.map((svc, idx) => {
+                                            // Handle both service objects (from intake) and service IDs
+                                            const service = typeof svc === 'object' ? svc : garageServices.find(s => s.id === svc);
                                             return service ? (
                                                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', borderBottom: idx < selectedItem.services.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
                                                     <div>
                                                         <div style={{ color: theme.text, fontWeight: '500' }}>{service.name}</div>
-                                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>{service.duration} mins</div>
+                                                        {service.duration && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{service.duration} mins</div>}
                                                     </div>
-                                                    <div style={{ fontWeight: '600', color: '#3b82f6' }}>{formatCurrency(service.price)}</div>
+                                                    <div style={{ fontWeight: '600', color: '#3b82f6' }}>{formatCurrency(parseFloat(service.price) || 0)}</div>
                                                 </div>
                                             ) : null;
                                         })}
                                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', backgroundColor: theme.bgTertiary, fontWeight: '600' }}>
                                             <span style={{ color: theme.text }}>Total</span>
                                             <span style={{ color: '#10b981', fontSize: '16px' }}>
-                                                {formatCurrency(selectedItem.services.reduce((sum, sId) => {
-                                                    const service = garageServices.find(s => s.id === sId);
-                                                    return sum + (service?.price || 0);
-                                                }, 0))}
+                                                {formatCurrency(
+                                                    selectedItem.totalCost || 
+                                                    selectedItem.services.reduce((sum, svc) => {
+                                                        if (typeof svc === 'object') {
+                                                            return sum + (parseFloat(svc.price) || 0);
+                                                        }
+                                                        const service = garageServices.find(s => s.id === svc);
+                                                        return sum + (service?.price || 0);
+                                                    }, 0)
+                                                )}
                                             </span>
                                         </div>
                                     </div>
@@ -11960,12 +13591,13 @@ function GarageManagement() {
                             <div style={{ marginBottom: '16px' }}>
                                 <div style={{ fontWeight: '600', color: '#333', marginBottom: '12px', fontSize: '14px' }}>Services</div>
                                 {selectedItem.services?.length > 0 ? (
-                                    selectedItem.services.map((sId, idx) => {
-                                        const service = garageServices.find(s => s.id === sId);
+                                    selectedItem.services.map((svc, idx) => {
+                                        // Handle both service objects (from intake) and service IDs
+                                        const service = typeof svc === 'object' ? svc : garageServices.find(s => s.id === svc);
                                         return service ? (
                                             <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #eee' }}>
                                                 <span style={{ color: '#333' }}>{service.name}</span>
-                                                <span style={{ fontWeight: '500', color: '#333' }}>KSh {(service.price || 0).toLocaleString()}</span>
+                                                <span style={{ fontWeight: '500', color: '#333' }}>KSh {(parseFloat(service.price) || 0).toLocaleString()}</span>
                                             </div>
                                         ) : null;
                                     })
@@ -11978,10 +13610,13 @@ function GarageManagement() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '16px 0', borderTop: '2px solid #333', marginTop: '8px' }}>
                                 <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#333' }}>TOTAL</span>
                                 <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#059669' }}>
-                                    KSh {(selectedItem.services?.reduce((sum, sId) => {
-                                        const service = garageServices.find(s => s.id === sId);
+                                    KSh {(selectedItem.totalCost || selectedItem.services?.reduce((sum, svc) => {
+                                        if (typeof svc === 'object') {
+                                            return sum + (parseFloat(svc.price) || 0);
+                                        }
+                                        const service = garageServices.find(s => s.id === svc);
                                         return sum + (service?.price || 0);
-                                    }, 0) || selectedItem.totalCost || 0).toLocaleString()}
+                                    }, 0) || 0).toLocaleString()}
                                 </span>
                             </div>
 
@@ -12700,11 +14335,12 @@ function GarageManagement() {
                                 <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d' }}>
                                     <div style={{ fontSize: '13px', fontWeight: '600', color: '#92400e', marginBottom: '8px' }}>Current Services:</div>
                                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                        {editServicesItem.services.map((sId, idx) => {
-                                            const service = garageServices.find(s => s.id === sId);
-                                            return service ? (
+                                        {editServicesItem.services.map((svc, idx) => {
+                                            // Handle both service objects (from intake) and service IDs
+                                            const serviceName = typeof svc === 'object' ? svc.name : garageServices.find(s => s.id === svc)?.name;
+                                            return serviceName ? (
                                                 <span key={idx} style={{ fontSize: '12px', padding: '4px 10px', backgroundColor: '#fde68a', borderRadius: '0', color: '#78350f' }}>
-                                                    {service.name}
+                                                    {serviceName}
                                                 </span>
                                             ) : null;
                                         })}
@@ -18362,6 +19998,12 @@ function BillingModule() {
         mpesaCode: ''
     });
     
+    // Plate search states for manual billing
+    const [billingPlateSearchResults, setBillingPlateSearchResults] = useState([]);
+    const [showBillingPlateSearch, setShowBillingPlateSearch] = useState(false);
+    const [selectedIntakeRecord, setSelectedIntakeRecord] = useState(null);
+    const billingPlateSearchTimeout = React.useRef(null);
+    
     // Service packages for billing
     const [servicePackages, setServicePackages] = useState([]);
     
@@ -19600,6 +21242,69 @@ function BillingModule() {
         setManualBillingData(prev => ({ ...prev, [field]: value }));
     };
 
+    // Search intake records for plate number (for manual billing)
+    const handleBillingPlateSearch = async (searchTerm) => {
+        if (!searchTerm || searchTerm.length < 2) {
+            setBillingPlateSearchResults([]);
+            setShowBillingPlateSearch(false);
+            return;
+        }
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) return;
+        
+        try {
+            const result = await services.intakeRecordsService.searchByPlate(searchTerm);
+            if (result.success) {
+                setBillingPlateSearchResults(result.data);
+                setShowBillingPlateSearch(result.data.length > 0);
+            }
+        } catch (err) {
+            console.error('Error searching vehicles for billing:', err);
+        }
+    };
+
+    // Handle plate input change with debounced search
+    const handleBillingPlateInputChange = (value) => {
+        setManualBillingData(prev => ({ ...prev, plateNumber: value }));
+        setSelectedIntakeRecord(null);
+        
+        // Clear previous timeout
+        if (billingPlateSearchTimeout.current) {
+            clearTimeout(billingPlateSearchTimeout.current);
+        }
+        
+        // Debounce the search
+        billingPlateSearchTimeout.current = setTimeout(() => {
+            handleBillingPlateSearch(value);
+        }, 300);
+    };
+
+    // Select an existing vehicle/carpet from search results for billing
+    const selectIntakeRecordForBilling = (record) => {
+        setSelectedIntakeRecord(record);
+        setManualBillingData(prev => ({
+            ...prev,
+            plateNumber: record.plateNumber,
+            customerName: record.customerName || prev.customerName,
+            customerPhone: record.customerPhone || prev.customerPhone,
+            vehicleType: record.itemType || record.vehicleType || prev.vehicleType,
+            source: record.category === 'carpet' ? 'wash' : (record.source || prev.source)
+        }));
+        setShowBillingPlateSearch(false);
+    };
+
+    // Clear selected intake record
+    const clearSelectedIntakeRecord = () => {
+        setSelectedIntakeRecord(null);
+        setManualBillingData(prev => ({
+            ...prev,
+            customerName: '',
+            customerPhone: '',
+            vehicleType: 'Sedan'
+        }));
+    };
+
     // Add service line to manual billing
     // Toggle service selection
     const toggleServiceSelection = (serviceId) => {
@@ -19704,7 +21409,7 @@ function BillingModule() {
                 }
                 setSuccessMessage(`Invoice ${result.invoiceNumber} created successfully!`);
                 setShowManualBillingModal(false);
-                // Reset form
+                // Reset form and search states
                 setManualBillingData({
                     customerName: '',
                     customerPhone: '',
@@ -19717,6 +21422,9 @@ function BillingModule() {
                     paymentMethod: 'cash',
                     mpesaCode: ''
                 });
+                setBillingPlateSearchResults([]);
+                setShowBillingPlateSearch(false);
+                setSelectedIntakeRecord(null);
             } else {
                 setError(result.error || 'Failed to create invoice');
             }
@@ -21063,17 +22771,138 @@ function BillingModule() {
 
             {/* Manual Billing Modal - Simple & Clean */}
             {showManualBillingModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowManualBillingModal(false)}>
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); }}>
                     <div style={{ ...cardStyle, width: '500px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                             <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>➕ New Invoice</h3>
-                            <button onClick={() => setShowManualBillingModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                            <button onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
                         </div>
 
                         {/* Customer & Vehicle Info */}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                            <input type="text" value={manualBillingData.plateNumber} onChange={(e) => handleManualBillingChange('plateNumber', e.target.value.toUpperCase())} placeholder="Plate Number *" style={{ ...inputStyle, gridColumn: '1 / -1', fontWeight: '700', textTransform: 'uppercase', fontSize: '15px', padding: '12px' }} />
+                            {/* Plate Number with Search */}
+                            <div style={{ gridColumn: '1 / -1', position: 'relative' }}>
+                                <div style={{ position: 'relative' }}>
+                                    <input 
+                                        type="text" 
+                                        value={manualBillingData.plateNumber} 
+                                        onChange={(e) => handleBillingPlateInputChange(e.target.value.toUpperCase())} 
+                                        placeholder="🔍 Search Plate Number / Carpet ID *" 
+                                        autoFocus
+                                        style={{ 
+                                            ...inputStyle, 
+                                            fontWeight: '700', 
+                                            textTransform: 'uppercase', 
+                                            fontSize: '15px', 
+                                            padding: '12px',
+                                            paddingRight: selectedIntakeRecord ? '100px' : '12px',
+                                            borderColor: selectedIntakeRecord ? '#10b981' : undefined,
+                                            background: selectedIntakeRecord ? (isDark ? '#10b98115' : '#f0fdf4') : undefined
+                                        }} 
+                                    />
+                                    {selectedIntakeRecord && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            right: '10px',
+                                            top: '50%',
+                                            transform: 'translateY(-50%)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            fontSize: '11px',
+                                            color: '#10b981',
+                                            fontWeight: '600'
+                                        }}>
+                                            ✓ Found
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Search Results Dropdown */}
+                                {showBillingPlateSearch && billingPlateSearchResults.length > 0 && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        top: '100%',
+                                        left: 0,
+                                        right: 0,
+                                        background: theme.bg,
+                                        border: `1px solid ${theme.border}`,
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                        zIndex: 100,
+                                        maxHeight: '200px',
+                                        overflowY: 'auto',
+                                        marginTop: '4px'
+                                    }}>
+                                        <div style={{ padding: '8px 12px', background: theme.bgSecondary, borderBottom: `1px solid ${theme.border}`, fontSize: '11px', color: theme.textSecondary, fontWeight: '600' }}>
+                                            📋 EXISTING RECORDS ({billingPlateSearchResults.length})
+                                        </div>
+                                        {billingPlateSearchResults.map(record => (
+                                            <div
+                                                key={record.id}
+                                                onClick={() => selectIntakeRecordForBilling(record)}
+                                                style={{
+                                                    padding: '10px 12px',
+                                                    cursor: 'pointer',
+                                                    borderBottom: `1px solid ${theme.border}`,
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    background: theme.bg,
+                                                    transition: 'background 0.15s'
+                                                }}
+                                                onMouseOver={e => e.currentTarget.style.background = theme.bgSecondary}
+                                                onMouseOut={e => e.currentTarget.style.background = theme.bg}
+                                            >
+                                                <div>
+                                                    <div style={{ fontWeight: '700', color: theme.text, letterSpacing: '0.5px' }}>
+                                                        {record.category === 'carpet' ? '🧹' : '🚗'} {record.plateNumber}
+                                                    </div>
+                                                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                                        {record.itemType || record.vehicleType || 'Unknown'} • {record.customerName || 'No name'} {record.customerPhone ? `• ${record.customerPhone}` : ''}
+                                                    </div>
+                                                </div>
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <div style={{ fontSize: '12px', fontWeight: '600', color: record.visitNumber >= 1 ? '#10b981' : '#3b82f6' }}>
+                                                        Visit #{record.visitNumber || 1}
+                                                    </div>
+                                                    <div style={{ fontSize: '10px', color: theme.textSecondary }}>
+                                                        {record.service?.name || record.lastService || '-'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Selected Record Info Card */}
+                                {selectedIntakeRecord && (
+                                    <div style={{
+                                        marginTop: '10px',
+                                        padding: '12px',
+                                        background: isDark ? '#10b98115' : '#f0fdf4',
+                                        border: `1px solid ${isDark ? '#10b98140' : '#bbf7d0'}`
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                            <span style={{ fontSize: '12px', fontWeight: '700', color: '#10b981' }}>
+                                                {selectedIntakeRecord.category === 'carpet' ? '🧹 CARPET' : '🚗 VEHICLE'} FOUND
+                                            </span>
+                                            <button 
+                                                onClick={clearSelectedIntakeRecord}
+                                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSecondary, fontSize: '11px', padding: '4px 8px' }}
+                                            >
+                                                ✕ Clear
+                                            </button>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px', color: theme.text }}>
+                                            <div><span style={{ color: theme.textSecondary }}>Type:</span> <strong>{selectedIntakeRecord.itemType || selectedIntakeRecord.vehicleType || '-'}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Visits:</span> <strong>{selectedIntakeRecord.visitNumber || 1}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Customer:</span> <strong>{selectedIntakeRecord.customerName || '-'}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Phone:</span> <strong>{selectedIntakeRecord.customerPhone || '-'}</strong></div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                             <input type="text" value={manualBillingData.customerName} onChange={(e) => handleManualBillingChange('customerName', e.target.value)} placeholder="Customer Name" style={inputStyle} />
                             <input type="tel" value={manualBillingData.customerPhone} onChange={(e) => handleManualBillingChange('customerPhone', e.target.value)} placeholder="Phone" style={inputStyle} />
                         </div>
@@ -23386,6 +25215,15 @@ function SystemSettings({ initialTab = 'profile' }) {
         confirmPassword: ''
     });
     
+    // Support contacts state
+    const [supportContacts, setSupportContacts] = useState({
+        email: '',
+        phone: '',
+        whatsapp: ''
+    });
+    const [savingContacts, setSavingContacts] = useState(false);
+    const [editingContacts, setEditingContacts] = useState(false);
+    
     // Profile image state
     const [profileImage, setProfileImage] = useState(userProfile?.photoURL || null);
     const [uploadingImage, setUploadingImage] = useState(false);
@@ -23393,6 +25231,45 @@ function SystemSettings({ initialTab = 'profile' }) {
     
     // Theme detection
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    // Load support contacts from Firebase
+    useEffect(() => {
+        const loadContacts = async () => {
+            const services = window.FirebaseServices;
+            if (services?.settingsService?.getSupportContacts) {
+                const result = await services.settingsService.getSupportContacts();
+                if (result.success && result.data) {
+                    setSupportContacts({
+                        email: result.data.email || '',
+                        phone: result.data.phone || '',
+                        whatsapp: result.data.whatsapp || ''
+                    });
+                }
+            }
+        };
+        loadContacts();
+    }, []);
+    
+    // Save support contacts
+    const handleSaveSupportContacts = async () => {
+        setSavingContacts(true);
+        try {
+            const services = window.FirebaseServices;
+            if (services?.settingsService?.saveSupportContacts) {
+                const result = await services.settingsService.saveSupportContacts(supportContacts);
+                if (result.success) {
+                    setSuccessMessage('Support contacts saved successfully!');
+                    setEditingContacts(false);
+                } else {
+                    setError(result.error || 'Failed to save contacts');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to save contacts');
+        } finally {
+            setSavingContacts(false);
+        }
+    };
     
     // Toggle theme function
     const toggleTheme = () => {
@@ -23560,6 +25437,7 @@ function SystemSettings({ initialTab = 'profile' }) {
     const tabs = [
         { id: 'profile', label: 'My Profile', icon: '👤' },
         { id: 'account', label: 'Account Settings', icon: '⚙️' },
+        { id: 'branding', label: 'Branding', icon: '🎨' },
         { id: 'support', label: 'Help & Support', icon: '❓' }
     ];
 
@@ -23979,6 +25857,33 @@ function SystemSettings({ initialTab = 'profile' }) {
                 </div>
             )}
 
+            {/* Branding Tab */}
+            {activeTab === 'branding' && (
+                <div>
+                    <div style={cardStyle}>
+                        <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                            🎨 Brand Customization
+                        </h3>
+                        <div style={{ 
+                            padding: '40px', 
+                            textAlign: 'center', 
+                            color: theme.textSecondary,
+                            background: theme.bgSecondary,
+                            border: `2px dashed ${theme.border}`
+                        }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎨</div>
+                            <div style={{ fontSize: '18px', fontWeight: '600', color: theme.text, marginBottom: '8px' }}>
+                                Brand Settings
+                            </div>
+                            <div style={{ fontSize: '14px', maxWidth: '400px', margin: '0 auto' }}>
+                                Customize your system branding including logos, company name, colors, and more. 
+                                These settings will apply to the login page, receipts, and throughout the system.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Help & Support Tab */}
             {activeTab === 'support' && (
                 <div>
@@ -24011,31 +25916,160 @@ function SystemSettings({ initialTab = 'profile' }) {
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-                        {/* Contact Support */}
+                        {/* Contact Support - Editable */}
                         <div style={cardStyle}>
-                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
-                                📞 Contact Support
-                            </h3>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 24px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                                <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                    📞 Contact Support
+                                </h3>
+                                {!editingContacts ? (
+                                    <button
+                                        onClick={() => setEditingContacts(true)}
+                                        style={{
+                                            background: 'transparent',
+                                            border: `1px solid ${theme.border}`,
+                                            color: theme.text,
+                                            padding: '6px 12px',
+                                            borderRadius: '6px',
+                                            fontSize: '12px',
+                                            fontWeight: '500',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px'
+                                        }}
+                                    >
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                        </svg>
+                                        Edit
+                                    </button>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button
+                                            onClick={() => setEditingContacts(false)}
+                                            style={{
+                                                background: 'transparent',
+                                                border: `1px solid ${theme.border}`,
+                                                color: theme.textSecondary,
+                                                padding: '6px 12px',
+                                                borderRadius: '6px',
+                                                fontSize: '12px',
+                                                fontWeight: '500',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSaveSupportContacts}
+                                            disabled={savingContacts}
+                                            style={{
+                                                background: '#3b82f6',
+                                                border: 'none',
+                                                color: 'white',
+                                                padding: '6px 12px',
+                                                borderRadius: '6px',
+                                                fontSize: '12px',
+                                                fontWeight: '600',
+                                                cursor: savingContacts ? 'not-allowed' : 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px'
+                                            }}
+                                        >
+                                            {savingContacts ? 'Saving...' : 'Save'}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                             <div style={{ display: 'grid', gap: '16px' }}>
+                                {/* Email Support */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
-                                    <div style={{ width: '44px', height: '44px', background: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>📧</div>
-                                    <div>
-                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>Email Support</div>
-                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>support@ecospark.co.ke</div>
+                                    <div style={{ width: '44px', height: '44px', background: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white', flexShrink: 0 }}>📧</div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px', marginBottom: editingContacts ? '8px' : '2px' }}>Email Support</div>
+                                        {editingContacts ? (
+                                            <input
+                                                type="email"
+                                                value={supportContacts.email}
+                                                onChange={(e) => setSupportContacts(prev => ({ ...prev, email: e.target.value }))}
+                                                placeholder="Enter support email..."
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '8px 12px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    borderRadius: '6px',
+                                                    fontSize: '13px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none'
+                                                }}
+                                            />
+                                        ) : (
+                                            <div style={{ fontSize: '13px', color: supportContacts.email ? theme.textSecondary : '#94a3b8', marginTop: '2px' }}>
+                                                {supportContacts.email || 'Not set - Click Edit to add'}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
+                                {/* Phone Support */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
-                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>📱</div>
-                                    <div>
-                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>Phone Support</div>
-                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>+254 700 000 000</div>
+                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white', flexShrink: 0 }}>📱</div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px', marginBottom: editingContacts ? '8px' : '2px' }}>Phone Support</div>
+                                        {editingContacts ? (
+                                            <input
+                                                type="tel"
+                                                value={supportContacts.phone}
+                                                onChange={(e) => setSupportContacts(prev => ({ ...prev, phone: e.target.value }))}
+                                                placeholder="Enter phone number..."
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '8px 12px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    borderRadius: '6px',
+                                                    fontSize: '13px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none'
+                                                }}
+                                            />
+                                        ) : (
+                                            <div style={{ fontSize: '13px', color: supportContacts.phone ? theme.textSecondary : '#94a3b8', marginTop: '2px' }}>
+                                                {supportContacts.phone || 'Not set - Click Edit to add'}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
+                                {/* WhatsApp */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
-                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white' }}>💬</div>
-                                    <div>
-                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>WhatsApp</div>
-                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>+254 700 000 000</div>
+                                    <div style={{ width: '44px', height: '44px', background: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', color: 'white', flexShrink: 0 }}>💬</div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px', marginBottom: editingContacts ? '8px' : '2px' }}>WhatsApp</div>
+                                        {editingContacts ? (
+                                            <input
+                                                type="tel"
+                                                value={supportContacts.whatsapp}
+                                                onChange={(e) => setSupportContacts(prev => ({ ...prev, whatsapp: e.target.value }))}
+                                                placeholder="Enter WhatsApp number..."
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '8px 12px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    borderRadius: '6px',
+                                                    fontSize: '13px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none'
+                                                }}
+                                            />
+                                        ) : (
+                                            <div style={{ fontSize: '13px', color: supportContacts.whatsapp ? theme.textSecondary : '#94a3b8', marginTop: '2px' }}>
+                                                {supportContacts.whatsapp || 'Not set - Click Edit to add'}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
