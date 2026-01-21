@@ -11,6 +11,203 @@ const useAuth = () => {
     return context;
 };
 
+// ==================== BRANDING CONTEXT ====================
+const BrandingContext = createContext(null);
+
+// Try to get initial branding from localStorage for fast first paint
+const getInitialBranding = () => {
+    const defaults = {
+        companyName: 'EcoSpark',
+        tagline: 'Car Wash Management System',
+        shortName: 'ES',
+        address: '',
+        city: '',
+        phone: '',
+        email: '',
+        website: '',
+        taxPin: '',
+        businessReg: '',
+        primaryColor: '#3b82f6',
+        secondaryColor: '#10b981',
+        accentColor: '#f59e0b',
+        receiptHeader: 'OFFICIAL RECEIPT',
+        receiptFooter: 'Thank you for choosing us!',
+        invoiceFooter: 'Payment due within 30 days',
+        termsAndConditions: '',
+        logoUrl: '',
+        logoType: 'icon',
+        facebook: '',
+        instagram: '',
+        twitter: '',
+        currency: 'KES',
+        currencySymbol: 'KSh',
+        timezone: 'Africa/Nairobi',
+        dateFormat: 'DD/MM/YYYY'
+    };
+    
+    try {
+        const cached = localStorage.getItem('ecospark_branding');
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            return { ...defaults, ...parsed };
+        }
+    } catch (e) {
+        // Ignore localStorage errors
+    }
+    return defaults;
+};
+
+const DEFAULT_BRANDING = getInitialBranding();
+
+const useBranding = () => {
+    const context = useContext(BrandingContext);
+    if (!context) {
+        // Return defaults if used outside provider
+        return { branding: DEFAULT_BRANDING, loading: false, refreshBranding: () => {} };
+    }
+    return context;
+};
+
+// Branding Provider Component
+function BrandingProvider({ children }) {
+    const [branding, setBranding] = useState(DEFAULT_BRANDING);
+    const [loading, setLoading] = useState(true);
+
+    // Helper to save branding to localStorage for loading screen
+    const cacheBrandingToLocalStorage = (brandingData) => {
+        try {
+            localStorage.setItem('ecospark_branding', JSON.stringify({
+                companyName: brandingData.companyName,
+                tagline: brandingData.tagline,
+                logoUrl: brandingData.logoUrl,
+                primaryColor: brandingData.primaryColor,
+                secondaryColor: brandingData.secondaryColor
+            }));
+        } catch (e) {
+            console.log('Could not cache branding to localStorage');
+        }
+    };
+
+    const loadBranding = useCallback(async () => {
+        try {
+            const services = window.FirebaseServices;
+            if (services?.brandingService) {
+                const result = await services.brandingService.getBranding();
+                if (result.success && result.data) {
+                    const newBranding = { ...DEFAULT_BRANDING, ...result.data };
+                    setBranding(newBranding);
+                    // Update global cache for receipts
+                    if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
+                    // Cache to localStorage for loading screen
+                    cacheBrandingToLocalStorage(newBranding);
+                    // Update document title
+                    document.title = `${result.data.companyName || 'EcoSpark'} - ${result.data.tagline || 'Car Wash Management'}`;
+                    // Update CSS variables for branding colors
+                    if (result.data.primaryColor) {
+                        document.documentElement.style.setProperty('--brand-primary', result.data.primaryColor);
+                    }
+                    if (result.data.secondaryColor) {
+                        document.documentElement.style.setProperty('--brand-secondary', result.data.secondaryColor);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading branding:', error);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadBranding();
+        
+        // Subscribe to real-time updates
+        const services = window.FirebaseServices;
+        let unsubscribe;
+        if (services?.brandingService?.subscribeToBranding) {
+            unsubscribe = services.brandingService.subscribeToBranding((data) => {
+                const newBranding = { ...DEFAULT_BRANDING, ...data };
+                setBranding(newBranding);
+                // Update global cache for receipts
+                if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
+                // Cache to localStorage for loading screen
+                cacheBrandingToLocalStorage(newBranding);
+                document.title = `${data.companyName || 'EcoSpark'} - ${data.tagline || 'Car Wash Management'}`;
+                if (data.primaryColor) {
+                    document.documentElement.style.setProperty('--brand-primary', data.primaryColor);
+                }
+                if (data.secondaryColor) {
+                    document.documentElement.style.setProperty('--brand-secondary', data.secondaryColor);
+                }
+            });
+        }
+        
+        return () => {
+            if (unsubscribe) unsubscribe();
+        };
+    }, [loadBranding]);
+
+    const value = {
+        branding,
+        loading,
+        refreshBranding: loadBranding
+    };
+
+    return React.createElement(BrandingContext.Provider, { value }, children);
+}
+
+// Global branding getter for use in non-React contexts (like receipt printing)
+const getBrandingForReceipts = () => {
+    // Try to get branding from Firebase services cache first
+    const cached = window._cachedBranding;
+    if (cached) return cached;
+    
+    // Fallback to localStorage
+    try {
+        const localCached = localStorage.getItem('ecospark_branding');
+        if (localCached) {
+            const parsed = JSON.parse(localCached);
+            return {
+                companyName: parsed.companyName || 'EcoSpark',
+                tagline: parsed.tagline || 'Car Wash Management System',
+                address: '',
+                city: '',
+                phone: '',
+                email: '',
+                taxPin: '',
+                receiptHeader: 'OFFICIAL RECEIPT',
+                receiptFooter: 'Thank you for choosing us!',
+                currencySymbol: 'KSh',
+                primaryColor: parsed.primaryColor || '#3b82f6',
+                secondaryColor: parsed.secondaryColor || '#10b981',
+                ...parsed
+            };
+        }
+    } catch (e) {
+        console.log('Could not read branding from localStorage');
+    }
+    
+    return {
+        companyName: 'EcoSpark',
+        tagline: 'Car Wash Management System',
+        address: '',
+        city: '',
+        phone: '',
+        email: '',
+        taxPin: '',
+        receiptHeader: 'OFFICIAL RECEIPT',
+        receiptFooter: 'Thank you for choosing us!',
+        currencySymbol: 'KSh',
+        primaryColor: '#3b82f6',
+        secondaryColor: '#10b981'
+    };
+};
+
+// Update cached branding when context changes (called from BrandingProvider)
+window.updateCachedBranding = (branding) => {
+    window._cachedBranding = branding;
+};
+
 // ==================== LOGIN PAGE COMPONENT ====================
 function LoginPage({ onLoginSuccess }) {
     const [email, setEmail] = useState('');
@@ -18,6 +215,7 @@ function LoginPage({ onLoginSuccess }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    const { branding } = useBranding();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -162,15 +360,21 @@ function LoginPage({ onLoginSuccess }) {
                         width: '72px',
                         height: '72px',
                         margin: '0 auto 16px',
-                        background: '#1e3a5f',
+                        background: `linear-gradient(135deg, ${branding.primaryColor || '#3b82f6'} 0%, ${branding.secondaryColor || '#10b981'} 100%)`,
+                        borderRadius: '16px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: 'white'
+                        color: 'white',
+                        boxShadow: `0 8px 20px ${branding.primaryColor || '#3b82f6'}40`
                     }}>
-                        <div style={{ width: '42px', height: '42px' }}>
-                            <CarIcon />
-                        </div>
+                        {branding.logoUrl ? (
+                            <img src={branding.logoUrl} alt="Logo" style={{ width: '50px', height: '50px', objectFit: 'contain' }} />
+                        ) : (
+                            <div style={{ width: '42px', height: '42px' }}>
+                                <CarIcon />
+                            </div>
+                        )}
                     </div>
                     <h1 style={{ 
                         fontSize: '28px', 
@@ -178,12 +382,12 @@ function LoginPage({ onLoginSuccess }) {
                         color: '#1e293b', 
                         margin: '0 0 4px',
                         letterSpacing: '-0.5px'
-                    }}>EcoSpark</h1>
+                    }}>{branding.companyName || 'EcoSpark'}</h1>
                     <p style={{ 
                         fontSize: '14px', 
                         color: '#64748b', 
                         margin: 0 
-                    }}>Car Wash Management System</p>
+                    }}>{branding.tagline || 'Car Wash Management System'}</p>
                 </div>
 
                 {/* Welcome Text */}
@@ -331,7 +535,7 @@ function LoginPage({ onLoginSuccess }) {
                             style={{ 
                                 width: '100%', 
                                 padding: '14px', 
-                                background: loading ? '#93c5fd' : '#3b82f6', 
+                                background: loading ? `${branding.primaryColor || '#3b82f6'}80` : (branding.primaryColor || '#3b82f6'), 
                                 color: 'white', 
                                 border: 'none', 
                                 fontSize: '15px', 
@@ -343,8 +547,8 @@ function LoginPage({ onLoginSuccess }) {
                                 gap: '10px',
                                 transition: 'background 0.2s'
                             }}
-                            onMouseOver={(e) => !loading && (e.target.style.background = '#2563eb')}
-                            onMouseOut={(e) => !loading && (e.target.style.background = '#3b82f6')}
+                            onMouseOver={(e) => !loading && (e.target.style.background = branding.primaryColor ? `${branding.primaryColor}dd` : '#2563eb')}
+                            onMouseOut={(e) => !loading && (e.target.style.background = branding.primaryColor || '#3b82f6')}
                         >
                             {loading ? (
                                 <>
@@ -387,7 +591,7 @@ function LoginPage({ onLoginSuccess }) {
                 fontSize: '13px',
                 zIndex: 1
             }}>
-                © 2026 EcoSpark. All rights reserved.
+                © {new Date().getFullYear()} {branding.companyName || 'EcoSpark'}. All rights reserved.
             </div>
 
             {/* CSS */}
@@ -719,6 +923,8 @@ const menuItems = [
 
 // Sidebar Component
 function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasModuleAccess }) {
+    const { branding } = useBranding();
+    
     // Filter menu groups based on user permissions
     const filteredMenuGroups = menuGroups.map(group => ({
         ...group,
@@ -730,8 +936,12 @@ function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasMod
     return (
         <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
             <div className="sidebar-logo">
-                <div className="sidebar-logo-icon">🚗</div>
-                <div className="sidebar-logo-text">Ecospark</div>
+                {branding.logoUrl ? (
+                    <img src={branding.logoUrl} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', borderRadius: '6px' }} />
+                ) : (
+                    <div className="sidebar-logo-icon">🚗</div>
+                )}
+                <div className="sidebar-logo-text">{branding.companyName || 'Ecospark'}</div>
             </div>
             <div className="sidebar-menu">
                 {filteredMenuGroups.map((group, groupIndex) => (
@@ -1906,7 +2116,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             type: 'payment',
                             icon: '💰',
                             title: `${pendingInvoices.length} Pending Payment${pendingInvoices.length > 1 ? 's' : ''}`,
-                            subtitle: `Total: KSh ${totalPending.toLocaleString()}`,
+                            subtitle: `Total: ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalPending.toLocaleString()}`,
                             timestamp: new Date().toISOString(),
                             module: 'billing',
                             color: '#f59e0b'
@@ -1920,7 +2130,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             type: 'success',
                             icon: '✅',
                             title: `Payment Received: ${inv.customerName || 'Customer'}`,
-                            subtitle: `KSh ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
+                            subtitle: `${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
                             timestamp: inv.paidAt || inv.updatedAt || inv.createdAt,
                             module: 'billing',
                             color: '#10b981'
@@ -3473,7 +3683,7 @@ function VehicleIntake() {
             
             showAlert(
                 '🔧 Sent to Garage',
-                `${garageVehicle.plateNumber} has been sent to the Garage with ${selectedGarageServices.length} service(s).\nTotal: KSh ${totalCost.toLocaleString()}`,
+                `${garageVehicle.plateNumber} has been sent to the Garage with ${selectedGarageServices.length} service(s).\nTotal: ${getBrandingForReceipts().currencySymbol || 'KSh'} ${totalCost.toLocaleString()}`,
                 'success'
             );
             
@@ -3889,7 +4099,7 @@ function VehicleIntake() {
                 <div class="key-tag">
                     <div class="plate-number">${vehicle.plateNumber}</div>
                     <div class="vehicle-type">${vehicle.itemType || vehicle.vehicleType || 'Vehicle'}</div>
-                    <div class="logo">🚗 EcoSpark</div>
+                    <div class="logo">🚗 ${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
                 </div>
                 <script>
                     window.onload = function() {
@@ -4067,6 +4277,7 @@ function VehicleIntake() {
         const total = vehicle.service?.price || 0;
         const receiptNumber = `ECO-${Date.now().toString().slice(-8)}`;
         const printDate = new Date().toLocaleString();
+        const brand = getBrandingForReceipts();
         
         const receiptHTML = `
             <!DOCTYPE html>
@@ -4086,6 +4297,7 @@ function VehicleIntake() {
                     .header { margin-bottom: 15px; border-bottom: 2px dashed #000; padding-bottom: 15px; }
                     .logo { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
                     .tagline { font-size: 10px; color: #666; }
+                    .company-info { font-size: 9px; color: #666; margin-top: 5px; }
                     .receipt-no { font-size: 11px; margin-top: 10px; }
                     .section { margin: 15px 0; text-align: left; }
                     .section-title { font-weight: bold; font-size: 12px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
@@ -4106,9 +4318,12 @@ function VehicleIntake() {
             <body>
                 <div class="receipt">
                     <div class="header">
-                        <div class="logo">🚗 ECOSPARK</div>
-                        <div class="tagline">Premium Car Wash Services</div>
-                        <div class="receipt-no">Receipt #${receiptNumber}</div>
+                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="tagline">${brand.tagline || 'Premium Car Wash Services'}</div>
+                        ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
+                        ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
+                        ${brand.taxPin ? `<div class="company-info">PIN: ${brand.taxPin}</div>` : ''}
+                        <div class="receipt-no">${brand.receiptHeader || 'Receipt'} #${receiptNumber}</div>
                     </div>
                     
                     <div class="plate">${vehicle.plateNumber}</div>
@@ -4147,14 +4362,14 @@ function VehicleIntake() {
                         <div class="section-title">SERVICE</div>
                         <div class="row">
                             <span>${vehicle.service?.name || 'Car Wash'}</span>
-                            <span>KSH ${total}</span>
+                            <span>${brand.currencySymbol || 'KSH'} ${total}</span>
                         </div>
                     </div>
                     
                     <div class="total-section">
                         <div class="total">
                             <span>TOTAL</span>
-                            <span>KSH ${total}</span>
+                            <span>${brand.currencySymbol || 'KSH'} ${total}</span>
                         </div>
                     </div>
                     
@@ -4172,8 +4387,7 @@ function VehicleIntake() {
                     <div class="divider"></div>
                     
                     <div class="footer">
-                        <p>Thank you for choosing Ecospark!</p>
-                        <p style="margin-top: 5px;">Quality service, every time.</p>
+                        <p>${brand.receiptFooter || 'Thank you for choosing us!'}</p>
                         <p style="margin-top: 10px; font-size: 9px;">Printed: ${printDate}</p>
                     </div>
                 </div>
@@ -4574,7 +4788,7 @@ function VehicleIntake() {
                                             </span>
                                         </td>
                                         <td>{vehicle.service?.name || '-'}</td>
-                                        <td style={{ color: '#10b981', fontWeight: '600' }}>KSH {vehicle.service?.price || 0}</td>
+                                        <td style={{ color: '#10b981', fontWeight: '600' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {vehicle.service?.price || 0}</td>
                                         <td>
                                             {/* Status Dropdown - Direct Change */}
                                             <select
@@ -5089,7 +5303,7 @@ function VehicleIntake() {
                                     >
                                         {servicePackages.length > 0 ? servicePackages.map(service => (
                                             <option key={service.id} value={service.id}>
-                                                {service.name} - KES {service.price?.toLocaleString()}
+                                                {service.name} - {getBrandingForReceipts().currencySymbol || 'KES'} {service.price?.toLocaleString()}
                                             </option>
                                         )) : (
                                             <option value="">Loading packages...</option>
@@ -5230,7 +5444,7 @@ function VehicleIntake() {
                                         <option value="">-- Select Service Package --</option>
                                         {servicePackages.map(service => (
                                             <option key={service.id} value={service.id}>
-                                                {service.name} - KSH {service.price || 0}
+                                                {service.name} - {getBrandingForReceipts().currencySymbol || 'KSH'} {service.price || 0}
                                             </option>
                                         ))}
                                     </select>
@@ -5293,7 +5507,7 @@ function VehicleIntake() {
                                                         {isMainService && <span style={{ color: '#8b5cf6', marginLeft: '8px', fontSize: '11px' }}>(Primary)</span>}
                                                     </span>
                                                     <span style={{ fontSize: '13px', fontWeight: '600', color: '#22c55e' }}>
-                                                        KSH {service.price || 0}
+                                                        {getBrandingForReceipts().currencySymbol || 'KSH'} {service.price || 0}
                                                     </span>
                                                 </label>
                                             );
@@ -5306,7 +5520,7 @@ function VehicleIntake() {
                                     {selectedAdditionalServices.length > 0 && (
                                         <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(139, 92, 246, 0.1)', borderRadius: '6px' }}>
                                             <span style={{ fontSize: '12px', color: '#8b5cf6', fontWeight: '600' }}>
-                                                +{selectedAdditionalServices.length} additional service(s): KSH {selectedAdditionalServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0)}
+                                                +{selectedAdditionalServices.length} additional service(s): {getBrandingForReceipts().currencySymbol || 'KSH'} {selectedAdditionalServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0)}
                                             </span>
                                         </div>
                                     )}
@@ -5470,7 +5684,7 @@ function VehicleIntake() {
                                 </div>
                                 <div className="detail-row">
                                     <span className="detail-label">Service</span>
-                                    <span className="detail-value">{selectedVehicle.service?.name || '-'} (KSH {selectedVehicle.service?.price || 0})</span>
+                                    <span className="detail-value">{selectedVehicle.service?.name || '-'} ({getBrandingForReceipts().currencySymbol || 'KSH'} {selectedVehicle.service?.price || 0})</span>
                                 </div>
                                 <div className="detail-row">
                                     <span className="detail-label">Priority</span>
@@ -5599,7 +5813,7 @@ function VehicleIntake() {
                                     >
                                         {servicePackages.length > 0 ? servicePackages.map(service => (
                                             <option key={service.id} value={service.id}>
-                                                {service.name} - KES {service.price?.toLocaleString()}
+                                                {service.name} - {getBrandingForReceipts().currencySymbol || 'KES'} {service.price?.toLocaleString()}
                                             </option>
                                         )) : (
                                             <option value="">Loading packages...</option>
@@ -5684,63 +5898,80 @@ function VehicleIntake() {
                         </div>
                         <div className="modal-body">
                             <div className="invoice-content" style={{ padding: '20px', backgroundColor: '#f8fafc', borderRadius: '8px' }}>
-                                <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-                                    <h3 style={{ margin: 0, color: '#1e293b' }}>Ecospark Car Wash</h3>
-                                    <p style={{ margin: '4px 0', color: '#64748b', fontSize: '14px' }}>Service Invoice</p>
-                                </div>
-                                
-                                <div style={{ borderTop: '1px dashed #cbd5e1', borderBottom: '1px dashed #cbd5e1', padding: '16px 0', marginBottom: '16px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span style={{ color: '#64748b' }}>Invoice #</span>
-                                        <span style={{ fontWeight: '500' }}>INV-{selectedVehicle.id?.slice(0, 8).toUpperCase()}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span style={{ color: '#64748b' }}>Date</span>
-                                        <span>{new Date().toLocaleDateString()}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                        <span style={{ color: '#64748b' }}>Vehicle</span>
-                                        <span style={{ fontWeight: '500' }}>{selectedVehicle.plateNumber}</span>
-                                    </div>
-                                </div>
-
-                                <div style={{ marginBottom: '16px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span style={{ color: '#64748b' }}>Customer</span>
-                                        <span>{selectedVehicle.customerName || 'Walk-in'}</span>
-                                    </div>
-                                    {selectedVehicle.customerPhone && (
-                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                            <span style={{ color: '#64748b' }}>Phone</span>
-                                            <span>{selectedVehicle.customerPhone}</span>
+                                {(() => {
+                                    const brand = getBrandingForReceipts();
+                                    return (
+                                        <>
+                                        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                                            {brand.logoUrl ? (
+                                                <img src={brand.logoUrl} alt="Logo" style={{ width: '60px', height: '60px', objectFit: 'contain', marginBottom: '8px' }} />
+                                            ) : (
+                                                <div style={{ width: '60px', height: '60px', margin: '0 auto 8px', background: `linear-gradient(135deg, ${brand.primaryColor || '#3b82f6'}, ${brand.secondaryColor || '#10b981'})`, borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '24px' }}>
+                                                    🚗
+                                                </div>
+                                            )}
+                                            <h3 style={{ margin: 0, color: '#1e293b' }}>{brand.companyName || 'EcoSpark'}</h3>
+                                            <p style={{ margin: '4px 0', color: '#64748b', fontSize: '14px' }}>{brand.receiptHeader || 'Service Invoice'}</p>
+                                            {brand.address && <p style={{ margin: '4px 0 0', color: '#94a3b8', fontSize: '12px' }}>{brand.address}{brand.city ? `, ${brand.city}` : ''}</p>}
+                                            {brand.phone && <p style={{ margin: '2px 0 0', color: '#94a3b8', fontSize: '12px' }}>Tel: {brand.phone}</p>}
+                                            {brand.taxPin && <p style={{ margin: '2px 0 0', color: '#94a3b8', fontSize: '12px' }}>PIN: {brand.taxPin}</p>}
                                         </div>
-                                    )}
-                                </div>
+                                
+                                        <div style={{ borderTop: '1px dashed #cbd5e1', borderBottom: '1px dashed #cbd5e1', padding: '16px 0', marginBottom: '16px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span style={{ color: '#64748b' }}>Invoice #</span>
+                                                <span style={{ fontWeight: '500' }}>INV-{selectedVehicle.id?.slice(0, 8).toUpperCase()}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span style={{ color: '#64748b' }}>Date</span>
+                                                <span>{new Date().toLocaleDateString()}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                <span style={{ color: '#64748b' }}>Vehicle</span>
+                                                <span style={{ fontWeight: '500' }}>{selectedVehicle.plateNumber}</span>
+                                            </div>
+                                        </div>
 
-                                <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
-                                    <h4 style={{ margin: '0 0 12px 0', color: '#1e293b' }}>Service</h4>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span>{selectedVehicle.service?.name || 'Service'}</span>
-                                        <span>KSH {selectedVehicle.service?.price || 0}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span style={{ color: '#64748b' }}>Vehicle Type</span>
-                                        <span>{selectedVehicle.vehicleType}</span>
-                                    </div>
-                                </div>
+                                        <div style={{ marginBottom: '16px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span style={{ color: '#64748b' }}>Customer</span>
+                                                <span>{selectedVehicle.customerName || 'Walk-in'}</span>
+                                            </div>
+                                            {selectedVehicle.customerPhone && (
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span style={{ color: '#64748b' }}>Phone</span>
+                                                    <span>{selectedVehicle.customerPhone}</span>
+                                                </div>
+                                            )}
+                                        </div>
 
-                                <div style={{ borderTop: '2px solid #1e293b', marginTop: '16px', paddingTop: '16px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2em', fontWeight: 'bold' }}>
-                                        <span>Total</span>
-                                        <span style={{ color: '#10b981' }}>KSH {selectedVehicle.service?.price || 0}</span>
-                                    </div>
-                                </div>
+                                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+                                            <h4 style={{ margin: '0 0 12px 0', color: '#1e293b' }}>Service</h4>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span>{selectedVehicle.service?.name || 'Service'}</span>
+                                                <span>{brand.currencySymbol || 'KSH'} {selectedVehicle.service?.price || 0}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                <span style={{ color: '#64748b' }}>Vehicle Type</span>
+                                                <span>{selectedVehicle.vehicleType}</span>
+                                            </div>
+                                        </div>
 
-                                <div style={{ marginTop: '24px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
-                                    <p style={{ margin: 0 }}>Thank you for choosing Ecospark!</p>
-                                    <p style={{ margin: '4px 0 0 0' }}>Time In: {selectedVehicle.timeIn ? new Date(selectedVehicle.timeIn).toLocaleString() : '-'}</p>
-                                    <p style={{ margin: '4px 0 0 0' }}>Time Out: {selectedVehicle.timeOut ? new Date(selectedVehicle.timeOut).toLocaleString() : '-'}</p>
-                                </div>
+                                        <div style={{ borderTop: '2px solid #1e293b', marginTop: '16px', paddingTop: '16px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2em', fontWeight: 'bold' }}>
+                                                <span>Total</span>
+                                                <span style={{ color: brand.primaryColor || '#10b981' }}>{brand.currencySymbol || 'KSH'} {selectedVehicle.service?.price || 0}</span>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ marginTop: '24px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                                            <p style={{ margin: 0 }}>{brand.receiptFooter || 'Thank you for choosing us!'}</p>
+                                            <p style={{ margin: '4px 0 0 0' }}>Time In: {selectedVehicle.timeIn ? new Date(selectedVehicle.timeIn).toLocaleString() : '-'}</p>
+                                            <p style={{ margin: '4px 0 0 0' }}>Time Out: {selectedVehicle.timeOut ? new Date(selectedVehicle.timeOut).toLocaleString() : '-'}</p>
+                                        </div>
+                                        </>
+                                    );
+                                })()}
                             </div>
                         </div>
                         <div className="modal-footer">
@@ -5749,7 +5980,7 @@ function VehicleIntake() {
                             </button>
                             <button 
                                 className="modal-btn modal-btn-primary" 
-                                onClick={() => window.print()}
+                                onClick={() => printReceipt(selectedVehicle)}
                             >
                                 Print Invoice
                             </button>
@@ -5776,7 +6007,7 @@ function VehicleIntake() {
                                     <div style={{ fontSize: '12px', color: '#64748b' }}>Total Visits</div>
                                 </div>
                                 <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>KSH {(selectedVehicleHistory.totalSpent || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(selectedVehicleHistory.totalSpent || 0).toLocaleString()}</div>
                                     <div style={{ fontSize: '12px', color: '#64748b' }}>Total Spent</div>
                                 </div>
                                 <div style={{ background: '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
@@ -5830,7 +6061,7 @@ function VehicleIntake() {
                                                     <td style={{ padding: '10px' }}>{visit.timeIn ? new Date(visit.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.service?.name || '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.bay || '-'}</td>
-                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>KSH {(visit.amount || 0).toLocaleString()}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(visit.amount || 0).toLocaleString()}</td>
                                                     <td style={{ padding: '10px', textAlign: 'center' }}>
                                                         <span style={{
                                                             padding: '2px 8px',
@@ -5928,7 +6159,7 @@ function VehicleIntake() {
                                                             )}
                                                         </div>
                                                         <div style={{ fontWeight: '700', color: isSelected ? '#059669' : '#10b981', fontSize: '14px', whiteSpace: 'nowrap' }}>
-                                                            KSh {(parseFloat(service.price) || 0).toLocaleString()}
+                                                            {getBrandingForReceipts().currencySymbol || 'KSh'} {(parseFloat(service.price) || 0).toLocaleString()}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -5944,7 +6175,7 @@ function VehicleIntake() {
                                             {selectedGarageServices.length} service(s) selected
                                         </span>
                                         <span style={{ fontWeight: '700', color: '#065f46', fontSize: '18px' }}>
-                                            Total: KSh {getGarageServicesTotal().toLocaleString()}
+                                            Total: {getBrandingForReceipts().currencySymbol || 'KSh'} {getGarageServicesTotal().toLocaleString()}
                                         </span>
                                     </div>
                                 )}
@@ -5993,7 +6224,7 @@ function VehicleIntake() {
                                         cursor: selectedGarageServices.length === 0 ? 'not-allowed' : 'pointer'
                                     }}
                                 >
-                                    {actionLoading ? 'Sending...' : `🔧 Send to Garage (KSh ${getGarageServicesTotal().toLocaleString()})`}
+                                    {actionLoading ? 'Sending...' : `🔧 Send to Garage (${getBrandingForReceipts().currencySymbol || 'KSh'} ${getGarageServicesTotal().toLocaleString()})`}
                                 </button>
                             </div>
                         </div>
@@ -6632,7 +6863,7 @@ function ServicePackages() {
                             </div>
                             <div className="package-body">
                                 <h3 className="package-name">{pkg.name}</h3>
-                                <div className="package-price">KES {pkg.price?.toLocaleString()}</div>
+                                <div className="package-price">{getBrandingForReceipts().currencySymbol || 'KES'} {pkg.price?.toLocaleString()}</div>
                                 {pkg.description && <p className="package-description">{pkg.description}</p>}
                             </div>
                             {pkg.features && pkg.features.length > 0 && (
@@ -6677,7 +6908,7 @@ function ServicePackages() {
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
-                                    <label>Price (KES) *</label>
+                                    <label>Price ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                                     <input
                                         type="number"
                                         name="price"
@@ -7726,7 +7957,7 @@ function EquipmentManagement() {
                                         </select>
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.text }}>Cost (R)</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.text }}>Cost ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                         <input 
                                             type="number" 
                                             value={maintenanceData.cost}
@@ -7837,7 +8068,7 @@ function EquipmentManagement() {
                                                 <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '4px' }}>{maintenance.description}</div>
                                                 <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: theme.textMuted }}>
                                                     {maintenance.performedBy && <span>By: {maintenance.performedBy}</span>}
-                                                    {maintenance.cost && <span>Cost: KSh {parseFloat(maintenance.cost).toFixed(2)}</span>}
+                                                    {maintenance.cost && <span>Cost: {getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(maintenance.cost).toFixed(2)}</span>}
                                                 </div>
                                             </div>
                                         ))}
@@ -7972,7 +8203,7 @@ function FleetAccounts() {
         inputBg: isDark ? '#1e293b' : 'white'
     };
 
-    const formatCurrency = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
+    const formatCurrency = (amount) => `${getBrandingForReceipts().currencySymbol || 'KES'} ${(amount || 0).toLocaleString()}`;
 
     useEffect(() => {
         if (successMessage) {
@@ -8754,8 +8985,8 @@ function FleetAccounts() {
     <!-- Header -->
     <div class="header">
         <div>
-            <div class="logo"><span class="eco">Eco</span>Spark</div>
-            <div style="font-size: 10px; color: #64748b;">Professional Car Wash Services</div>
+            <div class="logo">${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+            <div style="font-size: 10px; color: #64748b;">${getBrandingForReceipts().tagline || 'Professional Car Wash Services'}</div>
         </div>
         <div class="invoice-info">
             <div class="invoice-title">Invoice</div>
@@ -8789,8 +9020,8 @@ function FleetAccounts() {
         <tr>
             <td><div class="label">Total Washes</div><div class="value">${totalWashes}</div></td>
             <td><div class="label">Vehicles Serviced</div><div class="value">${Object.keys(vehicleWashes).length}</div></td>
-            <td><div class="label">Amount Paid</div><div class="value" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</div></td>
-            <td><div class="label">Amount Due</div><div class="value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">KES ${unpaidAmount.toLocaleString()}</div></td>
+            <td><div class="label">Amount Paid</div><div class="value" style="color: #10b981;">${getBrandingForReceipts().currencySymbol || 'KES'} ${paidAmount.toLocaleString()}</div></td>
+            <td><div class="label">Amount Due</div><div class="value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">${getBrandingForReceipts().currencySymbol || 'KES'} ${unpaidAmount.toLocaleString()}</div></td>
         </tr>
     </table>
     
@@ -8815,17 +9046,17 @@ function FleetAccounts() {
                 <td>${data.vehicle.make || ''} ${data.vehicle.model || ''}</td>
                 <td>${data.vehicle.driverName || '-'}</td>
                 <td class="text-center">${data.washes.length}</td>
-                <td class="text-right mono">KES ${data.totalAmount.toLocaleString()}</td>
-                <td class="text-right mono" style="color: #10b981;">KES ${data.paidAmount.toLocaleString()}</td>
-                <td class="text-right mono" style="color: ${data.unpaidAmount > 0 ? '#dc2626' : '#64748b'};">KES ${data.unpaidAmount.toLocaleString()}</td>
+                <td class="text-right mono">${getBrandingForReceipts().currencySymbol || 'KES'} ${data.totalAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: #10b981;">${getBrandingForReceipts().currencySymbol || 'KES'} ${data.paidAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: ${data.unpaidAmount > 0 ? '#dc2626' : '#64748b'};">${getBrandingForReceipts().currencySymbol || 'KES'} ${data.unpaidAmount.toLocaleString()}</td>
             </tr>
             `).join('')}
             <tr class="subtotal-row">
                 <td colspan="3" class="text-right">TOTAL</td>
                 <td class="text-center">${totalWashes}</td>
-                <td class="text-right mono">KES ${totalAmount.toLocaleString()}</td>
-                <td class="text-right mono" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</td>
-                <td class="text-right mono" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#64748b'};">KES ${unpaidAmount.toLocaleString()}</td>
+                <td class="text-right mono">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: #10b981;">${getBrandingForReceipts().currencySymbol || 'KES'} ${paidAmount.toLocaleString()}</td>
+                <td class="text-right mono" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#64748b'};">${getBrandingForReceipts().currencySymbol || 'KES'} ${unpaidAmount.toLocaleString()}</td>
             </tr>
         </tbody>
     </table>
@@ -8854,7 +9085,7 @@ function FleetAccounts() {
                 <td>${wash.driverName || '-'}</td>
                 <td>${wash.service || 'Car Wash'}${wash.additionalServices?.length > 0 ? ` (+${wash.additionalServices.length})` : ''}</td>
                 <td>${wash.bay || '-'}</td>
-                <td class="text-right mono">KES ${(wash.price || 0).toLocaleString()}</td>
+                <td class="text-right mono">${getBrandingForReceipts().currencySymbol || 'KES'} ${(wash.price || 0).toLocaleString()}</td>
                 <td class="text-center" style="color: ${wash.paymentStatus === 'paid' ? '#10b981' : '#dc2626'}; font-weight: 600;">
                     ${wash.paymentStatus === 'paid' ? 'PAID' : 'UNPAID'}
                 </td>
@@ -8869,35 +9100,35 @@ function FleetAccounts() {
     <div class="totals">
         <div class="totals-row">
             <div class="totals-label">Subtotal (${totalWashes} washes):</div>
-            <div class="totals-value">KES ${totalAmount.toLocaleString()}</div>
+            <div class="totals-value">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()}</div>
         </div>
         ${account.discount > 0 ? `
         <div class="totals-row">
             <div class="totals-label">Discount (${account.discount}%):</div>
-            <div class="totals-value" style="color: #10b981;">-KES ${Math.round(unpaidAmount * account.discount / 100).toLocaleString()}</div>
+            <div class="totals-value" style="color: #10b981;">-${getBrandingForReceipts().currencySymbol || 'KES'} ${Math.round(unpaidAmount * account.discount / 100).toLocaleString()}</div>
         </div>
         ` : ''}
         <div class="totals-row">
             <div class="totals-label">Amount Paid:</div>
-            <div class="totals-value" style="color: #10b981;">KES ${paidAmount.toLocaleString()}</div>
+            <div class="totals-value" style="color: #10b981;">${getBrandingForReceipts().currencySymbol || 'KES'} ${paidAmount.toLocaleString()}</div>
         </div>
         <div class="totals-row totals-final">
             <div class="totals-label">BALANCE DUE:</div>
-            <div class="totals-value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">KES ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()}</div>
+            <div class="totals-value" style="color: ${unpaidAmount > 0 ? '#dc2626' : '#10b981'};">${getBrandingForReceipts().currencySymbol || 'KES'} ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()}</div>
         </div>
     </div>
     
     ${unpaidAmount > 0 ? `
     <div class="unpaid-notice">
         <div class="title">Payment Required</div>
-        <div class="detail">Please settle the outstanding balance of KES ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()} by ${dueDate.toLocaleDateString()}.</div>
+        <div class="detail">Please settle the outstanding balance of ${getBrandingForReceipts().currencySymbol || 'KES'} ${Math.round(unpaidAmount * (100 - (account.discount || 0)) / 100).toLocaleString()} by ${dueDate.toLocaleDateString()}.</div>
         <div class="detail" style="margin-top: 6px;">Bank: Equity Bank | Account: 0123456789 | M-Pesa Paybill: 123456 | Ref: ${account.accountNumber}</div>
     </div>
     ` : ''}
     
     <!-- Footer -->
     <div class="footer">
-        <div>Thank you for your business with EcoSpark Car Wash</div>
+        <div>Thank you for your business with ${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash</div>
         <div style="margin-top: 4px;">Invoice generated on ${now.toLocaleString()} | ${invoiceNo}</div>
     </div>
 </body>
@@ -9168,7 +9399,7 @@ function FleetAccounts() {
                                     <input type="text" value={accountForm.address} onChange={(e) => setAccountForm({ ...accountForm, address: e.target.value })} style={inputStyle} placeholder="Business address" />
                                 </div>
                                 <div>
-                                    <label style={labelStyle}>Credit Limit (KSH)</label>
+                                    <label style={labelStyle}>Credit Limit ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                     <input type="number" value={accountForm.creditLimit} onChange={(e) => setAccountForm({ ...accountForm, creditLimit: Number(e.target.value) })} style={inputStyle} placeholder="0" />
                                 </div>
                                 <div>
@@ -9177,7 +9408,7 @@ function FleetAccounts() {
                                 </div>
                                 {showAddModal && (
                                     <div>
-                                        <label style={labelStyle}>Initial Balance (KSH)</label>
+                                        <label style={labelStyle}>Initial Balance ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                         <input type="number" value={accountForm.balance} onChange={(e) => setAccountForm({ ...accountForm, balance: Number(e.target.value) })} style={inputStyle} placeholder="0" />
                                     </div>
                                 )}
@@ -9553,7 +9784,7 @@ function FleetAccounts() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={labelStyle}>Amount (KSH) *</label>
+                                    <label style={labelStyle}>Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                                     <input type="number" value={expenditureForm.amount} onChange={(e) => setExpenditureForm({ ...expenditureForm, amount: e.target.value })} style={inputStyle} placeholder="0" />
                                 </div>
                             </div>
@@ -9698,7 +9929,7 @@ function FleetAccounts() {
                                 <div style={{ fontSize: '24px', fontWeight: '800', color: selectedAccount.balance >= 0 ? '#10b981' : '#ef4444' }}>{formatCurrency(selectedAccount.balance)}</div>
                             </div>
                             <div style={{ marginBottom: '12px' }}>
-                                <label style={labelStyle}>Amount (KSH) *</label>
+                                <label style={labelStyle}>Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                                 <input type="number" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} style={inputStyle} placeholder="Enter amount" />
                             </div>
                             <div>
@@ -11043,7 +11274,7 @@ function CustomerManagement() {
                                         <div style={{ fontSize: '12px', color: theme.textMuted }}>Total Visits</div>
                                     </div>
                                     <div style={{ backgroundColor: theme.bgTertiary, padding: '16px', textAlign: 'center' }}>
-                                        <div style={{ fontSize: '24px', fontWeight: '600', color: '#10b981' }}>KSh {(selectedCustomer.totalSpent || 0).toFixed(2)}</div>
+                                        <div style={{ fontSize: '24px', fontWeight: '600', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(selectedCustomer.totalSpent || 0).toFixed(2)}</div>
                                         <div style={{ fontSize: '12px', color: theme.textMuted }}>Total Spent</div>
                                     </div>
                                 </div>
@@ -11178,7 +11409,7 @@ function CustomerManagement() {
                                         <input type="number" min="0" step="1" value={settingsFormData.pointsPerVisit} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerVisit: Number(e.target.value)})} style={inputStyle} />
                                     </div>
                                     <div>
-                                        <label style={labelStyle}>Points Per KSh Spent</label>
+                                        <label style={labelStyle}>Points Per {getBrandingForReceipts().currencySymbol || 'KES'} Spent</label>
                                         <input type="number" min="0" step="0.01" value={settingsFormData.pointsPerRand} onChange={(e) => setSettingsFormData({...settingsFormData, pointsPerRand: Number(e.target.value)})} style={inputStyle} />
                                     </div>
                                 </div>
@@ -11205,9 +11436,9 @@ function CustomerManagement() {
                             <div style={{ marginBottom: '20px' }}>
                                 <div style={{ fontSize: '13px', fontWeight: '600', color: theme.textSecondary, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>💰 Redemption</div>
                                 <div>
-                                    <label style={labelStyle}>Redeem Rate (KSh per Point)</label>
+                                    <label style={labelStyle}>Redeem Rate ({getBrandingForReceipts().currencySymbol || 'KES'} per Point)</label>
                                     <input type="number" min="0" step="0.01" value={settingsFormData.redeemRate} onChange={(e) => setSettingsFormData({...settingsFormData, redeemRate: Number(e.target.value)})} style={inputStyle} />
-                                    <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>Value of each point when redeemed (e.g., 0.1 = KSh 0.10 per point)</div>
+                                    <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>Value of each point when redeemed (e.g., 0.1 = {getBrandingForReceipts().currencySymbol || 'KES'} 0.10 per point)</div>
                                 </div>
                             </div>
 
@@ -11245,8 +11476,8 @@ function CustomerManagement() {
                                             <option value="50% Off Next Wash">50% Off Next Wash</option>
                                             <option value="Free Wax Treatment">Free Wax Treatment</option>
                                             <option value="Free Air Freshener">Free Air Freshener</option>
-                                            <option value="KSh 500 Voucher">KSh 500 Voucher</option>
-                                            <option value="KSh 1000 Voucher">KSh 1000 Voucher</option>
+                                            <option value={`${getBrandingForReceipts().currencySymbol || 'KES'} 500 Voucher`}>{getBrandingForReceipts().currencySymbol || 'KES'} 500 Voucher</option>
+                                            <option value={`${getBrandingForReceipts().currencySymbol || 'KES'} 1000 Voucher`}>{getBrandingForReceipts().currencySymbol || 'KES'} 1000 Voucher</option>
                                             <option value="Custom Reward">Custom Reward</option>
                                         </select>
                                     </div>
@@ -11375,8 +11606,8 @@ function CustomerManagement() {
                         {/* Receipt Content */}
                         <div id="receipt-content" style={{ padding: '20px' }}>
                             <div className="header" style={{ textAlign: 'center', borderBottom: '2px dashed #ccc', paddingBottom: '15px', marginBottom: '15px' }}>
-                                <div className="company" style={{ fontSize: '22px', fontWeight: 'bold', color: theme.text }}>ECOSPARK</div>
-                                <div className="tagline" style={{ fontSize: '12px', color: theme.textMuted }}>Car Wash & Auto Services</div>
+                                <div className="company" style={{ fontSize: '22px', fontWeight: 'bold', color: theme.text }}>{getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+                                <div className="tagline" style={{ fontSize: '12px', color: theme.textMuted }}>{getBrandingForReceipts().tagline || 'Car Wash & Auto Services'}</div>
                                 <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '8px' }}>Receipt #{receiptData.receiptNumber}</div>
                                 <div style={{ fontSize: '11px', color: theme.textMuted }}>{new Date(receiptData.date).toLocaleString()}</div>
                             </div>
@@ -11400,7 +11631,7 @@ function CustomerManagement() {
                                 <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>Service</div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ fontSize: '14px', color: theme.text }}>{receiptData.service.name}</span>
-                                    <span style={{ fontSize: '16px', fontWeight: '600', color: theme.text }}>KSh {(receiptData.service.price || 0).toFixed(2)}</span>
+                                    <span style={{ fontSize: '16px', fontWeight: '600', color: theme.text }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(receiptData.service.price || 0).toFixed(2)}</span>
                                 </div>
                             </div>
                             
@@ -11408,7 +11639,7 @@ function CustomerManagement() {
                             
                             <div className="total-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '18px', fontWeight: 'bold' }}>
                                 <span style={{ color: theme.text }}>TOTAL</span>
-                                <span style={{ color: theme.text }}>KSh {(receiptData.service.price || 0).toFixed(2)}</span>
+                                <span style={{ color: theme.text }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(receiptData.service.price || 0).toFixed(2)}</span>
                             </div>
                             
                             {/* Loyalty Points Section */}
@@ -11485,7 +11716,7 @@ function CustomerManagement() {
                             )}
                             
                             <div className="footer" style={{ textAlign: 'center', marginTop: '20px', paddingTop: '15px', borderTop: '2px dashed #ccc', fontSize: '11px', color: theme.textMuted }}>
-                                <div>Thank you for choosing Ecospark!</div>
+                                <div>Thank you for choosing {getBrandingForReceipts().companyName || 'EcoSpark'}!</div>
                                 <div style={{ marginTop: '4px' }}>We appreciate your business</div>
                             </div>
                         </div>
@@ -12233,7 +12464,7 @@ function GarageManagement() {
                 
                 showAlert(
                     '✅ Job Completed',
-                    `${job.plateNumber} garage job completed!\nTotal: KSh ${totalCost.toLocaleString()}\n\nInvoice sent to Billing for payment.`,
+                    `${job.plateNumber} garage job completed!\nTotal: ${getBrandingForReceipts().currencySymbol || 'KSh'} ${totalCost.toLocaleString()}\n\nInvoice sent to Billing for payment.`,
                     'success'
                 );
                 
@@ -12403,9 +12634,10 @@ function GarageManagement() {
     const handlePrintReceipt = () => {
         if (!selectedItem) return;
         
+        const brand = getBrandingForReceipts();
         const servicesList = selectedItem.services?.map(sId => {
             const service = garageServices.find(s => s.id === sId);
-            return service ? `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${service.name}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">KSh ${(service.price || 0).toLocaleString()}</td></tr>` : '';
+            return service ? `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${service.name}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${brand.currencySymbol || 'KSh'} ${(service.price || 0).toLocaleString()}</td></tr>` : '';
         }).join('') || '<tr><td colspan="2" style="padding:8px;">No services</td></tr>';
 
         const totalCost = selectedItem.services?.reduce((sum, sId) => {
@@ -12436,8 +12668,10 @@ function GarageManagement() {
             </head>
             <body>
                 <div class="header">
-                    <div class="logo">🔧 ECOSPARK GARAGE</div>
+                    <div class="logo">🔧 ${brand.companyName || 'ECOSPARK'} GARAGE</div>
                     <div class="subtitle">Auto Service Receipt</div>
+                    ${brand.address ? `<div class="subtitle">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
+                    ${brand.phone ? `<div class="subtitle">Tel: ${brand.phone}</div>` : ''}
                 </div>
                 
                 <div class="section">
@@ -12474,7 +12708,7 @@ function GarageManagement() {
                 </table>
                 
                 <div class="total">
-                    Total: KSh ${totalCost.toLocaleString()}
+                    Total: ${brand.currencySymbol || 'KSh'} ${totalCost.toLocaleString()}
                 </div>
                 
                 <div class="section" style="text-align:center;margin-top:20px;">
@@ -12484,7 +12718,7 @@ function GarageManagement() {
                 ${selectedItem.notes ? `<div class="section"><div class="label">Notes</div><div class="value">${selectedItem.notes}</div></div>` : ''}
                 
                 <div class="footer">
-                    <p>Thank you for choosing Ecospark!</p>
+                    <p>${brand.receiptFooter || 'Thank you for choosing us!'}</p>
                     <p>Your vehicle is in safe hands</p>
                 </div>
             </body>
@@ -12620,7 +12854,7 @@ function GarageManagement() {
     };
 
     // Format currency
-    const formatCurrency = (amount) => `KSh ${(amount || 0).toLocaleString()}`;
+    const formatCurrency = (amount) => `${getBrandingForReceipts().currencySymbol || 'KSh'} ${(amount || 0).toLocaleString()}`;
 
     // Format time ago
     const formatTimeAgo = (dateString) => {
@@ -13548,8 +13782,10 @@ function GarageManagement() {
                     <div style={{ backgroundColor: 'white', borderRadius: '0', width: '100%', maxWidth: '420px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
                         {/* Receipt Header */}
                         <div style={{ padding: '24px', textAlign: 'center', borderBottom: '2px solid #333' }}>
-                            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#333' }}>🔧 ECOSPARK GARAGE</div>
+                            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#333' }}>🔧 {getBrandingForReceipts().companyName || 'ECOSPARK'} GARAGE</div>
                             <div style={{ color: '#666', fontSize: '12px', marginTop: '4px' }}>Auto Service Receipt</div>
+                            {getBrandingForReceipts().address && <div style={{ color: '#666', fontSize: '11px', marginTop: '2px' }}>{getBrandingForReceipts().address}{getBrandingForReceipts().city ? `, ${getBrandingForReceipts().city}` : ''}</div>}
+                            {getBrandingForReceipts().phone && <div style={{ color: '#666', fontSize: '11px' }}>Tel: {getBrandingForReceipts().phone}</div>}
                         </div>
 
                         <div style={{ padding: '20px 24px' }}>
@@ -13597,7 +13833,7 @@ function GarageManagement() {
                                         return service ? (
                                             <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #eee' }}>
                                                 <span style={{ color: '#333' }}>{service.name}</span>
-                                                <span style={{ fontWeight: '500', color: '#333' }}>KSh {(parseFloat(service.price) || 0).toLocaleString()}</span>
+                                                <span style={{ fontWeight: '500', color: '#333' }}>{getBrandingForReceipts().currencySymbol || 'KSh'} {(parseFloat(service.price) || 0).toLocaleString()}</span>
                                             </div>
                                         ) : null;
                                     })
@@ -13610,7 +13846,7 @@ function GarageManagement() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '16px 0', borderTop: '2px solid #333', marginTop: '8px' }}>
                                 <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#333' }}>TOTAL</span>
                                 <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#059669' }}>
-                                    KSh {(selectedItem.totalCost || selectedItem.services?.reduce((sum, svc) => {
+                                    {getBrandingForReceipts().currencySymbol || 'KSh'} {(selectedItem.totalCost || selectedItem.services?.reduce((sum, svc) => {
                                         if (typeof svc === 'object') {
                                             return sum + (parseFloat(svc.price) || 0);
                                         }
@@ -13644,7 +13880,7 @@ function GarageManagement() {
 
                         {/* Footer */}
                         <div style={{ padding: '16px 24px', borderTop: '1px dashed #ddd', textAlign: 'center' }}>
-                            <p style={{ margin: '0 0 8px 0', color: '#666', fontSize: '12px' }}>Thank you for choosing Ecospark!</p>
+                            <p style={{ margin: '0 0 8px 0', color: '#666', fontSize: '12px' }}>{getBrandingForReceipts().receiptFooter || 'Thank you for choosing us!'}</p>
                             <p style={{ margin: 0, color: '#999', fontSize: '11px' }}>Your vehicle is in safe hands 🚗</p>
                         </div>
 
@@ -13897,7 +14133,7 @@ function GarageManagement() {
                                                     </span>
                                                 </div>
                                                 <div style={{ fontWeight: '700', color: '#10b981', fontSize: '16px' }}>
-                                                    KSh {(service.price || 0).toLocaleString()}
+                                                    {getBrandingForReceipts().currencySymbol || 'KSh'} {(service.price || 0).toLocaleString()}
                                                 </div>
                                             </div>
                                             <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>
@@ -13962,7 +14198,7 @@ function GarageManagement() {
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: theme.text, marginBottom: '6px' }}>Price (KSh) *</label>
+                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '500', color: theme.text, marginBottom: '6px' }}>Price ({getBrandingForReceipts().currencySymbol || 'KSh'}) *</label>
                                     <input
                                         type="number"
                                         value={serviceFormData.price}
@@ -14146,7 +14382,7 @@ function GarageManagement() {
                                                         </div>
                                                     </div>
                                                     <div style={{ fontWeight: '700', color: '#10b981', fontSize: '15px' }}>
-                                                        KSh {(service.price || 0).toLocaleString()}
+                                                        {getBrandingForReceipts().currencySymbol || 'KSh'} {(service.price || 0).toLocaleString()}
                                                     </div>
                                                 </div>
                                             </div>
@@ -14161,7 +14397,7 @@ function GarageManagement() {
                                             {transferServices.length} service(s) selected
                                         </span>
                                         <span style={{ fontWeight: '700', color: '#166534', fontSize: '16px' }}>
-                                            Total: KSh {transferServices.reduce((sum, sId) => {
+                                            Total: {getBrandingForReceipts().currencySymbol || 'KSh'} {transferServices.reduce((sum, sId) => {
                                                 const service = garageServices.find(s => s.id === sId);
                                                 return sum + (service?.price || 0);
                                             }, 0).toLocaleString()}
@@ -14388,7 +14624,7 @@ function GarageManagement() {
                                                         </div>
                                                     </div>
                                                     <div style={{ fontWeight: '700', color: '#10b981', fontSize: '15px' }}>
-                                                        KSh {(service.price || 0).toLocaleString()}
+                                                        {getBrandingForReceipts().currencySymbol || 'KSh'} {(service.price || 0).toLocaleString()}
                                                     </div>
                                                 </div>
                                             </div>
@@ -14403,7 +14639,7 @@ function GarageManagement() {
                                             {editServices.length} service(s) selected
                                         </span>
                                         <span style={{ fontWeight: '700', color: '#166534', fontSize: '16px' }}>
-                                            Total: KSh {editServices.reduce((sum, sId) => {
+                                            Total: {getBrandingForReceipts().currencySymbol || 'KSh'} {editServices.reduce((sum, sId) => {
                                                 const service = garageServices.find(s => s.id === sId);
                                                 return sum + (service?.price || 0);
                                             }, 0).toLocaleString()}
@@ -15986,7 +16222,7 @@ function WashBaysContent() {
                                                 {svcName}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
-                                                KES {svcPrice.toLocaleString()}
+                                                {getBrandingForReceipts().currencySymbol || 'KES'} {svcPrice.toLocaleString()}
                                             </td>
                                             <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                                 {record.vehicle?.washedBy || record.vehicle?.assignedBy || '-'}
@@ -16071,7 +16307,7 @@ function WashBaysContent() {
                                             {serviceName}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: '#10b981' }}>
-                                            KES {servicePrice.toLocaleString()}
+                                            {getBrandingForReceipts().currencySymbol || 'KES'} {servicePrice.toLocaleString()}
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '13px', color: theme.text }}>
                                             {record.vehicle?.washedBy || record.completedBy || '-'}
@@ -16095,7 +16331,7 @@ function WashBaysContent() {
                                                     backgroundColor: '#d1fae5',
                                                     color: '#059669'
                                                 }}>
-                                                    ✓ KES {servicePrice.toLocaleString()} Paid
+                                                    ✓ {getBrandingForReceipts().currencySymbol || 'KES'} {servicePrice.toLocaleString()} Paid
                                                 </span>
                                             ) : (
                                                 <span style={{
@@ -16106,7 +16342,7 @@ function WashBaysContent() {
                                                     backgroundColor: '#fef3c7',
                                                     color: '#d97706'
                                                 }}>
-                                                    💰 KES {servicePrice.toLocaleString()} Pending
+                                                    💰 {getBrandingForReceipts().currencySymbol || 'KES'} {servicePrice.toLocaleString()} Pending
                                                 </span>
                                             )}
                                         </td>
@@ -16763,7 +16999,7 @@ function WashBaysContent() {
                                                                         borderRadius: '4px',
                                                                         fontSize: '11px'
                                                                     }}>
-                                                                        KES {vehicleService.price?.toLocaleString()}
+                                                                        {getBrandingForReceipts().currencySymbol || 'KES'} {vehicleService.price?.toLocaleString()}
                                                                     </span>
                                                                 </div>
                                                             )}
@@ -16975,7 +17211,7 @@ function WashBaysContent() {
                                 >
                                     <option value="">Select a service...</option>
                                     {servicePackages.map(pkg => (
-                                        <option key={pkg.id} value={pkg.id}>{pkg.name} - KES {pkg.price?.toLocaleString()}</option>
+                                        <option key={pkg.id} value={pkg.id}>{pkg.name} - {getBrandingForReceipts().currencySymbol || 'KES'} {pkg.price?.toLocaleString()}</option>
                                     ))}
                                 </select>
                             </div>
@@ -17015,7 +17251,7 @@ function WashBaysContent() {
                                                 padding: '8px 16px',
                                                 borderRadius: '4px'
                                             }}>
-                                                KES {vehicleService.price?.toLocaleString()}
+                                                {getBrandingForReceipts().currencySymbol || 'KES'} {vehicleService.price?.toLocaleString()}
                                             </div>
                                         </div>
                                         <div style={{ fontSize: '11px', color: '#15803d', marginTop: '8px' }}>
@@ -17846,7 +18082,7 @@ function Dashboard({ onModuleClick }) {
         },
         {
             title: 'Revenue Today',
-            value: `KSh ${totalRevenueToday.toLocaleString()}`,
+            value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${totalRevenueToday.toLocaleString()}`,
             subValues: [
                 { label: 'Paid', value: paidRevenueToday, color: '#10b981' },
                 { label: 'Pending', value: pendingRevenueToday, color: '#f59e0b' },
@@ -17858,7 +18094,7 @@ function Dashboard({ onModuleClick }) {
         },
         {
             title: 'Expenses Today',
-            value: `KSh ${expensesToday.toLocaleString()}`,
+            value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${expensesToday.toLocaleString()}`,
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
             color: '#ef4444'
         },
@@ -17899,7 +18135,7 @@ function Dashboard({ onModuleClick }) {
         },
         {
             title: 'Fleet Balance',
-            value: `KSh ${totalFleetBalance.toLocaleString()}`,
+            value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${totalFleetBalance.toLocaleString()}`,
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>,
             color: '#06b6d4'
         }
@@ -18090,7 +18326,7 @@ function Dashboard({ onModuleClick }) {
                                                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{inv.customerName || inv.plateNumber || 'N/A'}</div>
                                                     </div>
                                                     <div style={{ textAlign: 'right' }}>
-                                                        <div style={{ fontWeight: '600', color: '#10b981' }}>KSh {(inv.totalAmount || inv.total || 0).toLocaleString()}</div>
+                                                        <div style={{ fontWeight: '600', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(inv.totalAmount || inv.total || 0).toLocaleString()}</div>
                                                         <span style={{ 
                                                             padding: '2px 6px', 
                                                             fontSize: '10px', 
@@ -18773,7 +19009,7 @@ function HRModule() {
     const handleCancelPayment = (payment) => {
         showConfirm(
             'Cancel Payment',
-            `Are you sure you want to cancel this payment of KES ${(payment.amount || 0).toLocaleString()} to ${payment.staffName}? This action cannot be undone.`,
+            `Are you sure you want to cancel this payment of ${getBrandingForReceipts().currencySymbol || 'KES'} ${(payment.amount || 0).toLocaleString()} to ${payment.staffName}? This action cannot be undone.`,
             async () => {
                 setActionLoading(true);
                 try {
@@ -18848,6 +19084,7 @@ function HRModule() {
 
     // Print payment receipt (Payslip)
     const handlePrintReceipt = (payment) => {
+        const brand = getBrandingForReceipts();
         const grossAmount = payment.grossAmount || payment.amount || 0;
         const paye = payment.paye || 0;
         const nhif = payment.nhif || 0;
@@ -18867,6 +19104,7 @@ function HRModule() {
                     .header { background: #1e3a5f; color: white; padding: 20px; text-align: center; }
                     .logo { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
                     .subtitle { font-size: 14px; opacity: 0.9; }
+                    .company-info { font-size: 11px; opacity: 0.8; margin-top: 4px; }
                     .payslip-title { background: #f8f9fa; padding: 12px; text-align: center; font-size: 16px; font-weight: 600; border-bottom: 1px solid #ddd; text-transform: uppercase; letter-spacing: 1px; }
                     .section { padding: 16px 20px; border-bottom: 1px solid #eee; }
                     .section-title { font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px; }
@@ -18898,8 +19136,10 @@ function HRModule() {
             <body>
                 <div class="payslip">
                     <div class="header">
-                        <div class="logo">🚗 ECOSPARK</div>
-                        <div class="subtitle">Car Wash & Auto Services</div>
+                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="subtitle">${brand.tagline || 'Car Wash & Auto Services'}</div>
+                        ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
+                        ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
                     </div>
                     
                     <div class="payslip-title">Employee Payslip</div>
@@ -18922,31 +19162,31 @@ function HRModule() {
                     
                     <div class="section">
                         <div class="section-title">Earnings</div>
-                        ${payment.baseSalary > 0 ? `<div class="earnings-row"><span>Base Salary</span><span class="amount">KES ${(payment.baseSalary || 0).toLocaleString()}</span></div>` : ''}
-                        ${payment.totalCommission > 0 ? `<div class="earnings-row"><span>Commission (${payment.jobsCount || 0} jobs)</span><span class="amount">KES ${(payment.totalCommission || 0).toLocaleString()}</span></div>` : ''}
-                        ${payment.baseSalary <= 0 && payment.totalCommission <= 0 ? `<div class="earnings-row"><span>Gross Pay</span><span class="amount">KES ${grossAmount.toLocaleString()}</span></div>` : ''}
+                        ${payment.baseSalary > 0 ? `<div class="earnings-row"><span>Base Salary</span><span class="amount">${brand.currencySymbol || 'KES'} ${(payment.baseSalary || 0).toLocaleString()}</span></div>` : ''}
+                        ${payment.totalCommission > 0 ? `<div class="earnings-row"><span>Commission (${payment.jobsCount || 0} jobs)</span><span class="amount">${brand.currencySymbol || 'KES'} ${(payment.totalCommission || 0).toLocaleString()}</span></div>` : ''}
+                        ${payment.baseSalary <= 0 && payment.totalCommission <= 0 ? `<div class="earnings-row"><span>Gross Pay</span><span class="amount">${brand.currencySymbol || 'KES'} ${grossAmount.toLocaleString()}</span></div>` : ''}
                         <div class="subtotal gross">
                             <span>GROSS EARNINGS</span>
-                            <span class="amount">KES ${grossAmount.toLocaleString()}</span>
+                            <span class="amount">${brand.currencySymbol || 'KES'} ${grossAmount.toLocaleString()}</span>
                         </div>
                     </div>
                     
                     <div class="section">
                         <div class="section-title">Statutory Deductions</div>
-                        ${paye > 0 ? `<div class="deduction-row"><span>P.A.Y.E (Tax)</span><span class="amount">- KES ${paye.toLocaleString()}</span></div>` : ''}
-                        ${nhif > 0 ? `<div class="deduction-row"><span>NHIF</span><span class="amount">- KES ${nhif.toLocaleString()}</span></div>` : ''}
-                        ${nssf > 0 ? `<div class="deduction-row"><span>NSSF</span><span class="amount">- KES ${nssf.toLocaleString()}</span></div>` : ''}
-                        ${otherDeductions > 0 ? `<div class="deduction-row"><span>Other Deductions</span><span class="amount">- KES ${otherDeductions.toLocaleString()}</span></div>` : ''}
-                        ${totalDeductions === 0 ? `<div class="deduction-row"><span>No deductions</span><span class="amount">KES 0</span></div>` : ''}
+                        ${paye > 0 ? `<div class="deduction-row"><span>P.A.Y.E (Tax)</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${paye.toLocaleString()}</span></div>` : ''}
+                        ${nhif > 0 ? `<div class="deduction-row"><span>NHIF</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${nhif.toLocaleString()}</span></div>` : ''}
+                        ${nssf > 0 ? `<div class="deduction-row"><span>NSSF</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${nssf.toLocaleString()}</span></div>` : ''}
+                        ${otherDeductions > 0 ? `<div class="deduction-row"><span>Other Deductions</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${otherDeductions.toLocaleString()}</span></div>` : ''}
+                        ${totalDeductions === 0 ? `<div class="deduction-row"><span>No deductions</span><span class="amount">${brand.currencySymbol || 'KES'} 0</span></div>` : ''}
                         <div class="subtotal deduct">
                             <span>TOTAL DEDUCTIONS</span>
-                            <span class="amount">- KES ${totalDeductions.toLocaleString()}</span>
+                            <span class="amount">- ${brand.currencySymbol || 'KES'} ${totalDeductions.toLocaleString()}</span>
                         </div>
                     </div>
                     
                     <div class="net-pay">
                         <span class="label">Net Pay</span>
-                        <span class="amount">KES ${netPay.toLocaleString()}</span>
+                        <span class="amount">${brand.currencySymbol || 'KES'} ${netPay.toLocaleString()}</span>
                     </div>
                     
                     <div class="signature-area">
@@ -18959,7 +19199,7 @@ function HRModule() {
                     </div>
                     
                     <div class="footer">
-                        <p><strong>EcoSpark Car Wash & Auto Services</strong></p>
+                        <p><strong>${brand.companyName || 'EcoSpark'} Car Wash & Auto Services</strong></p>
                         <p>This is a computer-generated payslip. No signature required.</p>
                         <p>For queries, contact HR department.</p>
                     </div>
@@ -19052,7 +19292,7 @@ function HRModule() {
                         </div>
                         <div style={statCardStyle}>
                             <div style={{ fontSize: '32px', marginBottom: '8px' }}>💵</div>
-                            <div style={statValueStyle}>KES {totalPaymentsThisMonth.toLocaleString()}</div>
+                            <div style={statValueStyle}>{getBrandingForReceipts().currencySymbol || 'KES'} {totalPaymentsThisMonth.toLocaleString()}</div>
                             <div style={statLabelStyle}>Paid This Month</div>
                         </div>
                     </div>
@@ -19138,23 +19378,23 @@ function HRModule() {
                                                 <td style={tdStyle}>
                                                     {staff.paymentType === 'commission' 
                                                         ? `${staff.commissionRate || 0}%`
-                                                        : `KES ${(staff.salary || 0).toLocaleString()}`
+                                                        : `${getBrandingForReceipts().currencySymbol || 'KES'} ${(staff.salary || 0).toLocaleString()}`
                                                     }
                                                 </td>
                                                 <td style={tdStyle}>{stats.totalJobs}</td>
                                                 <td style={tdStyle}>
                                                     <div>
                                                         {staff.paymentType !== 'commission' ? (
-                                                            <span style={{ color: '#3b82f6' }}>KES {(staff.salary || 0).toLocaleString()}<span style={{ fontSize: '10px', color: isDark ? '#64748b' : '#94a3b8' }}>/{staff.paymentType === 'daily' ? 'day' : staff.paymentType === 'weekly' ? 'week' : 'month'}</span></span>
+                                                            <span style={{ color: '#3b82f6' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(staff.salary || 0).toLocaleString()}<span style={{ fontSize: '10px', color: isDark ? '#64748b' : '#94a3b8' }}>/{staff.paymentType === 'daily' ? 'day' : staff.paymentType === 'weekly' ? 'week' : 'month'}</span></span>
                                                         ) : (
-                                                            <span>KES {stats.totalCommission.toLocaleString()}</span>
+                                                            <span>{getBrandingForReceipts().currencySymbol || 'KES'} {stats.totalCommission.toLocaleString()}</span>
                                                         )}
                                                     </div>
                                                     {staff.paymentType === 'commission' && stats.pendingCommission > 0 && (
-                                                        <div style={{ fontSize: '11px', color: '#f59e0b' }}>Pending: KES {stats.pendingCommission.toLocaleString()}</div>
+                                                        <div style={{ fontSize: '11px', color: '#f59e0b' }}>Pending: {getBrandingForReceipts().currencySymbol || 'KES'} {stats.pendingCommission.toLocaleString()}</div>
                                                     )}
                                                     {stats.totalPaid > 0 && (
-                                                        <div style={{ fontSize: '11px', color: '#10b981' }}>Paid: KES {stats.totalPaid.toLocaleString()}</div>
+                                                        <div style={{ fontSize: '11px', color: '#10b981' }}>Paid: {getBrandingForReceipts().currencySymbol || 'KES'} {stats.totalPaid.toLocaleString()}</div>
                                                     )}
                                                 </td>
                                                 <td style={tdStyle}>
@@ -19234,10 +19474,10 @@ function HRModule() {
                                                     {work.bayName && <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8' }}>Bay: {work.bayName}</div>}
                                                 </td>
                                                 <td style={tdStyle}>{work.customerName || '-'}</td>
-                                                <td style={tdStyle}>KES {(work.servicePrice || 0).toLocaleString()}</td>
+                                                <td style={tdStyle}>{getBrandingForReceipts().currencySymbol || 'KES'} {(work.servicePrice || 0).toLocaleString()}</td>
                                                 <td style={tdStyle}>
                                                     <span style={{ color: '#10b981', fontWeight: '600' }}>
-                                                        KES {(work.commissionAmount || 0).toLocaleString()}
+                                                        {getBrandingForReceipts().currencySymbol || 'KES'} {(work.commissionAmount || 0).toLocaleString()}
                                                     </span>
                                                     {work.commissionRate > 0 && (
                                                         <span style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginLeft: '4px' }}>
@@ -19297,7 +19537,7 @@ function HRModule() {
                                             </td>
                                             <td style={tdStyle}>{payment.jobsCount || 0}</td>
                                             <td style={tdStyle}>
-                                                <span style={{ fontWeight: '700', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>KES {(payment.amount || 0).toLocaleString()}</span>
+                                                <span style={{ fontWeight: '700', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(payment.amount || 0).toLocaleString()}</span>
                                             </td>
                                             <td style={tdStyle}>
                                                 <span style={{
@@ -19369,7 +19609,7 @@ function HRModule() {
 
                         {commissionForm.paymentType !== 'commission' && (
                             <div style={{ marginBottom: '20px' }}>
-                                <label style={labelStyle}>Salary Amount (KES)</label>
+                                <label style={labelStyle}>Salary Amount ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                 <input
                                     type="number"
                                     value={commissionForm.salary}
@@ -19433,17 +19673,17 @@ function HRModule() {
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
                                         <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Payment Type:</span> <strong style={{ textTransform: 'capitalize' }}>{paymentTypeLabels[selectedStaff.paymentType] || 'Not Set'}</strong></div>
                                         {isSalaryBased ? (
-                                            <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{paymentTypeLabels[selectedStaff.paymentType]}:</span> <strong style={{ color: '#3b82f6' }}>KES {(selectedStaff.salary || 0).toLocaleString()}</strong></div>
+                                            <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{paymentTypeLabels[selectedStaff.paymentType]}:</span> <strong style={{ color: '#3b82f6' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(selectedStaff.salary || 0).toLocaleString()}</strong></div>
                                         ) : (
                                             <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Jobs Done:</span> <strong>{stats.totalJobs}</strong></div>
                                         )}
-                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{isSalaryBased ? 'Period Earnings:' : 'Total Commission:'}</span> <strong style={{ color: '#10b981' }}>KES {periodEarnings.toLocaleString()}</strong></div>
-                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Total Paid:</span> <strong>KES {stats.totalPaid.toLocaleString()}</strong></div>
+                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{isSalaryBased ? 'Period Earnings:' : 'Total Commission:'}</span> <strong style={{ color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {periodEarnings.toLocaleString()}</strong></div>
+                                        <div><span style={{ color: isDark ? '#64748b' : '#94a3b8' }}>Total Paid:</span> <strong>{getBrandingForReceipts().currencySymbol || 'KES'} {stats.totalPaid.toLocaleString()}</strong></div>
                                     </div>
                                     {isSalaryBased && paymentForm.periodStart && paymentForm.periodEnd && (
                                         <div style={{ marginTop: '12px', padding: '10px', background: isDark ? '#1e3a5f30' : '#dbeafe', borderRadius: '0' }}>
                                             <div style={{ fontSize: '12px', color: isDark ? '#93c5fd' : '#1e40af' }}>
-                                                💡 <strong>Suggested Amount:</strong> KES {periodEarnings.toLocaleString()} for selected period
+                                                💡 <strong>Suggested Amount:</strong> {getBrandingForReceipts().currencySymbol || 'KES'} {periodEarnings.toLocaleString()} for selected period
                                                 <button 
                                                     style={{ marginLeft: '10px', background: '#3b82f6', color: 'white', border: 'none', padding: '4px 10px', cursor: 'pointer', fontSize: '11px' }}
                                                     onClick={() => setPaymentForm({...paymentForm, amount: periodEarnings.toString()})}
@@ -19467,7 +19707,7 @@ function HRModule() {
                         </div>
 
                         <div style={{ marginBottom: '20px' }}>
-                            <label style={labelStyle}>Gross Payment Amount (KES) *</label>
+                            <label style={labelStyle}>Gross Payment Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                             <input
                                 type="number"
                                 value={paymentForm.amount}
@@ -19530,11 +19770,11 @@ function HRModule() {
                             <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', marginBottom: '20px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '13px' }}>
                                     <span style={{ color: isDark ? '#94a3b8' : '#64748b' }}>Gross Amount:</span>
-                                    <span style={{ fontWeight: '600', color: '#16a34a' }}>KES {parseFloat(paymentForm.amount || 0).toLocaleString()}</span>
+                                    <span style={{ fontWeight: '600', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(paymentForm.amount || 0).toLocaleString()}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '13px' }}>
                                     <span style={{ color: isDark ? '#94a3b8' : '#64748b' }}>Total Deductions:</span>
-                                    <span style={{ fontWeight: '600', color: '#dc2626' }}>- KES {(
+                                    <span style={{ fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(
                                         (parseFloat(paymentForm.paye) || 0) + 
                                         (parseFloat(paymentForm.nhif) || 0) + 
                                         (parseFloat(paymentForm.nssf) || 0) + 
@@ -19543,7 +19783,7 @@ function HRModule() {
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', borderTop: `2px solid ${isDark ? '#334155' : '#d1fae5'}`, fontSize: '15px' }}>
                                     <span style={{ fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>NET PAY:</span>
-                                    <span style={{ fontWeight: '700', color: '#059669', fontSize: '18px' }}>KES {(
+                                    <span style={{ fontWeight: '700', color: '#059669', fontSize: '18px' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(
                                         (parseFloat(paymentForm.amount) || 0) - 
                                         (parseFloat(paymentForm.paye) || 0) - 
                                         (parseFloat(paymentForm.nhif) || 0) - 
@@ -19620,18 +19860,18 @@ function HRModule() {
                                 {viewingPayment.baseSalary > 0 && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Base Salary</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>KES {(viewingPayment.baseSalary || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.baseSalary || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 {viewingPayment.totalCommission > 0 && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Commission ({viewingPayment.jobsCount || 0} jobs)</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>KES {(viewingPayment.totalCommission || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.totalCommission || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#1e3a5f20' : '#dcfce7' }}>
                                     <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>GROSS EARNINGS</span>
-                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#16a34a' }}>KES {(viewingPayment.grossAmount || viewingPayment.amount || 0).toLocaleString()}</span>
+                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.grossAmount || viewingPayment.amount || 0).toLocaleString()}</span>
                                 </div>
                             </div>
                         </div>
@@ -19643,36 +19883,36 @@ function HRModule() {
                                 {(viewingPayment.paye > 0) && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>P.A.Y.E (Tax)</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.paye || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.paye || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 {(viewingPayment.nhif > 0) && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NHIF</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.nhif || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.nhif || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 {(viewingPayment.nssf > 0) && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NSSF</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.nssf || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.nssf || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 {(viewingPayment.otherDeductions > 0) && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Other Deductions</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- KES {(viewingPayment.otherDeductions || 0).toLocaleString()}</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.otherDeductions || 0).toLocaleString()}</span>
                                     </div>
                                 )}
                                 {(!viewingPayment.paye && !viewingPayment.nhif && !viewingPayment.nssf && !viewingPayment.otherDeductions && (viewingPayment.totalDeductions || 0) === 0) && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
                                         <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>No deductions</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b' }}>KES 0</span>
+                                        <span style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b' }}>{getBrandingForReceipts().currencySymbol || 'KES'} 0</span>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#7f1d1d20' : '#fee2e2' }}>
                                     <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>TOTAL DEDUCTIONS</span>
-                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#dc2626' }}>- KES {(viewingPayment.totalDeductions || 0).toLocaleString()}</span>
+                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.totalDeductions || 0).toLocaleString()}</span>
                                 </div>
                             </div>
                         </div>
@@ -19680,7 +19920,7 @@ function HRModule() {
                         {/* Net Pay */}
                         <div style={{ background: '#1e3a5f', padding: '16px', borderRadius: '0', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ fontSize: '14px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>NET PAY</span>
-                            <span style={{ fontSize: '24px', fontWeight: '700', color: 'white' }}>KES {(viewingPayment.amount || 0).toLocaleString()}</span>
+                            <span style={{ fontSize: '24px', fontWeight: '700', color: 'white' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.amount || 0).toLocaleString()}</span>
                         </div>
 
                         {/* Notes */}
@@ -19727,18 +19967,18 @@ function HRModule() {
                                     <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
                                         {isSalaryBased ? (
                                             <>
-                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {(selectedStaff.salary || 0).toLocaleString()}</div>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(selectedStaff.salary || 0).toLocaleString()}</div>
                                                 <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Rate {rateLabel}</div>
                                             </>
                                         ) : (
                                             <>
-                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>KES {stats.totalCommission.toLocaleString()}</div>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {stats.totalCommission.toLocaleString()}</div>
                                                 <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Earnings</div>
                                             </>
                                         )}
                                     </div>
                                     <div style={{ background: isDark ? '#0f172a' : '#fffbeb', padding: '16px', borderRadius: '0', textAlign: 'center' }}>
-                                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b' }}>KES {stats.totalPaid.toLocaleString()}</div>
+                                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {stats.totalPaid.toLocaleString()}</div>
                                         <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Total Paid</div>
                                     </div>
                                 </div>
@@ -19778,9 +20018,9 @@ function HRModule() {
                                                         {w.vehiclePlate || '-'}
                                                     </span>
                                                 </td>
-                                                <td style={tdStyle}>KES {(w.servicePrice || 0).toLocaleString()}</td>
+                                                <td style={tdStyle}>{getBrandingForReceipts().currencySymbol || 'KES'} {(w.servicePrice || 0).toLocaleString()}</td>
                                                 <td style={tdStyle}>
-                                                    <span style={{ color: '#10b981', fontWeight: '600' }}>KES {(w.commissionAmount || 0).toLocaleString()}</span>
+                                                    <span style={{ color: '#10b981', fontWeight: '600' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(w.commissionAmount || 0).toLocaleString()}</span>
                                                 </td>
                                             </tr>
                                         );
@@ -19860,7 +20100,7 @@ function HRModule() {
                         </div>
 
                         <div style={{ marginBottom: '20px' }}>
-                            <label style={labelStyle}>Service Price (KES) *</label>
+                            <label style={labelStyle}>Service Price ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                             <input
                                 type="number"
                                 value={workForm.servicePrice}
@@ -19871,7 +20111,7 @@ function HRModule() {
                             />
                             {workForm.staffId && (
                                 <p style={{ fontSize: '12px', color: '#10b981', marginTop: '6px' }}>
-                                    Commission: KES {(((parseFloat(workForm.servicePrice) || 0) * (staffList.find(s => s.id === workForm.staffId)?.commissionRate || 0)) / 100).toLocaleString()} 
+                                    Commission: {getBrandingForReceipts().currencySymbol || 'KES'} {(((parseFloat(workForm.servicePrice) || 0) * (staffList.find(s => s.id === workForm.staffId)?.commissionRate || 0)) / 100).toLocaleString()} 
                                     ({staffList.find(s => s.id === workForm.staffId)?.commissionRate || 0}%)
                                 </p>
                             )}
@@ -20362,14 +20602,14 @@ function BillingModule() {
             <div class="summary-grid">
                 <div class="summary-box red">
                     <div class="label">Total Expenses</div>
-                    <div class="value">KSH ${total.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${total.toLocaleString()}</div>
                 </div>
                 <div class="summary-box">
                     <div class="label">Total Records</div>
                     <div class="value">${dataToExport.length}</div>
                 </div>
-                ${topCategories[0] ? `<div class="summary-box orange"><div class="label">${topCategories[0][0]}</div><div class="value">KSH ${topCategories[0][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
-                ${topCategories[1] ? `<div class="summary-box"><div class="label">${topCategories[1][0]}</div><div class="value">KSH ${topCategories[1][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
+                ${topCategories[0] ? `<div class="summary-box orange"><div class="label">${topCategories[0][0]}</div><div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${topCategories[0][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
+                ${topCategories[1] ? `<div class="summary-box"><div class="label">${topCategories[1][0]}</div><div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${topCategories[1][1].toLocaleString()}</div></div>` : '<div class="summary-box"><div class="label">-</div><div class="value">-</div></div>'}
             </div>
             
             <table>
@@ -20391,14 +20631,14 @@ function BillingModule() {
                     <td>${exp.category || '-'}</td>
                     <td>${exp.description || '-'}</td>
                     <td>${exp.vendor || '-'}</td>
-                    <td class="text-right text-red font-semibold">-KSH ${(exp.amount || 0).toLocaleString()}</td>
+                    <td class="text-right text-red font-semibold">-${getBrandingForReceipts().currencySymbol || 'KES'} ${(exp.amount || 0).toLocaleString()}</td>
                     <td class="text-center">${exp.paymentMethod || 'Cash'}</td>
                 </tr>`;
             });
             
             html += `<tr class="total-row">
                 <td colspan="4" class="text-right">Grand Total:</td>
-                <td class="text-right text-red">-KSH ${total.toLocaleString()}</td>
+                <td class="text-right text-red">-${getBrandingForReceipts().currencySymbol || 'KES'} ${total.toLocaleString()}</td>
                 <td></td>
             </tr></tbody></table>`;
         } else {
@@ -20418,15 +20658,15 @@ function BillingModule() {
             <div class="summary-grid">
                 <div class="summary-box blue">
                     <div class="label">Total Amount</div>
-                    <div class="value">KSH ${totalAmount.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()}</div>
                 </div>
                 <div class="summary-box green">
                     <div class="label">Paid (${paidCount})</div>
-                    <div class="value">KSH ${paidAmount.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${paidAmount.toLocaleString()}</div>
                 </div>
                 <div class="summary-box orange">
                     <div class="label">Pending (${dataToExport.length - paidCount})</div>
-                    <div class="value">KSH ${pendingAmount.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${pendingAmount.toLocaleString()}</div>
                 </div>
                 <div class="summary-box">
                     <div class="label">Total Invoices</div>
@@ -20459,7 +20699,7 @@ function BillingModule() {
                     <td>${inv.customerPhone || '-'}</td>
                     <td>${inv.plateNumber || '-'}</td>
                     <td>${inv.source || '-'}</td>
-                    <td class="text-right font-semibold">KSH ${(inv.totalAmount || 0).toLocaleString()}</td>
+                    <td class="text-right font-semibold">${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || 0).toLocaleString()}</td>
                     <td class="text-center"><span class="status-badge ${statusClass}">${inv.paymentStatus || 'Pending'}</span></td>
                     <td class="text-center">${inv.paymentMethod || '-'}</td>
                     <td>${inv.mpesaCode || '-'}</td>
@@ -20469,14 +20709,14 @@ function BillingModule() {
             
             html += `<tr class="total-row">
                 <td colspan="5" class="text-right">Grand Total:</td>
-                <td class="text-right">KSH ${totalAmount.toLocaleString()}</td>
+                <td class="text-right">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()}</td>
                 <td colspan="4"></td>
             </tr></tbody></table>`;
         }
         
         html += `
         <div class="footer">
-            <strong>EcoSpark Car Wash & Garage</strong> • Billing Report • ${reportDate}
+            <strong>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash & Garage</strong> • Billing Report • ${reportDate}
         </div>
         </body></html>`;
         
@@ -20586,19 +20826,19 @@ function BillingModule() {
         <div class="summary-grid">
             <div class="summary-box highlight">
                 <div class="label">Total Revenue</div>
-                <div class="value">KSH ${grossRevenue.toLocaleString()}</div>
+                <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${grossRevenue.toLocaleString()}</div>
             </div>
             <div class="summary-box">
                 <div class="label">Collected</div>
-                <div class="value">KSH ${totalPaid.toLocaleString()}</div>
+                <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalPaid.toLocaleString()}</div>
             </div>
             <div class="summary-box expense">
                 <div class="label">Expenses</div>
-                <div class="value">-KSH ${totalExpenses.toLocaleString()}</div>
+                <div class="value">-${getBrandingForReceipts().currencySymbol || 'KES'} ${totalExpenses.toLocaleString()}</div>
             </div>
             <div class="summary-box net">
                 <div class="label">Net Profit</div>
-                <div class="value">${netProfit >= 0 ? '' : '-'}KSH ${Math.abs(netProfit).toLocaleString()}</div>
+                <div class="value">${netProfit >= 0 ? '' : '-'}${getBrandingForReceipts().currencySymbol || 'KES'} ${Math.abs(netProfit).toLocaleString()}</div>
             </div>
         </div>
         
@@ -20607,15 +20847,15 @@ function BillingModule() {
             <div class="breakdown-grid">
                 <div class="breakdown-box">
                     <div class="label">🚗 Car Wash</div>
-                    <div class="value">KSH ${washRevenue.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${washRevenue.toLocaleString()}</div>
                 </div>
                 <div class="breakdown-box">
                     <div class="label">🔧 Garage</div>
-                    <div class="value">KSH ${garageRevenue.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${garageRevenue.toLocaleString()}</div>
                 </div>
                 <div class="breakdown-box">
                     <div class="label">📦 Other</div>
-                    <div class="value">KSH ${otherRevenue.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${otherRevenue.toLocaleString()}</div>
                 </div>
             </div>
         </div>
@@ -20625,15 +20865,15 @@ function BillingModule() {
             <div class="breakdown-grid">
                 <div class="breakdown-box">
                     <div class="label">💵 Cash</div>
-                    <div class="value">KSH ${cashPayments.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${cashPayments.toLocaleString()}</div>
                 </div>
                 <div class="breakdown-box">
                     <div class="label">📱 M-Pesa</div>
-                    <div class="value">KSH ${mpesaPayments.toLocaleString()}</div>
+                    <div class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${mpesaPayments.toLocaleString()}</div>
                 </div>
                 <div class="breakdown-box">
                     <div class="label">⏳ Pending</div>
-                    <div class="value text-orange">KSH ${totalPending.toLocaleString()}</div>
+                    <div class="value text-orange">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalPending.toLocaleString()}</div>
                 </div>
             </div>
         </div>
@@ -20662,13 +20902,13 @@ function BillingModule() {
                     <td class="font-semibold">${inv.invoiceNumber || inv.id?.slice(0,6)?.toUpperCase() || '-'}</td>
                     <td>${inv.customerName || 'Walk-in'}</td>
                     <td>${inv.source || '-'}</td>
-                    <td class="text-right font-semibold">KSH ${(inv.totalAmount || 0).toLocaleString()}</td>
+                    <td class="text-right font-semibold">${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || 0).toLocaleString()}</td>
                     <td class="${statusClass}">${inv.paymentStatus || 'Pending'}</td>
                 </tr>`;
             });
             html += `<tr class="total-row">
                 <td colspan="3" class="text-right">Total:</td>
-                <td class="text-right">KSH ${grossRevenue.toLocaleString()}</td>
+                <td class="text-right">${getBrandingForReceipts().currencySymbol || 'KES'} ${grossRevenue.toLocaleString()}</td>
                 <td></td>
             </tr>`;
         }
@@ -20695,12 +20935,12 @@ function BillingModule() {
                 html += `<tr>
                     <td class="font-semibold">${exp.category || 'Other'}</td>
                     <td>${exp.description || '-'}</td>
-                    <td class="text-right text-red font-semibold">-KSH ${(exp.amount || 0).toLocaleString()}</td>
+                    <td class="text-right text-red font-semibold">-${getBrandingForReceipts().currencySymbol || 'KES'} ${(exp.amount || 0).toLocaleString()}</td>
                 </tr>`;
             });
             html += `<tr class="total-row">
                 <td colspan="2" class="text-right">Total Expenses:</td>
-                <td class="text-right text-red">-KSH ${totalExpenses.toLocaleString()}</td>
+                <td class="text-right text-red">-${getBrandingForReceipts().currencySymbol || 'KES'} ${totalExpenses.toLocaleString()}</td>
             </tr>`;
         }
         
@@ -20709,7 +20949,7 @@ function BillingModule() {
         </div>
         
         <div class="footer">
-            <strong>EcoSpark Car Wash & Garage</strong> • Daily Sales Report • ${todayFormatted}
+            <strong>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash & Garage</strong> • Daily Sales Report • ${todayFormatted}
         </div>
         
         </body></html>`;
@@ -20739,7 +20979,7 @@ function BillingModule() {
                     services.activityService.logActivity({
                         type: 'billing',
                         action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (Cash)`,
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (Cash)`,
                         status: 'success',
                         loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
                         loggedByEmail: currentUser?.email || null,
@@ -20906,7 +21146,7 @@ function BillingModule() {
                     services.activityService.logActivity({
                         type: 'billing',
                         action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (M-Pesa: ${manualMpesaCode.trim().toUpperCase()})`,
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (M-Pesa: ${manualMpesaCode.trim().toUpperCase()})`,
                         status: 'success',
                         loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
                         loggedByEmail: currentUser?.email || null,
@@ -20955,7 +21195,7 @@ function BillingModule() {
                     services.activityService.logActivity({
                         type: 'billing',
                         action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: KSH ${selectedInvoice.totalAmount?.toLocaleString()} (Card${cardDetails.lastFourDigits ? ` ****${cardDetails.lastFourDigits}` : ''})`,
+                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (Card${cardDetails.lastFourDigits ? ` ****${cardDetails.lastFourDigits}` : ''})`,
                         status: 'success',
                         loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
                         loggedByEmail: currentUser?.email || null,
@@ -21039,7 +21279,7 @@ function BillingModule() {
     const handlePrintReceipt = async (invoice) => {
         const receiptWindow = window.open('', '_blank', 'width=400,height=600');
         const servicesList = invoice.services?.map(s => 
-            `<tr><td style="padding:8px 0;border-bottom:1px dashed #ddd;">${s.name}</td><td style="padding:8px 0;border-bottom:1px dashed #ddd;text-align:right;">KES ${parseFloat(s.price).toLocaleString()}</td></tr>`
+            `<tr><td style="padding:8px 0;border-bottom:1px dashed #ddd;">${s.name}</td><td style="padding:8px 0;border-bottom:1px dashed #ddd;text-align:right;">${getBrandingForReceipts().currencySymbol || 'KES'} ${parseFloat(s.price).toLocaleString()}</td></tr>`
         ).join('') || '<tr><td colspan="2">-</td></tr>';
         
         // Fetch customer loyalty data - try multiple methods to find customer
@@ -21200,8 +21440,8 @@ function BillingModule() {
             </head>
             <body>
                 <div class="header">
-                    <div class="logo">🌿 ECOSPARK</div>
-                    <div class="tagline">Car Wash & Auto Services</div>
+                    <div class="logo">🌿 ${getBrandingForReceipts().companyName?.toUpperCase() || 'ECOSPARK'}</div>
+                    <div class="tagline">${getBrandingForReceipts().tagline || 'Car Wash & Auto Services'}</div>
                 </div>
                 
                 <div class="info-row"><span>Receipt #:</span><span>${invoice.invoiceNumber}</span></div>
@@ -21217,7 +21457,7 @@ function BillingModule() {
                     <tbody>${servicesList}</tbody>
                 </table>
                 
-                <div class="total-row info-row"><span>TOTAL:</span><span>KES ${parseFloat(invoice.totalAmount).toLocaleString()}</span></div>
+                <div class="total-row info-row"><span>TOTAL:</span><span>${getBrandingForReceipts().currencySymbol || 'KES'} ${parseFloat(invoice.totalAmount).toLocaleString()}</span></div>
                 
                 <div class="paid-stamp">✓ PAID - ${(invoice.paymentMethod || 'CASH').toUpperCase()}</div>
                 ${invoice.mpesaCode ? `<div class="info-row"><span>M-Pesa Code:</span><span>${invoice.mpesaCode}</span></div>` : ''}
@@ -21227,7 +21467,7 @@ function BillingModule() {
                 
                 <div class="footer">
                     <p>Thank you for your business!</p>
-                    <p>Visit us again at EcoSpark</p>
+                    <p>Visit us again at ${getBrandingForReceipts().companyName || 'EcoSpark'}</p>
                 </div>
                 
                 <script>setTimeout(() => window.print(), 500);</script>
@@ -21375,7 +21615,7 @@ function BillingModule() {
                     services.activityService.logActivity({
                         type: 'billing',
                         action: 'Invoice Created',
-                        details: `${manualBillingData.plateNumber.toUpperCase()} - KSH ${totalAmount.toLocaleString()} - ${manualBillingData.paymentStatus === 'paid' ? 'Paid' : 'Pending'}`,
+                        details: `${manualBillingData.plateNumber.toUpperCase()} - ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()} - ${manualBillingData.paymentStatus === 'paid' ? 'Paid' : 'Pending'}`,
                         status: 'success',
                         loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
                         loggedByEmail: currentUser?.email || null,
@@ -21438,7 +21678,8 @@ function BillingModule() {
 
     // Format currency
     const formatCurrency = (amount) => {
-        return new Intl.NumberFormat('en-KE', { style: 'currency', currency: 'KES' }).format(amount || 0);
+        const currencySymbol = getBrandingForReceipts().currencySymbol || 'KES';
+        return `${currencySymbol} ${(amount || 0).toLocaleString()}`;
     };
 
     // Format date
@@ -23552,8 +23793,21 @@ function StaffManagement() {
         if (!staffForm.name.trim()) { setError('Staff name is required'); return; }
         setActionLoading(true); setError(null);
         try {
-            const result = await window.FirebaseServices.staffService.addStaff(staffForm);
+            const services = window.FirebaseServices;
+            const result = await services.staffService.addStaff(staffForm);
             if (result.success) {
+                // Log the staff creation
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'create',
+                    'staff',
+                    'staff-member',
+                    result.id || 'new',
+                    staffForm.name,
+                    `Created new staff member: ${staffForm.name} (${staffForm.role} - ${staffForm.department})`,
+                    null,
+                    null
+                );
                 setSuccessMessage('Staff added successfully');
                 setShowAddStaffModal(false);
                 setStaffForm({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
@@ -23603,8 +23857,34 @@ function StaffManagement() {
         if (!selectedItem) return;
         setActionLoading(true); setError(null);
         try {
-            const result = await window.FirebaseServices.staffService.updateStaff(selectedItem.id, staffForm);
-            if (result.success) { setSuccessMessage('Staff updated'); setShowEditModal(false); setSelectedItem(null); }
+            const services = window.FirebaseServices;
+            
+            // Track changes
+            const changes = {};
+            if (selectedItem.name !== staffForm.name) changes.name = { old: selectedItem.name || '', new: staffForm.name };
+            if (selectedItem.role !== staffForm.role) changes.role = { old: selectedItem.role || '', new: staffForm.role };
+            if (selectedItem.phone !== staffForm.phone) changes.phone = { old: selectedItem.phone || '', new: staffForm.phone };
+            if (selectedItem.email !== staffForm.email) changes.email = { old: selectedItem.email || '', new: staffForm.email };
+            if (selectedItem.department !== staffForm.department) changes.department = { old: selectedItem.department || '', new: staffForm.department };
+            
+            const result = await services.staffService.updateStaff(selectedItem.id, staffForm);
+            if (result.success) {
+                // Log the update with changes
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'update',
+                    'staff',
+                    'staff-member',
+                    selectedItem.id,
+                    selectedItem.name,
+                    `Updated staff member details`,
+                    Object.keys(changes).length > 0 ? changes : null,
+                    null
+                );
+                setSuccessMessage('Staff updated'); 
+                setShowEditModal(false); 
+                setSelectedItem(null); 
+            }
             else { setError(result.error); }
         } catch (err) { setError(err.message); }
         finally { setActionLoading(false); }
@@ -23634,7 +23914,21 @@ function StaffManagement() {
         setActionLoading(true);
         setError(null);
         try {
-            const result = await window.FirebaseServices.userService.deleteUserProfile(userToDelete.id);
+            const services = window.FirebaseServices;
+            // Log the delete action with previous data
+            await services.auditService?.logCRUD(
+                window.currentUser || { email: 'admin' },
+                'delete',
+                'users',
+                'user',
+                userToDelete.id,
+                userToDelete.displayName || userToDelete.email,
+                `Permanently deleted user account`,
+                null,
+                { email: userToDelete.email, displayName: userToDelete.displayName, role: userToDelete.role }
+            );
+            
+            const result = await services.userService.deleteUserProfile(userToDelete.id);
             if (result.success) {
                 setSuccessMessage(`User ${userToDelete.displayName || userToDelete.email} deleted successfully`);
                 setShowDeleteUserModal(false);
@@ -23667,13 +23961,41 @@ function StaffManagement() {
         setActionLoading(true);
         setError(null);
         try {
-            const result = await window.FirebaseServices.userService.updateUserProfile(selectedUser.id, {
+            const services = window.FirebaseServices;
+            
+            // Track changes
+            const changes = {};
+            if (selectedUser.displayName !== editUserForm.displayName) {
+                changes.displayName = { old: selectedUser.displayName || '', new: editUserForm.displayName };
+            }
+            if (selectedUser.role !== editUserForm.role) {
+                changes.role = { old: selectedUser.role || '', new: editUserForm.role };
+            }
+            if (selectedUser.phone !== editUserForm.phone) {
+                changes.phone = { old: selectedUser.phone || '', new: editUserForm.phone };
+            }
+            
+            const result = await services.userService.updateUserProfile(selectedUser.id, {
                 displayName: editUserForm.displayName,
                 role: editUserForm.role,
                 phone: editUserForm.phone,
                 permissions: editUserForm.permissions
             });
+            
             if (result.success) {
+                // Log the update with changes
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'update',
+                    'users',
+                    'user',
+                    selectedUser.id,
+                    selectedUser.displayName || selectedUser.email,
+                    `Updated user profile and permissions`,
+                    Object.keys(changes).length > 0 ? changes : null,
+                    null
+                );
+                
                 setSuccessMessage('User permissions updated successfully');
                 setShowEditUserModal(false);
                 setSelectedUser(null);
@@ -23747,10 +24069,38 @@ function StaffManagement() {
         try {
             const services = window.FirebaseServices;
             if (confirmAction.type === 'toggle') {
+                const newStatus = selectedItem.status === 'active' ? 'inactive' : 'active';
                 if (selectedItem.status === 'active') await services.staffService.deleteStaff(selectedItem.id);
                 else await services.staffService.reactivateStaff(selectedItem.id);
+                
+                // Log the status change
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'update',
+                    'staff',
+                    'staff-member',
+                    selectedItem.id,
+                    selectedItem.name,
+                    `Changed staff status from ${selectedItem.status} to ${newStatus}`,
+                    { status: { old: selectedItem.status, new: newStatus } },
+                    null
+                );
+                
                 setSuccessMessage(selectedItem.status === 'active' ? 'Staff deactivated' : 'Staff activated');
             } else if (confirmAction.type === 'delete') {
+                // Log before deletion with full staff data
+                await services.auditService?.logCRUD(
+                    window.currentUser || { email: 'admin' },
+                    'delete',
+                    'staff',
+                    'staff-member',
+                    selectedItem.id,
+                    selectedItem.name,
+                    `Permanently deleted staff member`,
+                    null,
+                    { name: selectedItem.name, role: selectedItem.role, department: selectedItem.department, phone: selectedItem.phone, email: selectedItem.email }
+                );
+                
                 await services.staffService.permanentDeleteStaff(selectedItem.id);
                 setSuccessMessage('Staff permanently deleted');
             }
@@ -23863,26 +24213,37 @@ function StaffManagement() {
                                     const isActive = isUserOnline(session.odId);
                                     return (
                                         <div key={session.odId} style={{ 
-                                            padding: '10px 16px', 
+                                            padding: '12px 16px', 
                                             background: isActive ? '#d1fae520' : '#fef3c720', 
                                             border: `1px solid ${isActive ? '#10b981' : '#f59e0b'}`,
-                                            borderRadius: '8px',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '10px'
+                                            borderRadius: '10px',
+                                            minWidth: '280px'
                                         }}>
-                                            <div style={{ 
-                                                width: '10px', 
-                                                height: '10px', 
-                                                borderRadius: '50%', 
-                                                background: isActive ? '#10b981' : '#f59e0b',
-                                                animation: isActive ? 'pulse 2s infinite' : 'none'
-                                            }}></div>
-                                            <div>
-                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px' }}>{session.displayName}</div>
-                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{session.email}</div>
-                                                <div style={{ fontSize: '10px', color: theme.textSecondary }}>Since {new Date(session.loginTime).toLocaleTimeString()}</div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                                                <div style={{ 
+                                                    width: '10px', 
+                                                    height: '10px', 
+                                                    borderRadius: '50%', 
+                                                    background: isActive ? '#10b981' : '#f59e0b',
+                                                    animation: isActive ? 'pulse 2s infinite' : 'none'
+                                                }}></div>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>{session.displayName}</div>
                                             </div>
+                                            <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '4px' }}>📧 {session.email}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '4px' }}>🕐 Since {new Date(session.loginTime).toLocaleTimeString()}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                                                {session.browser && <span>🌐 {session.browser}</span>}
+                                                {session.operatingSystem && <span>💻 {session.operatingSystem}</span>}
+                                                {session.deviceType && <span>📱 {session.deviceType}</span>}
+                                            </div>
+                                            {session.latitude && session.longitude && (
+                                                <div style={{ fontSize: '11px', color: '#3b82f6', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                    <span>📍</span>
+                                                    <a href={`https://www.google.com/maps?q=${session.latitude},${session.longitude}`} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6', textDecoration: 'none' }}>
+                                                        {session.latitude.toFixed(6)}, {session.longitude.toFixed(6)}
+                                                    </a>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -23935,43 +24296,94 @@ function StaffManagement() {
                                 {filteredAuditLogs.map((log, idx) => {
                                     const userOnline = isUserOnline(log.userId);
                                     return (
-                                    <div key={log.id || idx} style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: '16px', alignItems: 'flex-start', background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
-                                        <div style={{ position: 'relative' }}>
-                                            <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: `${getActionColor(log.action)}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>
-                                                {getActionIcon(log.action)}
-                                            </div>
-                                            {/* Online status indicator */}
-                                            <div style={{ 
-                                                position: 'absolute', 
-                                                bottom: '0', 
-                                                right: '0', 
-                                                width: '12px', 
-                                                height: '12px', 
-                                                borderRadius: '50%', 
-                                                background: userOnline ? '#10b981' : '#6b7280',
-                                                border: `2px solid ${theme.bg}`
-                                            }} title={userOnline ? 'Currently online' : 'Offline'}></div>
-                                        </div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
-                                                <div>
-                                                    <span style={{ fontWeight: '600', color: theme.text }}>{log.userName || 'Unknown'}</span>
-                                                    {userOnline && <span style={{ marginLeft: '6px', fontSize: '10px', padding: '2px 6px', background: '#d1fae5', color: '#059669', borderRadius: '4px', fontWeight: '600' }}>ONLINE</span>}
-                                                    <span style={{ color: theme.textSecondary }}> performed </span>
-                                                    <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: '600', background: `${getActionColor(log.action)}20`, color: getActionColor(log.action) }}>{log.action?.toUpperCase()}</span>
-                                                    <span style={{ color: theme.textSecondary }}> on </span>
-                                                    <span style={{ fontWeight: '500', color: theme.text }}>{log.module}</span>
-                                                    {log.targetName && <span style={{ color: theme.textSecondary }}> ({log.targetName})</span>}
+                                    <div key={log.id || idx} style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
+                                        <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                                            <div style={{ position: 'relative' }}>
+                                                <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: `${getActionColor(log.action)}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 }}>
+                                                    {getActionIcon(log.action)}
                                                 </div>
-                                                <div style={{ fontSize: '12px', color: theme.textSecondary, whiteSpace: 'nowrap' }}>{formatTimeAgo(log.timestamp)}</div>
+                                                <div style={{ 
+                                                    position: 'absolute', 
+                                                    bottom: '0', 
+                                                    right: '0', 
+                                                    width: '14px', 
+                                                    height: '14px', 
+                                                    borderRadius: '50%', 
+                                                    background: userOnline ? '#10b981' : '#6b7280',
+                                                    border: `2px solid ${theme.bg}`
+                                                }} title={userOnline ? 'Currently online' : 'Offline'}></div>
                                             </div>
-                                            {log.details && <div style={{ marginTop: '6px', fontSize: '13px', color: theme.textSecondary }}>{log.details}</div>}
-                                            <div style={{ marginTop: '6px', fontSize: '11px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                                <span>{log.userEmail}</span>
-                                                <span>•</span>
-                                                <span>{new Date(log.timestamp).toLocaleString()}</span>
-                                                {log.action === 'login' && !userOnline && <span style={{ color: '#f59e0b' }}>• Logged out</span>}
-                                                {log.action === 'login' && userOnline && <span style={{ color: '#10b981' }}>• Still active</span>}
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+                                                    <div>
+                                                        <span style={{ fontWeight: '600', color: theme.text }}>{log.userName || 'Unknown'}</span>
+                                                        {userOnline && <span style={{ marginLeft: '6px', fontSize: '10px', padding: '2px 6px', background: '#d1fae5', color: '#059669', borderRadius: '4px', fontWeight: '600' }}>ONLINE</span>}
+                                                        <span style={{ color: theme.textSecondary }}> performed </span>
+                                                        <span style={{ padding: '3px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: '700', background: `${getActionColor(log.action)}20`, color: getActionColor(log.action), textTransform: 'uppercase' }}>{log.action}</span>
+                                                        <span style={{ color: theme.textSecondary }}> on </span>
+                                                        <span style={{ fontWeight: '500', color: theme.text }}>{log.module}</span>
+                                                        {log.targetName && <span style={{ color: theme.textSecondary }}> → <strong style={{ color: theme.text }}>{log.targetName}</strong></span>}
+                                                    </div>
+                                                    <div style={{ fontSize: '12px', color: theme.textSecondary, whiteSpace: 'nowrap' }}>{formatTimeAgo(log.timestamp)}</div>
+                                                </div>
+                                                
+                                                {log.details && <div style={{ marginTop: '8px', fontSize: '13px', color: theme.textSecondary, padding: '8px 12px', background: theme.bgSecondary, borderRadius: '6px', borderLeft: `3px solid ${getActionColor(log.action)}` }}>{log.details}</div>}
+                                                
+                                                {/* Show changes for edit/update operations */}
+                                                {log.changes && Object.keys(log.changes).length > 0 && (
+                                                    <div style={{ marginTop: '8px', padding: '10px 12px', background: '#fef3c710', border: '1px solid #fbbf2440', borderRadius: '6px' }}>
+                                                        <div style={{ fontSize: '11px', fontWeight: '600', color: '#92400e', marginBottom: '6px', textTransform: 'uppercase' }}>Changes Made:</div>
+                                                        {Object.entries(log.changes).map(([field, change]) => (
+                                                            <div key={field} style={{ fontSize: '12px', color: theme.text, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <span style={{ fontWeight: '500', color: theme.textSecondary }}>{field}:</span>
+                                                                <span style={{ color: '#ef4444', textDecoration: 'line-through' }}>{change.old || '(empty)'}</span>
+                                                                <span style={{ color: theme.textSecondary }}>→</span>
+                                                                <span style={{ color: '#10b981', fontWeight: '500' }}>{change.new || '(empty)'}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                
+                                                {/* Show deleted item info */}
+                                                {log.action === 'delete' && log.previousValue && (
+                                                    <div style={{ marginTop: '8px', padding: '10px 12px', background: '#fef2f210', border: '1px solid #ef444440', borderRadius: '6px' }}>
+                                                        <div style={{ fontSize: '11px', fontWeight: '600', color: '#dc2626', marginBottom: '6px', textTransform: 'uppercase' }}>Deleted Item Data:</div>
+                                                        <div style={{ fontSize: '12px', color: theme.textSecondary, fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: '100px', overflow: 'auto' }}>
+                                                            {typeof log.previousValue === 'string' ? log.previousValue : JSON.stringify(log.previousValue, null, 2)}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                
+                                                {/* Metadata row */}
+                                                <div style={{ marginTop: '10px', fontSize: '11px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                                    <span>📧 {log.userEmail}</span>
+                                                    <span>🕐 {new Date(log.timestamp).toLocaleString()}</span>
+                                                    {log.browser && <span>🌐 {log.browser}</span>}
+                                                    {log.operatingSystem && <span>💻 {log.operatingSystem}</span>}
+                                                    {log.deviceType && <span>📱 {log.deviceType}</span>}
+                                                </div>
+                                                
+                                                {/* Geolocation */}
+                                                {log.latitude && log.longitude && (
+                                                    <div style={{ marginTop: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <span style={{ color: '#3b82f6' }}>📍</span>
+                                                        <a href={`https://www.google.com/maps?q=${log.latitude},${log.longitude}`} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6', textDecoration: 'none', fontSize: '11px' }}>
+                                                            View Location ({log.latitude.toFixed(4)}, {log.longitude.toFixed(4)})
+                                                        </a>
+                                                        {log.locationAccuracy && <span style={{ color: theme.textSecondary }}>(±{Math.round(log.locationAccuracy)}m)</span>}
+                                                    </div>
+                                                )}
+                                                
+                                                {/* Session status for login actions */}
+                                                {log.action === 'login' && (
+                                                    <div style={{ marginTop: '6px' }}>
+                                                        {userOnline ? (
+                                                            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: '500' }}>✓ Currently active in system</span>
+                                                        ) : (
+                                                            <span style={{ fontSize: '11px', color: '#f59e0b' }}>○ Session ended</span>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -24406,7 +24818,7 @@ function InventoryModule() {
 
     const exportExcel = () => {
         let html = '<html><head><meta charset="UTF-8"></head><body>';
-        html += '<table border="1"><tr><th>Item Name</th><th>Category</th><th>Quantity</th><th>Min Stock</th><th>Unit</th><th>Cost (KSH)</th><th>Total Value</th><th>Usage/Day</th><th>Days Left</th><th>Status</th></tr>';
+        html += `<table border="1"><tr><th>Item Name</th><th>Category</th><th>Quantity</th><th>Min Stock</th><th>Unit</th><th>Cost (${getBrandingForReceipts().currencySymbol || 'KES'})</th><th>Total Value</th><th>Usage/Day</th><th>Days Left</th><th>Status</th></tr>`;
         filteredItems.forEach(item => {
             const status = inventoryService.getStockStatus(item.quantity, item.minStock);
             const cost = item.cost || 0;
@@ -24446,7 +24858,7 @@ function InventoryModule() {
             .total-row { font-weight: bold; background: #f9fafb; }
         </style></head><body>`;
         html += `<h1>Inventory Report</h1><p>Generated: ${new Date().toLocaleDateString()}</p>`;
-        html += `<div class="stats"><div class="stat-box"><strong>Total Items:</strong> ${stats.total}</div><div class="stat-box"><strong>In Stock:</strong> ${stats.inStock}</div><div class="stat-box"><strong>Low Stock:</strong> ${stats.lowStock}</div><div class="stat-box"><strong>Out of Stock:</strong> ${stats.outOfStock}</div><div class="stat-box"><strong>Total Value:</strong> KSH ${totalInventoryValue.toLocaleString()}</div></div>`;
+        html += `<div class="stats"><div class="stat-box"><strong>Total Items:</strong> ${stats.total}</div><div class="stat-box"><strong>In Stock:</strong> ${stats.inStock}</div><div class="stat-box"><strong>Low Stock:</strong> ${stats.lowStock}</div><div class="stat-box"><strong>Out of Stock:</strong> ${stats.outOfStock}</div><div class="stat-box"><strong>Total Value:</strong> ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalInventoryValue.toLocaleString()}</div></div>`;
         html += '<table><tr><th>Item Name</th><th>Category</th><th class="center">Qty</th><th class="center">Min</th><th>Unit</th><th class="cost-col">Cost</th><th class="cost-col">Value</th><th class="center">Usage/Day</th><th class="center">Days Left</th><th>Status</th></tr>';
         filteredItems.forEach(item => {
             const status = inventoryService.getStockStatus(item.quantity, item.minStock);
@@ -24457,7 +24869,7 @@ function InventoryModule() {
             const daysClass = daysLeft !== '-' && daysLeft <= 3 ? 'critical' : (daysLeft !== '-' && daysLeft <= 7 ? 'warning' : '');
             html += `<tr><td>${item.name}</td><td>${item.category}</td><td class="center">${item.quantity}</td><td class="center">${item.minStock}</td><td>${item.unit || ''}</td><td class="cost-col">${cost.toLocaleString()}</td><td class="cost-col">${totalValue.toLocaleString()}</td><td class="center">${usageRate || '-'}</td><td class="center ${daysClass}">${daysLeft}</td><td class="${status}">${status.replace('-', ' ')}</td></tr>`;
         });
-        html += `<tr class="total-row"><td colspan="6" style="text-align: right;">Grand Total:</td><td class="cost-col">KSH ${totalInventoryValue.toLocaleString()}</td><td colspan="3"></td></tr>`;
+        html += `<tr class="total-row"><td colspan="6" style="text-align: right;">Grand Total:</td><td class="cost-col">${getBrandingForReceipts().currencySymbol || 'KES'} ${totalInventoryValue.toLocaleString()}</td><td colspan="3"></td></tr>`;
         html += '</table></body></html>';
         printWindow.document.write(html);
         printWindow.document.close();
@@ -24619,7 +25031,7 @@ function InventoryModule() {
                                                 <span style={{ color: '#9ca3af', fontSize: '12px' }}>No data</span>
                                             )}
                                         </td>
-                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>KSH {(item.cost || 0).toLocaleString()}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(item.cost || 0).toLocaleString()}</td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             <span style={{ padding: '4px 12px', background: statusStyle.bg, color: statusStyle.color, fontSize: '12px', fontWeight: '600', borderRadius: '0' }}>
                                                 {statusStyle.label}
@@ -24683,7 +25095,7 @@ function InventoryModule() {
                                         <input type="text" placeholder="e.g., pcs, liters, kg" value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} style={inputStyle} />
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Cost per Unit (KSH)</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Cost per Unit ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                         <input type="number" min="0" step="0.01" placeholder="0.00" value={formData.cost} onChange={(e) => setFormData({ ...formData, cost: e.target.value })} style={inputStyle} />
                                     </div>
                                 </div>
@@ -24730,11 +25142,11 @@ function InventoryModule() {
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
                                     <span style={{ color: '#6b7280', fontSize: '14px' }}>Cost per Unit</span>
-                                    <span style={{ fontWeight: '600', fontSize: '14px', color: '#059669' }}>KSH {(viewItem.cost || 0).toLocaleString()}</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewItem.cost || 0).toLocaleString()}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
                                     <span style={{ color: '#6b7280', fontSize: '14px' }}>Total Value</span>
-                                    <span style={{ fontWeight: '700', fontSize: '14px', color: '#059669' }}>KSH {((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span>
+                                    <span style={{ fontWeight: '700', fontSize: '14px', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
                                     <span style={{ color: '#6b7280', fontSize: '14px' }}>Status</span>
@@ -24786,22 +25198,22 @@ function InventoryModule() {
                                         .total { font-size: 18px; color: #059669; }
                                     </style></head><body>
                                     <div class="header">
-                                        <h2>🚗 Ecospark</h2>
+                                        <h2>🚗 ${getBrandingForReceipts().companyName || 'EcoSpark'}</h2>
                                         <p>Inventory Item Receipt</p>
                                     </div>
                                     <div class="row"><span class="label">Item Name</span><span class="value">${viewItem.name}</span></div>
                                     <div class="row"><span class="label">Category</span><span class="value">${viewItem.category}</span></div>
                                     <div class="row"><span class="label">Quantity</span><span class="value">${viewItem.quantity} ${viewItem.unit || ''}</span></div>
                                     <div class="row"><span class="label">Min Stock Level</span><span class="value">${viewItem.minStock}</span></div>
-                                    <div class="row"><span class="label">Cost per Unit</span><span class="value">KSH ${(viewItem.cost || 0).toLocaleString()}</span></div>
-                                    <div class="row"><span class="label">Total Value</span><span class="value total">KSH ${((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span></div>
+                                    <div class="row"><span class="label">Cost per Unit</span><span class="value">${getBrandingForReceipts().currencySymbol || 'KES'} ${(viewItem.cost || 0).toLocaleString()}</span></div>
+                                    <div class="row"><span class="label">Total Value</span><span class="value total">${getBrandingForReceipts().currencySymbol || 'KES'} ${((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span></div>
                                     <div class="row"><span class="label">Status</span><span class="value"><span class="status ${status}">${status.replace('-', ' ')}</span></span></div>
                                     ${viewItem.dailyUsageRate ? `<div class="row"><span class="label">Daily Usage Rate</span><span class="value">${viewItem.dailyUsageRate} ${viewItem.unit || 'units'}/day</span></div>` : ''}
                                     ${daysLeft !== null ? `<div class="row"><span class="label">Days of Supply</span><span class="value" style="color: ${daysLeft <= 3 ? '#dc2626' : daysLeft <= 7 ? '#f59e0b' : '#22c55e'}">${daysLeft} days</span></div>` : ''}
                                     ${viewItem.lastUsage ? `<div class="row"><span class="label">Last Usage</span><span class="value">${viewItem.lastUsage.amount} ${viewItem.unit || ''} on ${new Date(viewItem.lastUsage.date).toLocaleDateString()}</span></div>` : ''}
                                     <div class="footer">
                                         <p>Generated: ${new Date().toLocaleString()}</p>
-                                        <p>Ecospark Car Wash Management System</p>
+                                        <p>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash Management System</p>
                                     </div>
                                     </body></html>`;
                                     printWindow.document.write(html);
@@ -24998,13 +25410,13 @@ function ExpensesModule() {
             .total { font-weight: bold; background: #f9fafb; }
         </style></head><body>`;
         html += `<h1>Expenses Report</h1><p>Generated: ${new Date().toLocaleDateString()}</p>`;
-        html += `<div class="stats"><div class="stat-box"><strong>Total:</strong> KSH ${stats.total.toLocaleString()}</div><div class="stat-box"><strong>This Month:</strong> KSH ${stats.thisMonth.toLocaleString()}</div><div class="stat-box"><strong>This Week:</strong> KSH ${stats.thisWeek.toLocaleString()}</div><div class="stat-box"><strong>Today:</strong> KSH ${stats.today.toLocaleString()}</div></div>`;
-        html += '<table><tr><th>Date</th><th>Title</th><th>Category</th><th>Payment</th><th class="amount">Amount (KSH)</th></tr>';
+        html += `<div class="stats"><div class="stat-box"><strong>Total:</strong> ${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.total.toLocaleString()}</div><div class="stat-box"><strong>This Month:</strong> ${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.thisMonth.toLocaleString()}</div><div class="stat-box"><strong>This Week:</strong> ${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.thisWeek.toLocaleString()}</div><div class="stat-box"><strong>Today:</strong> ${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.today.toLocaleString()}</div></div>`;
+        html += `<table><tr><th>Date</th><th>Title</th><th>Category</th><th>Payment</th><th class="amount">Amount (${getBrandingForReceipts().currencySymbol || 'KES'})</th></tr>`;
         const total = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
         filteredExpenses.forEach(e => {
             html += `<tr><td>${e.date}</td><td>${e.title}</td><td>${e.category}</td><td>${e.paymentMethod || '-'}</td><td class="amount">${(e.amount || 0).toLocaleString()}</td></tr>`;
         });
-        html += `<tr class="total"><td colspan="4" style="text-align:right;">Total:</td><td class="amount">KSH ${total.toLocaleString()}</td></tr>`;
+        html += `<tr class="total"><td colspan="4" style="text-align:right;">Total:</td><td class="amount">${getBrandingForReceipts().currencySymbol || 'KES'} ${total.toLocaleString()}</td></tr>`;
         html += '</table></body></html>';
         printWindow.document.write(html);
         printWindow.document.close();
@@ -25034,10 +25446,10 @@ function ExpensesModule() {
             {/* Stats Cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
                 {[
-                    { label: 'Total Expenses', value: `KSH ${stats.total.toLocaleString()}`, icon: '💰', color: '#3b82f6' },
-                    { label: 'This Month', value: `KSH ${stats.thisMonth.toLocaleString()}`, icon: '📅', color: '#8b5cf6' },
-                    { label: 'This Week', value: `KSH ${stats.thisWeek.toLocaleString()}`, icon: '📊', color: '#f59e0b' },
-                    { label: 'Today', value: `KSH ${stats.today.toLocaleString()}`, icon: '📌', color: '#22c55e' }
+                    { label: 'Total Expenses', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.total.toLocaleString()}`, icon: '💰', color: '#3b82f6' },
+                    { label: 'This Month', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.thisMonth.toLocaleString()}`, icon: '📅', color: '#8b5cf6' },
+                    { label: 'This Week', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.thisWeek.toLocaleString()}`, icon: '📊', color: '#f59e0b' },
+                    { label: 'Today', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.today.toLocaleString()}`, icon: '📌', color: '#22c55e' }
                 ].map((stat, i) => (
                     <div key={i} style={{ background: '#fff', padding: '20px', border: '1px solid #e5e7eb', borderRadius: '0' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -25102,7 +25514,7 @@ function ExpensesModule() {
                                         <span style={{ padding: '4px 10px', background: '#f3f4f6', fontSize: '12px', fontWeight: '500' }}>{expense.category}</span>
                                     </td>
                                     <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: '#6b7280', textTransform: 'capitalize' }}>{expense.paymentMethod || '-'}</td>
-                                    <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '14px', color: '#dc2626' }}>KSH {(expense.amount || 0).toLocaleString()}</td>
+                                    <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '14px', color: '#dc2626' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(expense.amount || 0).toLocaleString()}</td>
                                     <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                             <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '12px' }}>Edit</button>
@@ -25139,7 +25551,7 @@ function ExpensesModule() {
                                         </select>
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount (KSH) *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                                         <input type="number" min="0" step="0.01" value={formData.amount} onChange={(e) => setFormData({ ...formData, amount: e.target.value })} placeholder="0.00" style={inputStyle} required />
                                     </div>
                                 </div>
@@ -25180,7 +25592,7 @@ function ExpensesModule() {
                         <div style={{ padding: '24px', textAlign: 'center' }}>
                             <div style={{ width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>🗑️</div>
                             <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>Delete Expense</h3>
-                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Delete <strong>"{deleteConfirm.title}"</strong> (KSH {(deleteConfirm.amount || 0).toLocaleString()})?</p>
+                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Delete <strong>"{deleteConfirm.title}"</strong> ({getBrandingForReceipts().currencySymbol || 'KES'} {(deleteConfirm.amount || 0).toLocaleString()})?</p>
                             <div style={{ display: 'flex', gap: '12px' }}>
                                 <button onClick={() => setDeleteConfirm(null)} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
                                 <button onClick={() => handleDelete(deleteConfirm.id)} style={{ flex: 1, padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Delete</button>
@@ -25189,6 +25601,429 @@ function ExpensesModule() {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+
+// ==================== BRANDING SETTINGS COMPONENT ====================
+function BrandingSettings({ theme, cardStyle, inputStyle, labelStyle }) {
+    const { branding, refreshBranding } = useBranding();
+    const [formData, setFormData] = useState(branding);
+    const [saving, setSaving] = useState(false);
+    const [successMessage, setSuccessMessage] = useState('');
+    const [error, setError] = useState('');
+    const [activeSection, setActiveSection] = useState('identity');
+    const [previewMode, setPreviewMode] = useState(false);
+    const logoInputRef = React.useRef(null);
+
+    // Sync form data when branding context updates
+    useEffect(() => {
+        setFormData(branding);
+    }, [branding]);
+
+    // Auto-hide messages
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => setError(''), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [error]);
+
+    const handleInputChange = (field, value) => {
+        setFormData(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleLogoUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('image/')) {
+            setError('Please select an image file');
+            return;
+        }
+
+        if (file.size > 1024 * 1024) {
+            setError('Logo image should be less than 1MB');
+            return;
+        }
+
+        try {
+            const services = window.FirebaseServices;
+            if (services?.brandingService) {
+                const result = await services.brandingService.uploadLogo(file);
+                if (result.success) {
+                    setFormData(prev => ({ ...prev, logoUrl: result.url, logoType: 'image' }));
+                    setSuccessMessage('Logo uploaded successfully!');
+                } else {
+                    setError(result.error || 'Failed to upload logo');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to upload logo');
+        }
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        try {
+            const services = window.FirebaseServices;
+            if (services?.brandingService) {
+                const result = await services.brandingService.saveBranding(formData);
+                if (result.success) {
+                    // Immediately cache to localStorage for loading screen
+                    try {
+                        localStorage.setItem('ecospark_branding', JSON.stringify({
+                            companyName: formData.companyName,
+                            tagline: formData.tagline,
+                            logoUrl: formData.logoUrl,
+                            primaryColor: formData.primaryColor,
+                            secondaryColor: formData.secondaryColor
+                        }));
+                    } catch (e) { /* ignore */ }
+                    
+                    // Update document title immediately
+                    document.title = `${formData.companyName || 'EcoSpark'} - ${formData.tagline || 'Car Wash Management'}`;
+                    
+                    // Update CSS variables immediately
+                    if (formData.primaryColor) {
+                        document.documentElement.style.setProperty('--brand-primary', formData.primaryColor);
+                    }
+                    if (formData.secondaryColor) {
+                        document.documentElement.style.setProperty('--brand-secondary', formData.secondaryColor);
+                    }
+                    
+                    setSuccessMessage('Branding saved! Login page and system updated. Loading screen will reflect changes on next refresh.');
+                    refreshBranding();
+                } else {
+                    setError(result.error || 'Failed to save branding');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to save branding');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleReset = () => {
+        setFormData(branding);
+        setSuccessMessage('Form reset to saved values');
+    };
+
+    const sections = [
+        { id: 'identity', label: 'Company Identity', icon: '🏢' },
+        { id: 'contact', label: 'Contact Info', icon: '📞' },
+        { id: 'legal', label: 'Legal & Tax', icon: '📋' },
+        { id: 'colors', label: 'Brand Colors', icon: '🎨' },
+        { id: 'receipts', label: 'Receipts & Invoices', icon: '🧾' },
+        { id: 'social', label: 'Social Media', icon: '🌐' },
+        { id: 'regional', label: 'Regional Settings', icon: '🌍' }
+    ];
+
+    const sectionButtonStyle = (isActive) => ({
+        padding: '12px 16px',
+        background: isActive ? theme.bgTertiary : 'transparent',
+        border: `1px solid ${isActive ? theme.border : 'transparent'}`,
+        borderRadius: '0',
+        color: isActive ? theme.text : theme.textSecondary,
+        fontWeight: isActive ? '600' : '500',
+        fontSize: '13px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        width: '100%',
+        textAlign: 'left',
+        transition: 'all 0.2s'
+    });
+
+    const renderLogo = () => {
+        if (formData.logoUrl && formData.logoType === 'image') {
+            return (
+                <img 
+                    src={formData.logoUrl} 
+                    alt="Logo" 
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                />
+            );
+        }
+        return (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: '60%', height: '60%' }}>
+                <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9L18 10l-1.6-3.2A2 2 0 0014.6 5H9.4a2 2 0 00-1.8 1.1L6 10l-2.5.8C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/>
+                <circle cx="7" cy="17" r="2"/>
+                <circle cx="17" cy="17" r="2"/>
+                <path d="M9 17h6"/>
+            </svg>
+        );
+    };
+
+    return (
+        <div>
+            {successMessage && (
+                <div style={{ padding: '14px 20px', background: '#dcfce7', border: '1px solid #86efac', color: '#166534', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '10px', fontWeight: '500' }}>
+                    <span>✓</span> {successMessage}
+                </div>
+            )}
+            {error && (
+                <div style={{ padding: '14px 20px', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '10px', fontWeight: '500' }}>
+                    <span>✕</span> {error}
+                </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', padding: '20px 24px', background: theme.bg, border: `1px solid ${theme.border}` }}>
+                <div>
+                    <h2 style={{ margin: 0, color: theme.text, fontSize: '20px', fontWeight: '700' }}>🎨 Brand Customization</h2>
+                    <p style={{ margin: '6px 0 0', color: theme.textSecondary, fontSize: '13px' }}>
+                        Customize your system branding - changes apply across login, sidebar, receipts, invoices, and reports
+                    </p>
+                </div>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                    <button onClick={() => setPreviewMode(!previewMode)} style={{ padding: '10px 20px', background: previewMode ? formData.primaryColor : 'transparent', color: previewMode ? 'white' : theme.text, border: `1px solid ${theme.border}`, borderRadius: '0', fontSize: '13px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        👁️ {previewMode ? 'Hide Preview' : 'Preview'}
+                    </button>
+                    <button onClick={handleReset} style={{ padding: '10px 20px', background: 'transparent', color: theme.textSecondary, border: `1px solid ${theme.border}`, borderRadius: '0', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+                        Reset
+                    </button>
+                    <button onClick={handleSave} disabled={saving} style={{ padding: '10px 24px', background: saving ? '#93c5fd' : formData.primaryColor || '#3b82f6', color: 'white', border: 'none', borderRadius: '0', fontSize: '13px', fontWeight: '700', cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {saving ? '⏳ Saving...' : '💾 Save Changes'}
+                    </button>
+                </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: previewMode ? '200px 1fr 350px' : '200px 1fr', gap: '24px' }}>
+                <div style={{ ...cardStyle, padding: '16px', height: 'fit-content' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {sections.map(section => (
+                            <button key={section.id} onClick={() => setActiveSection(section.id)} style={sectionButtonStyle(activeSection === section.id)}>
+                                <span>{section.icon}</span>
+                                <span>{section.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div style={cardStyle}>
+                    {activeSection === 'identity' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>🏢 Company Identity</h3>
+                            <div style={{ marginBottom: '28px' }}>
+                                <label style={labelStyle}>Company Logo</label>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                    <div style={{ width: '100px', height: '100px', background: `linear-gradient(135deg, ${formData.primaryColor || '#3b82f6'} 0%, ${formData.secondaryColor || '#10b981'} 100%)`, borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                                        {renderLogo()}
+                                    </div>
+                                    <div>
+                                        <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" style={{ display: 'none' }} />
+                                        <button onClick={() => logoInputRef.current?.click()} style={{ padding: '10px 20px', background: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: '0', fontSize: '13px', fontWeight: '600', cursor: 'pointer', marginBottom: '8px', display: 'block' }}>📤 Upload Logo</button>
+                                        {formData.logoUrl && <button onClick={() => setFormData(prev => ({ ...prev, logoUrl: '', logoType: 'icon' }))} style={{ padding: '8px 16px', background: 'transparent', color: '#ef4444', border: 'none', fontSize: '12px', cursor: 'pointer' }}>Remove Logo</button>}
+                                        <p style={{ margin: '8px 0 0', fontSize: '12px', color: theme.textSecondary }}>Recommended: 200x200px, PNG or SVG, max 1MB</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                <div><label style={labelStyle}>Company Name *</label><input type="text" value={formData.companyName || ''} onChange={(e) => handleInputChange('companyName', e.target.value)} placeholder="e.g., SparkleWash Kenya" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>Short Name / Initials</label><input type="text" value={formData.shortName || ''} onChange={(e) => handleInputChange('shortName', e.target.value)} placeholder="e.g., SWK" style={inputStyle} maxLength={5} /></div>
+                            </div>
+                            <div style={{ marginTop: '20px' }}>
+                                <label style={labelStyle}>Tagline / Slogan</label>
+                                <input type="text" value={formData.tagline || ''} onChange={(e) => handleInputChange('tagline', e.target.value)} placeholder="e.g., Premium Car Care Services" style={inputStyle} />
+                                <p style={{ margin: '8px 0 0', fontSize: '12px', color: theme.textSecondary }}>Appears on login page and loading screen</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'contact' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>📞 Contact Information</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>This information appears on receipts, invoices, and customer-facing documents.</p>
+                            <div style={{ marginBottom: '20px' }}><label style={labelStyle}>Business Address</label><input type="text" value={formData.address || ''} onChange={(e) => handleInputChange('address', e.target.value)} placeholder="e.g., 123 Kenyatta Avenue, CBD" style={inputStyle} /></div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                <div><label style={labelStyle}>City / Town</label><input type="text" value={formData.city || ''} onChange={(e) => handleInputChange('city', e.target.value)} placeholder="e.g., Nairobi" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>Phone Number</label><input type="tel" value={formData.phone || ''} onChange={(e) => handleInputChange('phone', e.target.value)} placeholder="e.g., +254 712 345 678" style={inputStyle} /></div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                <div><label style={labelStyle}>Email Address</label><input type="email" value={formData.email || ''} onChange={(e) => handleInputChange('email', e.target.value)} placeholder="e.g., info@sparklewash.co.ke" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>Website</label><input type="url" value={formData.website || ''} onChange={(e) => handleInputChange('website', e.target.value)} placeholder="e.g., www.sparklewash.co.ke" style={inputStyle} /></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'legal' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>📋 Legal & Tax Information</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>These details appear on official invoices and tax documents.</p>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                <div><label style={labelStyle}>Tax PIN / VAT Number</label><input type="text" value={formData.taxPin || ''} onChange={(e) => handleInputChange('taxPin', e.target.value)} placeholder="e.g., P051234567X" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>Business Registration No.</label><input type="text" value={formData.businessReg || ''} onChange={(e) => handleInputChange('businessReg', e.target.value)} placeholder="e.g., PVT-2024-12345" style={inputStyle} /></div>
+                            </div>
+                            <div style={{ marginTop: '20px' }}>
+                                <label style={labelStyle}>Terms & Conditions</label>
+                                <textarea value={formData.termsAndConditions || ''} onChange={(e) => handleInputChange('termsAndConditions', e.target.value)} placeholder="Enter your business terms and conditions..." style={{ ...inputStyle, minHeight: '120px', resize: 'vertical' }} />
+                                <p style={{ margin: '8px 0 0', fontSize: '12px', color: theme.textSecondary }}>Optional: Appears at the bottom of invoices</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'colors' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>🎨 Brand Colors</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>These colors are applied to buttons, accents, headers, and branding elements throughout the system.</p>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px' }}>
+                                <div>
+                                    <label style={labelStyle}>Primary Color</label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <input type="color" value={formData.primaryColor || '#3b82f6'} onChange={(e) => handleInputChange('primaryColor', e.target.value)} style={{ width: '60px', height: '40px', border: 'none', cursor: 'pointer', borderRadius: '4px' }} />
+                                        <input type="text" value={formData.primaryColor || '#3b82f6'} onChange={(e) => handleInputChange('primaryColor', e.target.value)} style={{ ...inputStyle, flex: 1, fontFamily: 'monospace' }} />
+                                    </div>
+                                    <p style={{ margin: '8px 0 0', fontSize: '11px', color: theme.textSecondary }}>Main buttons, links, active states</p>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Secondary Color</label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <input type="color" value={formData.secondaryColor || '#10b981'} onChange={(e) => handleInputChange('secondaryColor', e.target.value)} style={{ width: '60px', height: '40px', border: 'none', cursor: 'pointer', borderRadius: '4px' }} />
+                                        <input type="text" value={formData.secondaryColor || '#10b981'} onChange={(e) => handleInputChange('secondaryColor', e.target.value)} style={{ ...inputStyle, flex: 1, fontFamily: 'monospace' }} />
+                                    </div>
+                                    <p style={{ margin: '8px 0 0', fontSize: '11px', color: theme.textSecondary }}>Success states, secondary buttons</p>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Accent Color</label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <input type="color" value={formData.accentColor || '#f59e0b'} onChange={(e) => handleInputChange('accentColor', e.target.value)} style={{ width: '60px', height: '40px', border: 'none', cursor: 'pointer', borderRadius: '4px' }} />
+                                        <input type="text" value={formData.accentColor || '#f59e0b'} onChange={(e) => handleInputChange('accentColor', e.target.value)} style={{ ...inputStyle, flex: 1, fontFamily: 'monospace' }} />
+                                    </div>
+                                    <p style={{ margin: '8px 0 0', fontSize: '11px', color: theme.textSecondary }}>Highlights, warnings, badges</p>
+                                </div>
+                            </div>
+                            <div style={{ marginTop: '32px', padding: '24px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text, marginBottom: '16px' }}>Color Preview</div>
+                                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                                    <button style={{ padding: '10px 24px', background: formData.primaryColor, color: 'white', border: 'none', fontSize: '13px', fontWeight: '600' }}>Primary Button</button>
+                                    <button style={{ padding: '10px 24px', background: formData.secondaryColor, color: 'white', border: 'none', fontSize: '13px', fontWeight: '600' }}>Success Button</button>
+                                    <button style={{ padding: '10px 24px', background: formData.accentColor, color: 'white', border: 'none', fontSize: '13px', fontWeight: '600' }}>Accent Button</button>
+                                    <span style={{ padding: '6px 12px', background: formData.primaryColor + '20', color: formData.primaryColor, fontSize: '12px', fontWeight: '600' }}>Badge</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'receipts' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>🧾 Receipts & Invoices</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>Customize the text that appears on printed receipts and invoices.</p>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Receipt Header Text</label>
+                                <input type="text" value={formData.receiptHeader || ''} onChange={(e) => handleInputChange('receiptHeader', e.target.value)} placeholder="e.g., OFFICIAL RECEIPT" style={inputStyle} />
+                                <p style={{ margin: '8px 0 0', fontSize: '12px', color: theme.textSecondary }}>Appears at the top of receipts after company name</p>
+                            </div>
+                            <div style={{ marginBottom: '20px' }}>
+                                <label style={labelStyle}>Receipt Footer / Thank You Message</label>
+                                <input type="text" value={formData.receiptFooter || ''} onChange={(e) => handleInputChange('receiptFooter', e.target.value)} placeholder="e.g., Thank you for choosing SparkleWash!" style={inputStyle} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Invoice Footer / Payment Terms</label>
+                                <textarea value={formData.invoiceFooter || ''} onChange={(e) => handleInputChange('invoiceFooter', e.target.value)} placeholder="e.g., Payment due within 30 days. Late payments subject to 2% monthly interest." style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }} />
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'social' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>🌐 Social Media Links</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>Optional: Add social media links to display on receipts and invoices.</p>
+                            <div style={{ display: 'grid', gap: '20px' }}>
+                                <div><label style={labelStyle}>📘 Facebook</label><input type="url" value={formData.facebook || ''} onChange={(e) => handleInputChange('facebook', e.target.value)} placeholder="e.g., https://facebook.com/sparklewash" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>📸 Instagram</label><input type="url" value={formData.instagram || ''} onChange={(e) => handleInputChange('instagram', e.target.value)} placeholder="e.g., https://instagram.com/sparklewash" style={inputStyle} /></div>
+                                <div><label style={labelStyle}>🐦 Twitter / X</label><input type="url" value={formData.twitter || ''} onChange={(e) => handleInputChange('twitter', e.target.value)} placeholder="e.g., https://twitter.com/sparklewash" style={inputStyle} /></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'regional' && (
+                        <div>
+                            <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>🌍 Regional Settings</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '24px' }}>Configure currency and localization settings.</p>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                <div>
+                                    <label style={labelStyle}>Currency Code</label>
+                                    <select value={formData.currency || 'KES'} onChange={(e) => handleInputChange('currency', e.target.value)} style={inputStyle}>
+                                        <option value="KES">KES - Kenyan Shilling</option>
+                                        <option value="USD">USD - US Dollar</option>
+                                        <option value="EUR">EUR - Euro</option>
+                                        <option value="GBP">GBP - British Pound</option>
+                                        <option value="TZS">TZS - Tanzanian Shilling</option>
+                                        <option value="UGX">UGX - Ugandan Shilling</option>
+                                        <option value="ZAR">ZAR - South African Rand</option>
+                                        <option value="NGN">NGN - Nigerian Naira</option>
+                                    </select>
+                                </div>
+                                <div><label style={labelStyle}>Currency Symbol</label><input type="text" value={formData.currencySymbol || 'KSh'} onChange={(e) => handleInputChange('currencySymbol', e.target.value)} placeholder="e.g., KSh, $, €" style={inputStyle} maxLength={5} /></div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                                <div>
+                                    <label style={labelStyle}>Timezone</label>
+                                    <select value={formData.timezone || 'Africa/Nairobi'} onChange={(e) => handleInputChange('timezone', e.target.value)} style={inputStyle}>
+                                        <option value="Africa/Nairobi">Africa/Nairobi (EAT)</option>
+                                        <option value="Africa/Lagos">Africa/Lagos (WAT)</option>
+                                        <option value="Africa/Johannesburg">Africa/Johannesburg (SAST)</option>
+                                        <option value="UTC">UTC</option>
+                                        <option value="Europe/London">Europe/London</option>
+                                        <option value="America/New_York">America/New_York</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Date Format</label>
+                                    <select value={formData.dateFormat || 'DD/MM/YYYY'} onChange={(e) => handleInputChange('dateFormat', e.target.value)} style={inputStyle}>
+                                        <option value="DD/MM/YYYY">DD/MM/YYYY (31/12/2026)</option>
+                                        <option value="MM/DD/YYYY">MM/DD/YYYY (12/31/2026)</option>
+                                        <option value="YYYY-MM-DD">YYYY-MM-DD (2026-12-31)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {previewMode && (
+                    <div style={{ ...cardStyle, padding: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '16px 20px', background: theme.bgTertiary, borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ fontSize: '13px', fontWeight: '700', color: theme.text }}>📱 Live Preview</div>
+                        </div>
+                        <div style={{ padding: '20px', background: '#1e3a5f', minHeight: '200px' }}>
+                            <div style={{ textAlign: 'center' }}>
+                                <div style={{ width: '64px', height: '64px', background: `linear-gradient(135deg, ${formData.primaryColor || '#3b82f6'} 0%, ${formData.secondaryColor || '#10b981'} 100%)`, borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', color: 'white', fontSize: '24px' }}>
+                                    {formData.logoUrl ? <img src={formData.logoUrl} alt="Logo" style={{ width: '80%', height: '80%', objectFit: 'contain' }} /> : <span>{formData.shortName || '🚗'}</span>}
+                                </div>
+                                <div style={{ color: 'white', fontSize: '18px', fontWeight: '700', marginBottom: '4px' }}>{formData.companyName || 'Company Name'}</div>
+                                <div style={{ color: '#94a3b8', fontSize: '11px' }}>{formData.tagline || 'Your tagline here'}</div>
+                            </div>
+                        </div>
+                        <div style={{ padding: '20px', background: 'white' }}>
+                            <div style={{ border: '1px dashed #ccc', padding: '16px', fontFamily: 'monospace', fontSize: '11px', color: '#333' }}>
+                                <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '14px' }}>{formData.companyName || 'COMPANY NAME'}</div>
+                                    <div style={{ fontSize: '10px', color: '#666' }}>{formData.address || 'Address'}{formData.city ? `, ${formData.city}` : ''}</div>
+                                    <div style={{ fontSize: '10px', color: '#666' }}>{formData.phone || 'Phone'}</div>
+                                    {formData.taxPin && <div style={{ fontSize: '10px' }}>PIN: {formData.taxPin}</div>}
+                                </div>
+                                <div style={{ borderTop: '1px dashed #ccc', borderBottom: '1px dashed #ccc', padding: '8px 0', margin: '8px 0', textAlign: 'center', fontWeight: 'bold' }}>{formData.receiptHeader || 'RECEIPT'}</div>
+                                <div style={{ color: '#666', fontSize: '10px' }}>
+                                    <div>Item 1............{formData.currencySymbol || 'KSh'} 500</div>
+                                    <div>Item 2............{formData.currencySymbol || 'KSh'} 300</div>
+                                    <div style={{ borderTop: '1px dashed #ccc', marginTop: '8px', paddingTop: '8px', fontWeight: 'bold' }}>TOTAL..........{formData.currencySymbol || 'KSh'} 800</div>
+                                </div>
+                                <div style={{ textAlign: 'center', marginTop: '12px', fontSize: '10px', color: '#666' }}>{formData.receiptFooter || 'Thank you!'}</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
@@ -25859,29 +26694,7 @@ function SystemSettings({ initialTab = 'profile' }) {
 
             {/* Branding Tab */}
             {activeTab === 'branding' && (
-                <div>
-                    <div style={cardStyle}>
-                        <h3 style={{ margin: '0 0 24px', color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
-                            🎨 Brand Customization
-                        </h3>
-                        <div style={{ 
-                            padding: '40px', 
-                            textAlign: 'center', 
-                            color: theme.textSecondary,
-                            background: theme.bgSecondary,
-                            border: `2px dashed ${theme.border}`
-                        }}>
-                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎨</div>
-                            <div style={{ fontSize: '18px', fontWeight: '600', color: theme.text, marginBottom: '8px' }}>
-                                Brand Settings
-                            </div>
-                            <div style={{ fontSize: '14px', maxWidth: '400px', margin: '0 auto' }}>
-                                Customize your system branding including logos, company name, colors, and more. 
-                                These settings will apply to the login page, receipts, and throughout the system.
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <BrandingSettings theme={theme} cardStyle={cardStyle} inputStyle={inputStyle} labelStyle={labelStyle} />
             )}
 
             {/* Help & Support Tab */}
@@ -26131,7 +26944,7 @@ function ReportsAnalytics() {
         inputBg: isDark ? '#1e293b' : 'white'
     };
 
-    const formatCurrency = (amt) => `KSH ${(amt || 0).toLocaleString()}`;
+    const formatCurrency = (amt) => `${getBrandingForReceipts().currencySymbol || 'KES'} ${(amt || 0).toLocaleString()}`;
 
     // Load all data
     useEffect(() => {
@@ -26278,8 +27091,9 @@ function ReportsAnalytics() {
 
     // Print report
     const printReport = () => {
+        const branding = getBrandingForReceipts();
         const content = `
-<!DOCTYPE html><html><head><title>EcoSpark Analytics Report</title>
+<!DOCTYPE html><html><head><title>${branding.companyName || 'EcoSpark'} Analytics Report</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b}
 .header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
@@ -26295,33 +27109,33 @@ td{padding:10px;border-bottom:1px solid #e2e8f0}tr:nth-child(even){background:#f
 .footer{margin-top:30px;text-align:center;color:#64748b;font-size:12px;padding-top:20px;border-top:1px solid #e2e8f0}
 @media print{body{padding:20px}}
 </style></head><body>
-<div class="header"><div class="logo">Eco<span>Spark</span></div><div class="subtitle">Analytics Report - ${new Date().toLocaleDateString()}</div></div>
+<div class="header"><div class="logo">${branding.companyName || 'EcoSpark'}</div><div class="subtitle">Analytics Report - ${new Date().toLocaleDateString()}</div></div>
 
 <div class="section"><div class="section-title">Key Performance Metrics (${dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'Last 7 Days' : dateRange === 'month' ? 'This Month' : 'This Year'})</div>
 <div class="grid">
-<div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
-<div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
-<div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">KSH ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
+<div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+<div class="card"><div class="value red">${branding.currencySymbol || 'KES'} ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+<div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">${branding.currencySymbol || 'KES'} ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
 <div class="card"><div class="value blue">${totalServices}</div><div class="label">Services Completed</div></div>
 </div></div>
 
 <div class="section"><div class="section-title">Business Summary</div>
 <div class="grid">
-<div class="card"><div class="value blue">KSH ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
+<div class="card"><div class="value blue">${branding.currencySymbol || 'KES'} ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
 <div class="card"><div class="value purple">${totalCustomers}</div><div class="label">Total Customers</div></div>
-<div class="card"><div class="value green">KSH ${inventoryValue.toLocaleString()}</div><div class="label">Inventory Value</div></div>
+<div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${inventoryValue.toLocaleString()}</div><div class="label">Inventory Value</div></div>
 <div class="card"><div class="value blue">${fleetVehicles}</div><div class="label">Fleet Vehicles</div></div>
 </div></div>
 
 ${topServices.length > 0 ? `<div class="section"><div class="section-title">Top Services by Revenue</div>
 <table><thead><tr><th>Service</th><th style="text-align:right">Revenue</th><th style="text-align:right">% of Total</th></tr></thead>
-<tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${totalRevenue > 0 ? ((amt / totalRevenue) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+<tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${amt.toLocaleString()}</td><td style="text-align:right">${totalRevenue > 0 ? ((amt / totalRevenue) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
 
 ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-title">Expenses by Category</div>
 <table><thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">% of Total</th></tr></thead>
-<tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${totalExpenses > 0 ? ((amt / totalExpenses) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+<tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${amt.toLocaleString()}</td><td style="text-align:right">${totalExpenses > 0 ? ((amt / totalExpenses) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-<div class="footer">Generated on ${new Date().toLocaleString()} | EcoSpark Car Wash Management System</div>
+<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark'} Car Wash Management System</div>
 </body></html>`;
         const w = window.open('', '_blank');
         w.document.write(content);
@@ -26865,6 +27679,7 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
 
     function generateReport(action) {
         const periodLabel = dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'Last 7 Days' : dateRange === 'month' ? 'This Month' : dateRange === 'year' ? 'This Year' : 'All Time';
+        const branding = getBrandingForReceipts();
         
         let reportTitle = '';
         let reportBody = '';
@@ -26874,40 +27689,40 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
             reportBody = `
                 <div class="section"><div class="section-title">Key Performance Metrics</div>
                 <div class="grid">
-                    <div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
-                    <div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
-                    <div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">KSH ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
+                    <div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+                    <div class="card"><div class="value red">${branding.currencySymbol || 'KES'} ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+                    <div class="card"><div class="value ${netProfit >= 0 ? 'green' : 'red'}">${branding.currencySymbol || 'KES'} ${netProfit.toLocaleString()}</div><div class="label">Net Profit</div></div>
                     <div class="card"><div class="value blue">${totalServices}</div><div class="label">Services</div></div>
                 </div></div>
                 ${topServices.length > 0 ? `<div class="section"><div class="section-title">Revenue by Service</div>
                 <table><thead><tr><th>Service</th><th style="text-align:right">Revenue</th><th style="text-align:right">%</th></tr></thead>
-                <tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalRevenue)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}
+                <tbody>${topServices.map(([svc, amt]) => `<tr><td>${svc}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalRevenue)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}
                 ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-title">Expenses by Category</div>
                 <table><thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th></tr></thead>
-                <tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">KSH ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalExpenses)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+                <tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${amt.toLocaleString()}</td><td style="text-align:right">${((amt/totalExpenses)*100).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` : ''}`;
         } else if (reportType === 'revenue') {
             reportTitle = 'Revenue Report';
             reportBody = `
                 <div class="section"><div class="section-title">Revenue Summary</div>
                 <div class="grid">
-                    <div class="card"><div class="value green">KSH ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
+                    <div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${totalRevenue.toLocaleString()}</div><div class="label">Total Revenue</div></div>
                     <div class="card"><div class="value blue">${filteredBilling.length}</div><div class="label">Transactions</div></div>
-                    <div class="card"><div class="value purple">KSH ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
+                    <div class="card"><div class="value purple">${branding.currencySymbol || 'KES'} ${avgTicket.toLocaleString()}</div><div class="label">Avg Ticket</div></div>
                 </div></div>
                 <div class="section"><div class="section-title">Transactions</div>
                 <table><thead><tr><th>Date</th><th>Service</th><th>Customer</th><th style="text-align:right">Amount</th></tr></thead>
-                <tbody>${filteredBilling.slice(0, 50).map(b => `<tr><td>${new Date(b.createdAt || b.date).toLocaleDateString()}</td><td>${b.service || b.packageName || '-'}</td><td>${b.customerName || '-'}</td><td style="text-align:right" class="green">KSH ${(b.total || b.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+                <tbody>${filteredBilling.slice(0, 50).map(b => `<tr><td>${new Date(b.createdAt || b.date).toLocaleDateString()}</td><td>${b.service || b.packageName || '-'}</td><td>${b.customerName || '-'}</td><td style="text-align:right" class="green">${branding.currencySymbol || 'KES'} ${(b.total || b.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
         } else if (reportType === 'expenses') {
             reportTitle = 'Expenses Report';
             reportBody = `
                 <div class="section"><div class="section-title">Expenses Summary</div>
                 <div class="grid">
-                    <div class="card"><div class="value red">KSH ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
+                    <div class="card"><div class="value red">${branding.currencySymbol || 'KES'} ${totalExpenses.toLocaleString()}</div><div class="label">Total Expenses</div></div>
                     <div class="card"><div class="value blue">${filteredExpenses.length}</div><div class="label">Count</div></div>
                 </div></div>
                 <div class="section"><div class="section-title">Expense List</div>
                 <table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th></tr></thead>
-                <tbody>${filteredExpenses.slice(0, 50).map(e => `<tr><td>${new Date(e.date).toLocaleDateString()}</td><td>${e.description || '-'}</td><td>${e.category || '-'}</td><td style="text-align:right" class="red">KSH ${(e.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+                <tbody>${filteredExpenses.slice(0, 50).map(e => `<tr><td>${new Date(e.date).toLocaleDateString()}</td><td>${e.description || '-'}</td><td>${e.category || '-'}</td><td style="text-align:right" class="red">${branding.currencySymbol || 'KES'} ${(e.amount || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
         } else if (reportType === 'fleet') {
             reportTitle = 'Fleet Account Report';
             reportBody = `
@@ -26915,24 +27730,24 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
                 <div class="grid">
                     <div class="card"><div class="value blue">${data.fleet.length}</div><div class="label">Accounts</div></div>
                     <div class="card"><div class="value purple">${fleetVehicles}</div><div class="label">Vehicles</div></div>
-                    <div class="card"><div class="value green">KSH ${fleetBalance.toLocaleString()}</div><div class="label">Total Balance</div></div>
-                    <div class="card"><div class="value orange">KSH ${fleetSpent.toLocaleString()}</div><div class="label">Total Spent</div></div>
+                    <div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${fleetBalance.toLocaleString()}</div><div class="label">Total Balance</div></div>
+                    <div class="card"><div class="value orange">${branding.currencySymbol || 'KES'} ${fleetSpent.toLocaleString()}</div><div class="label">Total Spent</div></div>
                 </div></div>
                 <div class="section"><div class="section-title">Fleet Accounts</div>
                 <table><thead><tr><th>Company</th><th>Contact</th><th style="text-align:center">Vehicles</th><th style="text-align:right">Balance</th><th style="text-align:right">Spent</th></tr></thead>
-                <tbody>${data.fleet.map(f => `<tr><td>${f.companyName}</td><td>${f.contactPerson || '-'}</td><td style="text-align:center">${f.vehicles?.length || 0}</td><td style="text-align:right" class="${f.balance >= 0 ? 'green' : 'red'}">KSH ${(f.balance || 0).toLocaleString()}</td><td style="text-align:right">KSH ${(f.totalSpent || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+                <tbody>${data.fleet.map(f => `<tr><td>${f.companyName}</td><td>${f.contactPerson || '-'}</td><td style="text-align:center">${f.vehicles?.length || 0}</td><td style="text-align:right" class="${f.balance >= 0 ? 'green' : 'red'}">${branding.currencySymbol || 'KES'} ${(f.balance || 0).toLocaleString()}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${(f.totalSpent || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
         } else if (reportType === 'inventory') {
             reportTitle = 'Inventory Report';
             reportBody = `
                 <div class="section"><div class="section-title">Inventory Summary</div>
                 <div class="grid">
                     <div class="card"><div class="value blue">${data.inventory.length}</div><div class="label">Total Items</div></div>
-                    <div class="card"><div class="value green">KSH ${inventoryValue.toLocaleString()}</div><div class="label">Total Value</div></div>
+                    <div class="card"><div class="value green">${branding.currencySymbol || 'KES'} ${inventoryValue.toLocaleString()}</div><div class="label">Total Value</div></div>
                     <div class="card"><div class="value red">${lowStockItems}</div><div class="label">Low Stock</div></div>
                 </div></div>
                 <div class="section"><div class="section-title">Inventory Items</div>
                 <table><thead><tr><th>Item</th><th>Category</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Value</th></tr></thead>
-                <tbody>${data.inventory.map(i => `<tr><td>${i.name}</td><td>${i.category || '-'}</td><td style="text-align:center">${i.quantity || 0} ${i.unit || ''}</td><td style="text-align:right">KSH ${(i.unitCost || 0).toLocaleString()}</td><td style="text-align:right" class="green">KSH ${((i.quantity || 0) * (i.unitCost || 0)).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
+                <tbody>${data.inventory.map(i => `<tr><td>${i.name}</td><td>${i.category || '-'}</td><td style="text-align:center">${i.quantity || 0} ${i.unit || ''}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${(i.unitCost || 0).toLocaleString()}</td><td style="text-align:right" class="green">${branding.currencySymbol || 'KES'} ${((i.quantity || 0) * (i.unitCost || 0)).toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`;
         } else if (reportType === 'customers') {
             reportTitle = 'Customer Report';
             reportBody = `
@@ -26958,7 +27773,7 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
         }
 
         const content = `
-<!DOCTYPE html><html><head><title>EcoSpark - ${reportTitle}</title>
+<!DOCTYPE html><html><head><title>${branding.companyName || 'EcoSpark'} - ${reportTitle}</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b;font-size:12px}
 .header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
@@ -26974,9 +27789,9 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:11px}tr:nth-child(
 .footer{margin-top:30px;text-align:center;color:#64748b;font-size:11px;padding-top:20px;border-top:1px solid #e2e8f0}
 @media print{body{padding:15px}.grid{grid-template-columns:repeat(4,1fr)}}
 </style></head><body>
-<div class="header"><div class="logo">Eco<span>Spark</span></div><div class="subtitle">${reportTitle} - ${periodLabel}</div></div>
+<div class="header"><div class="logo">${branding.companyName || 'EcoSpark'}</div><div class="subtitle">${reportTitle} - ${periodLabel}</div></div>
 ${reportBody}
-<div class="footer">Generated on ${new Date().toLocaleString()} | EcoSpark Car Wash Management System</div>
+<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark'} Car Wash Management System</div>
 </body></html>`;
 
         if (action === 'preview') {
@@ -28592,6 +29407,12 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// Render the app with Error Boundary
+// Render the app with Error Boundary and Branding Provider
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<ErrorBoundary><App /></ErrorBoundary>);
+root.render(
+    <ErrorBoundary>
+        <BrandingProvider>
+            <App />
+        </BrandingProvider>
+    </ErrorBoundary>
+);

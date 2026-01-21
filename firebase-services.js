@@ -3659,11 +3659,72 @@ export const userService = {
 // ==================== AUDIT TRAIL SERVICE ====================
 
 export const auditService = {
-  // Log an action
+  // Get current geolocation
+  async getCurrentLocation() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve({ latitude: null, longitude: null, locationError: 'Geolocation not supported' });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            locationError: null
+          });
+        },
+        (error) => {
+          resolve({
+            latitude: null,
+            longitude: null,
+            locationError: error.message
+          });
+        },
+        { timeout: 5000, maximumAge: 60000 }
+      );
+    });
+  },
+
+  // Get device info
+  getDeviceInfo() {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    let browser = 'Unknown';
+    let os = 'Unknown';
+    let device = 'Desktop';
+
+    // Detect browser
+    if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Edg')) browser = 'Edge';
+    else if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Safari')) browser = 'Safari';
+    else if (ua.includes('Opera') || ua.includes('OPR')) browser = 'Opera';
+
+    // Detect OS
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac')) os = 'macOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+
+    // Detect device type
+    if (ua.includes('Mobile') || ua.includes('Android')) device = 'Mobile';
+    else if (ua.includes('Tablet') || ua.includes('iPad')) device = 'Tablet';
+
+    return { browser, os, device, userAgent: ua };
+  },
+
+  // Log an action with comprehensive data
   async logAction(action) {
     try {
       const auditRef = ref(realtimeDb, 'audit_logs');
       const newLogRef = push(auditRef);
+      
+      // Get location data
+      const locationData = await this.getCurrentLocation();
+      const deviceInfo = this.getDeviceInfo();
+      
       const logEntry = {
         id: newLogRef.key,
         timestamp: new Date().toISOString(),
@@ -3676,8 +3737,21 @@ export const auditService = {
         targetId: action.targetId || null,
         targetName: action.targetName || null,
         details: action.details || null,
+        // Enhanced data
+        changes: action.changes || null, // For edit operations: { field: { old: x, new: y } }
+        previousValue: action.previousValue || null, // Snapshot before edit/delete
         ipAddress: action.ipAddress || null,
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        // Geolocation
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        locationAccuracy: locationData.accuracy || null,
+        locationError: locationData.locationError,
+        // Device info
+        browser: deviceInfo.browser,
+        operatingSystem: deviceInfo.os,
+        deviceType: deviceInfo.device,
+        userAgent: deviceInfo.userAgent,
+        // Status
         success: action.success !== false
       };
       await set(newLogRef, logEntry);
@@ -3688,7 +3762,7 @@ export const auditService = {
     }
   },
 
-  // Log user login
+  // Log user login with location
   async logLogin(user, success = true, errorMessage = null) {
     return this.logAction({
       userId: user?.uid || 'unknown',
@@ -3715,8 +3789,8 @@ export const auditService = {
     });
   },
 
-  // Log CRUD operations
-  async logCRUD(user, operation, module, target, targetId, targetName, details = null) {
+  // Log CRUD operations with change tracking
+  async logCRUD(user, operation, module, target, targetId, targetName, details = null, changes = null, previousValue = null) {
     return this.logAction({
       userId: user?.uid || 'unknown',
       userEmail: user?.email || 'unknown',
@@ -3726,7 +3800,9 @@ export const auditService = {
       target,
       targetId,
       targetName,
-      details
+      details,
+      changes,
+      previousValue
     });
   },
 
@@ -3797,10 +3873,13 @@ export const auditService = {
     }
   },
 
-  // Track active sessions
+  // Track active sessions with geolocation
   async startSession(user) {
     try {
       const sessionRef = ref(realtimeDb, 'active_sessions/' + user.uid);
+      const locationData = await this.getCurrentLocation();
+      const deviceInfo = this.getDeviceInfo();
+      
       const sessionData = {
         odId: user.uid,
         email: user.email || 'unknown',
@@ -3808,7 +3887,15 @@ export const auditService = {
         loginTime: new Date().toISOString(),
         lastActivity: new Date().toISOString(),
         status: 'active',
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null
+        // Geolocation
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        locationAccuracy: locationData.accuracy || null,
+        // Device info
+        browser: deviceInfo.browser,
+        operatingSystem: deviceInfo.os,
+        deviceType: deviceInfo.device,
+        userAgent: deviceInfo.userAgent
       };
       await set(sessionRef, sessionData);
       return { success: true };
@@ -3818,13 +3905,17 @@ export const auditService = {
     }
   },
 
-  // Update session activity (heartbeat)
+  // Update session activity (heartbeat) with location
   async updateSessionActivity(userId) {
     try {
       const sessionRef = ref(realtimeDb, 'active_sessions/' + userId);
+      const locationData = await this.getCurrentLocation();
       await update(sessionRef, {
         lastActivity: new Date().toISOString(),
-        status: 'active'
+        status: 'active',
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        locationAccuracy: locationData.accuracy || null
       });
       return { success: true };
     } catch (error) {
@@ -5128,6 +5219,128 @@ export const teamChatService = {
   }
 };
 
+// ==================== BRANDING SERVICE ====================
+export const brandingService = {
+  // Default branding configuration
+  getDefaultBranding() {
+    return {
+      // Company Identity
+      companyName: 'EcoSpark',
+      tagline: 'Car Wash Management System',
+      shortName: 'ES',
+      
+      // Contact Information
+      address: '',
+      city: '',
+      phone: '',
+      email: '',
+      website: '',
+      
+      // Legal Information
+      taxPin: '',
+      businessReg: '',
+      
+      // Brand Colors
+      primaryColor: '#3b82f6',
+      secondaryColor: '#10b981',
+      accentColor: '#f59e0b',
+      
+      // Receipt Settings
+      receiptHeader: 'OFFICIAL RECEIPT',
+      receiptFooter: 'Thank you for choosing us!',
+      invoiceFooter: 'Payment due within 30 days',
+      termsAndConditions: '',
+      
+      // Logo (Base64 or URL)
+      logoUrl: '',
+      logoType: 'icon', // 'icon', 'text', 'image'
+      
+      // Social Media
+      facebook: '',
+      instagram: '',
+      twitter: '',
+      
+      // Additional Settings
+      currency: 'KES',
+      currencySymbol: 'KSh',
+      timezone: 'Africa/Nairobi',
+      dateFormat: 'DD/MM/YYYY',
+      
+      // Metadata
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  },
+
+  // Save branding configuration
+  async saveBranding(brandingData) {
+    try {
+      const brandingRef = doc(db, 'settings', 'branding');
+      await setDoc(brandingRef, {
+        ...brandingData,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error saving branding:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get branding configuration
+  async getBranding() {
+    try {
+      const brandingRef = doc(db, 'settings', 'branding');
+      const snapshot = await getDoc(brandingRef);
+      if (snapshot.exists()) {
+        // Merge with defaults to ensure all fields exist
+        const defaults = this.getDefaultBranding();
+        return { success: true, data: { ...defaults, ...snapshot.data() } };
+      }
+      return { success: true, data: this.getDefaultBranding() };
+    } catch (error) {
+      console.error('Error getting branding:', error);
+      return { success: false, error: error.message, data: this.getDefaultBranding() };
+    }
+  },
+
+  // Subscribe to branding changes (real-time updates)
+  subscribeToBranding(callback) {
+    const brandingRef = doc(db, 'settings', 'branding');
+    return onSnapshot(brandingRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const defaults = this.getDefaultBranding();
+        callback({ ...defaults, ...snapshot.data() });
+      } else {
+        callback(this.getDefaultBranding());
+      }
+    }, (error) => {
+      console.error('Branding subscription error:', error);
+      callback(this.getDefaultBranding());
+    });
+  },
+
+  // Upload logo image
+  async uploadLogo(file) {
+    try {
+      // Convert to base64 for simplicity (works without storage setup)
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve({ success: true, url: reader.result });
+        };
+        reader.onerror = () => {
+          reject({ success: false, error: 'Failed to read file' });
+        };
+        reader.readAsDataURL(file);
+      });
+    } catch (error) {
+      console.error('Error uploading logo:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
 // ==================== SETTINGS SERVICE ====================
 export const settingsService = {
   // Save support contacts
@@ -5199,6 +5412,8 @@ if (typeof window !== 'undefined') {
     teamChatService,
     // Settings
     settingsService,
+    // Branding
+    brandingService,
     // Audit Trail
     auditService,
     // Original Services
