@@ -3559,8 +3559,20 @@ export const userService = {
     return DEFAULT_ROLES;
   },
 
+  // Super Admin email - has access to ALL features
+  SUPER_ADMIN_EMAIL: 'admin@ecospark.com',
+
+  // Check if user is super admin
+  isSuperAdmin(userEmail) {
+    return userEmail?.toLowerCase() === this.SUPER_ADMIN_EMAIL.toLowerCase();
+  },
+
   // Check if user has access to a module
-  hasModuleAccess(userRole, moduleId, userPermissions = null) {
+  hasModuleAccess(userRole, moduleId, userPermissions = null, userEmail = null) {
+    // Super admin has access to everything
+    if (this.isSuperAdmin(userEmail)) {
+      return true;
+    }
     // If user has custom permissions, check those first
     if (userPermissions && userPermissions[moduleId]) {
       return userPermissions[moduleId].view === true;
@@ -3572,7 +3584,11 @@ export const userService = {
   },
 
   // Check if user has a specific permission for a module
-  hasPermission(userRole, moduleId, action, userPermissions = null) {
+  hasPermission(userRole, moduleId, action, userPermissions = null, userEmail = null) {
+    // Super admin has ALL permissions
+    if (this.isSuperAdmin(userEmail)) {
+      return true;
+    }
     // If user has custom permissions, check those first
     if (userPermissions && userPermissions[moduleId]) {
       return userPermissions[moduleId][action] === true;

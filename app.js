@@ -613,10 +613,74 @@ const usePermissions = () => {
         return {
             hasModuleAccess: () => true,
             hasPermission: () => true,
-            userRole: 'admin'
+            userRole: 'admin',
+            isSuperAdmin: false,
+            canCreate: () => true,
+            canEdit: () => true,
+            canDelete: () => true,
+            canView: () => true
         };
     }
-    return context;
+    return {
+        ...context,
+        canCreate: (moduleId) => context.hasPermission(moduleId, 'create'),
+        canEdit: (moduleId) => context.hasPermission(moduleId, 'edit'),
+        canDelete: (moduleId) => context.hasPermission(moduleId, 'delete'),
+        canView: (moduleId) => context.hasPermission(moduleId, 'view')
+    };
+};
+
+// Permission Denied Toast Component
+const PermissionDeniedToast = ({ show, onClose, action = 'perform this action' }) => {
+    useEffect(() => {
+        if (show) {
+            const timer = setTimeout(onClose, 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [show, onClose]);
+    
+    if (!show) return null;
+    
+    return (
+        <div style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: '12px',
+            padding: '16px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            boxShadow: '0 10px 25px rgba(239, 68, 68, 0.2)',
+            zIndex: 9999,
+            animation: 'slideIn 0.3s ease'
+        }}>
+            <div style={{ 
+                width: '40px', 
+                height: '40px', 
+                background: '#fee2e2', 
+                borderRadius: '50%', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                fontSize: '20px'
+            }}>🔒</div>
+            <div>
+                <div style={{ fontWeight: '600', color: '#dc2626', fontSize: '14px' }}>Permission Denied</div>
+                <div style={{ color: '#991b1b', fontSize: '13px' }}>You don't have permission to {action}</div>
+            </div>
+            <button onClick={onClose} style={{ 
+                background: 'none', 
+                border: 'none', 
+                color: '#dc2626', 
+                cursor: 'pointer',
+                fontSize: '18px',
+                padding: '4px'
+            }}>×</button>
+        </div>
+    );
 };
 
 // Icon Components
@@ -1275,6 +1339,7 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
     const [lastMessageCount, setLastMessageCount] = useState(0);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
     const [isClearing, setIsClearing] = useState(false);
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const messagesEndRef = React.useRef(null);
     const chatContainerRef = React.useRef(null);
     const audioContextRef = React.useRef(null);
@@ -1282,6 +1347,21 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
     const currentUserId = userProfile?.id || userProfile?.uid || 'user';
     const currentUserName = userProfile?.name || userProfile?.displayName || userProfile?.email?.split('@')[0] || 'Unknown User';
     const currentUserRole = userProfile?.role || 'User';
+
+    // Professional emoji set
+    const emojiList = [
+        '👍', '👌', '👏', '🙌', '💪', '🤝',
+        '😊', '😄', '🙂', '😁', '😅', '🤗',
+        '✅', '❌', '⭐', '🔥', '💯', '🎉',
+        '👀', '💡', '📌', '🚀', '⚡', '💰',
+        '🙏', '❤️', '💙', '💚', '⏰', '📞'
+    ];
+
+    // Insert emoji into message
+    const insertEmoji = (emoji) => {
+        setNewMessage(prev => prev + emoji);
+        setShowEmojiPicker(false);
+    };
 
     // Handle clear all chats
     const handleClearAllChats = async () => {
@@ -1588,25 +1668,108 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
                                 ))}
                             </select>
                         </div>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                            <textarea
-                                value={newMessage}
-                                onChange={(e) => setNewMessage(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
-                                placeholder="Type your message..."
-                                style={{
-                                    flex: 1,
-                                    padding: '10px',
-                                    border: '1px solid var(--border-color)',
-                                    borderRadius: '6px',
-                                    background: 'var(--bg-primary)',
-                                    color: 'var(--text-primary)',
-                                    fontSize: '13px',
-                                    resize: 'none',
-                                    minHeight: '60px',
-                                    fontFamily: 'inherit'
-                                }}
-                            />
+                        <div style={{ display: 'flex', gap: '8px', position: 'relative' }}>
+                            <div style={{ flex: 1, position: 'relative' }}>
+                                <textarea
+                                    value={newMessage}
+                                    onChange={(e) => setNewMessage(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
+                                    placeholder="Type your message..."
+                                    style={{
+                                        width: '100%',
+                                        padding: '10px 40px 10px 10px',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '6px',
+                                        background: 'var(--bg-primary)',
+                                        color: 'var(--text-primary)',
+                                        fontSize: '13px',
+                                        resize: 'none',
+                                        minHeight: '60px',
+                                        fontFamily: 'inherit',
+                                        boxSizing: 'border-box'
+                                    }}
+                                />
+                                {/* Emoji Button */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                    style={{
+                                        position: 'absolute',
+                                        right: '8px',
+                                        bottom: '8px',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontSize: '18px',
+                                        padding: '4px',
+                                        borderRadius: '4px',
+                                        opacity: 0.7,
+                                        transition: 'opacity 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.target.style.opacity = 1}
+                                    onMouseLeave={(e) => e.target.style.opacity = 0.7}
+                                    title="Add emoji"
+                                >
+                                    😊
+                                </button>
+                                {/* Emoji Picker */}
+                                {showEmojiPicker && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        bottom: '100%',
+                                        right: '0',
+                                        marginBottom: '8px',
+                                        background: 'var(--bg-primary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '12px',
+                                        padding: '12px',
+                                        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+                                        zIndex: 100,
+                                        width: '220px'
+                                    }}>
+                                        <div style={{ 
+                                            fontSize: '11px', 
+                                            fontWeight: '600', 
+                                            color: 'var(--text-secondary)', 
+                                            marginBottom: '8px',
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center'
+                                        }}>
+                                            <span>Quick Emojis</span>
+                                            <button 
+                                                onClick={() => setShowEmojiPicker(false)}
+                                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: 'var(--text-secondary)' }}
+                                            >✕</button>
+                                        </div>
+                                        <div style={{ 
+                                            display: 'grid', 
+                                            gridTemplateColumns: 'repeat(6, 1fr)', 
+                                            gap: '4px' 
+                                        }}>
+                                            {emojiList.map((emoji, idx) => (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => insertEmoji(emoji)}
+                                                    style={{
+                                                        background: 'transparent',
+                                                        border: 'none',
+                                                        fontSize: '20px',
+                                                        cursor: 'pointer',
+                                                        padding: '6px',
+                                                        borderRadius: '6px',
+                                                        transition: 'background 0.2s'
+                                                    }}
+                                                    onMouseEnter={(e) => e.target.style.background = 'var(--bg-secondary)'}
+                                                    onMouseLeave={(e) => e.target.style.background = 'transparent'}
+                                                >
+                                                    {emoji}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                             <button
                                 onClick={handleSendMessage}
                                 disabled={!newMessage.trim()}
@@ -1677,20 +1840,19 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
                                         alignSelf: isOwn ? 'flex-end' : 'flex-start'
                                     }}
                                 >
-                                    {/* Sender info */}
+                                    {/* Sender info - Show for ALL messages */}
                                     <div style={{ 
                                         fontSize: '11px', 
                                         color: 'var(--text-secondary)',
                                         marginBottom: '4px',
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: '6px'
+                                        gap: '6px',
+                                        flexDirection: isOwn ? 'row-reverse' : 'row'
                                     }}>
-                                        {!isOwn && (
-                                            <span style={{ fontWeight: '600', color: '#3b82f6' }}>
-                                                {msg.senderName}
-                                            </span>
-                                        )}
+                                        <span style={{ fontWeight: '600', color: isOwn ? '#10b981' : '#3b82f6' }}>
+                                            {isOwn ? 'You' : msg.senderName}
+                                        </span>
                                         {isBroadcast && (
                                             <span style={{ 
                                                 background: '#f59e0b20', 
@@ -1757,26 +1919,110 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
                         borderTop: '1px solid var(--border-color)',
                         display: 'flex',
                         gap: '8px',
-                        flexShrink: 0
+                        flexShrink: 0,
+                        position: 'relative'
                     }}>
-                        <input
-                            type="text"
-                            value={newMessage}
-                            onChange={(e) => setNewMessage(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }}
-                            placeholder="Quick reply to all..."
-                            style={{
-                                flex: 1,
-                                padding: '10px 14px',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '20px',
-                                background: 'var(--bg-secondary)',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                outline: 'none'
-                            }}
-                            onFocus={() => setSelectedRecipient('all')}
-                        />
+                        <div style={{ flex: 1, position: 'relative' }}>
+                            <input
+                                type="text"
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }}
+                                placeholder="Quick reply to all..."
+                                style={{
+                                    width: '100%',
+                                    padding: '10px 40px 10px 14px',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '20px',
+                                    background: 'var(--bg-secondary)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '13px',
+                                    outline: 'none',
+                                    boxSizing: 'border-box'
+                                }}
+                                onFocus={() => setSelectedRecipient('all')}
+                            />
+                            {/* Emoji Button for Quick Reply */}
+                            <button
+                                type="button"
+                                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                style={{
+                                    position: 'absolute',
+                                    right: '10px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontSize: '16px',
+                                    padding: '2px',
+                                    opacity: 0.6,
+                                    transition: 'opacity 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.target.style.opacity = 1}
+                                onMouseLeave={(e) => e.target.style.opacity = 0.6}
+                                title="Add emoji"
+                            >
+                                😊
+                            </button>
+                            {/* Emoji Picker for Quick Reply */}
+                            {showEmojiPicker && (
+                                <div style={{
+                                    position: 'absolute',
+                                    bottom: '100%',
+                                    right: '0',
+                                    marginBottom: '8px',
+                                    background: 'var(--bg-primary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '12px',
+                                    padding: '12px',
+                                    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+                                    zIndex: 100,
+                                    width: '220px'
+                                }}>
+                                    <div style={{ 
+                                        fontSize: '11px', 
+                                        fontWeight: '600', 
+                                        color: 'var(--text-secondary)', 
+                                        marginBottom: '8px',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center'
+                                    }}>
+                                        <span>Quick Emojis</span>
+                                        <button 
+                                            onClick={() => setShowEmojiPicker(false)}
+                                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: 'var(--text-secondary)' }}
+                                        >✕</button>
+                                    </div>
+                                    <div style={{ 
+                                        display: 'grid', 
+                                        gridTemplateColumns: 'repeat(6, 1fr)', 
+                                        gap: '4px' 
+                                    }}>
+                                        {emojiList.map((emoji, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => insertEmoji(emoji)}
+                                                style={{
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    fontSize: '20px',
+                                                    cursor: 'pointer',
+                                                    padding: '6px',
+                                                    borderRadius: '6px',
+                                                    transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => e.target.style.background = 'var(--bg-secondary)'}
+                                                onMouseLeave={(e) => e.target.style.background = 'transparent'}
+                                            >
+                                                {emoji}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                         <button
                             onClick={handleSendMessage}
                             disabled={!newMessage.trim()}
@@ -1790,7 +2036,8 @@ function TeamChatDropdown({ isOpen, onClose, userProfile }) {
                                 cursor: newMessage.trim() ? 'pointer' : 'not-allowed',
                                 display: 'flex',
                                 alignItems: 'center',
-                                justifyContent: 'center'
+                                justifyContent: 'center',
+                                flexShrink: 0
                             }}
                         >
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2722,6 +2969,8 @@ const DEFAULT_BAYS = [
 
 // Vehicle Intake Module Component - Firebase Integrated
 function VehicleIntake() {
+    const { canCreate, canEdit, canDelete, hasPermission } = usePermissions();
+    const canChangeStatus = hasPermission('vehicle-intake', 'change-status');
     // State management
     const [queue, setQueue] = useState([]);
     const [vehicles, setVehicles] = useState([]);
@@ -4515,10 +4764,10 @@ function VehicleIntake() {
             {/* Action Bar */}
             <div className="intake-action-bar">
                 <div className="action-bar-primary">
-                    <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
+                    {canCreate('vehicle-intake') && <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
                         {Icons.plus}
                         <span>Add Item</span>
-                    </button>
+                    </button>}
                     <button className="action-btn action-btn-secondary" disabled={queue.length === 0}>
                         {Icons.package}
                         <span>Assign Service</span>
@@ -4578,9 +4827,9 @@ function VehicleIntake() {
                     {!Array.isArray(queue) || queue.length === 0 ? (
                         <div className="intake-empty">
                             <p>No items in queue</p>
-                            <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
+                            {canCreate('vehicle-intake') && <button className="action-btn action-btn-primary" onClick={() => setShowAddModal(true)}>
                                 {Icons.plus} Add Item
-                            </button>
+                            </button>}
                         </div>
                     ) : (
                         queue.filter(v => v != null).map((vehicle, index) => {
@@ -4790,28 +5039,43 @@ function VehicleIntake() {
                                         <td>{vehicle.service?.name || '-'}</td>
                                         <td style={{ color: '#10b981', fontWeight: '600' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {vehicle.service?.price || 0}</td>
                                         <td>
-                                            {/* Status Dropdown - Direct Change */}
-                                            <select
-                                                value={vehicle.status || 'in-progress'}
-                                                onChange={(e) => handleStatusChange(vehicle, e.target.value)}
-                                                disabled={actionLoading}
-                                                style={{
-                                                    padding: '6px 10px',
+                                            {/* Status - Dropdown for authorized users, Text badge for others */}
+                                            {canChangeStatus ? (
+                                                <select
+                                                    value={vehicle.status || 'in-progress'}
+                                                    onChange={(e) => handleStatusChange(vehicle, e.target.value)}
+                                                    disabled={actionLoading}
+                                                    style={{
+                                                        padding: '6px 10px',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid #e2e8f0',
+                                                        fontSize: '12px',
+                                                        fontWeight: '500',
+                                                        cursor: 'pointer',
+                                                        backgroundColor: getStatusColor(vehicle.status),
+                                                        color: '#fff',
+                                                        outline: 'none'
+                                                    }}
+                                                >
+                                                    <option value="in-progress" style={{ backgroundColor: '#3b82f6', color: '#fff' }}>In Progress</option>
+                                                    <option value="completed" style={{ backgroundColor: '#10b981', color: '#fff' }}>Completed</option>
+                                                    <option value="garage" style={{ backgroundColor: '#8b5cf6', color: '#fff' }}>Garage</option>
+                                                    <option value="waiting" style={{ backgroundColor: '#f59e0b', color: '#fff' }}>Waiting</option>
+                                                </select>
+                                            ) : (
+                                                <span style={{
+                                                    padding: '6px 12px',
                                                     borderRadius: '6px',
-                                                    border: '1px solid #e2e8f0',
                                                     fontSize: '12px',
-                                                    fontWeight: '500',
-                                                    cursor: 'pointer',
+                                                    fontWeight: '600',
                                                     backgroundColor: getStatusColor(vehicle.status),
                                                     color: '#fff',
-                                                    outline: 'none'
-                                                }}
-                                            >
-                                                <option value="in-progress" style={{ backgroundColor: '#3b82f6', color: '#fff' }}>In Progress</option>
-                                                <option value="completed" style={{ backgroundColor: '#10b981', color: '#fff' }}>Completed</option>
-                                                <option value="garage" style={{ backgroundColor: '#8b5cf6', color: '#fff' }}>Garage</option>
-                                                <option value="waiting" style={{ backgroundColor: '#f59e0b', color: '#fff' }}>Waiting</option>
-                                            </select>
+                                                    display: 'inline-block',
+                                                    textTransform: 'capitalize'
+                                                }}>
+                                                    {(vehicle.status || 'in-progress').replace('-', ' ')}
+                                                </span>
+                                            )}
                                         </td>
                                         <td>
                                             {/* Payment Status */}
@@ -4907,8 +5171,8 @@ function VehicleIntake() {
                                                 >
                                                     {Icons.printer}
                                                 </button>
-                                                {/* Mark as Paid button - show if not already paid */}
-                                                {vehicle.paymentStatus !== 'paid' && (
+                                                {/* Mark as Paid button - show if not already paid and user has change-status permission */}
+                                                {vehicle.paymentStatus !== 'paid' && canChangeStatus && (
                                                     <button 
                                                         className="table-action-btn" 
                                                         title="Mark as Paid"
@@ -4919,7 +5183,7 @@ function VehicleIntake() {
                                                         💰
                                                     </button>
                                                 )}
-                                                {vehicle.status !== 'completed' && (
+                                                {vehicle.status !== 'completed' && canChangeStatus && (
                                                     <button 
                                                         className="table-action-btn table-action-complete" 
                                                         title="Mark Complete"
@@ -6561,6 +6825,7 @@ function VehicleIntake() {
 
 // Service Packages Module Component - Firebase Integrated
 function ServicePackages() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     const [packages, setPackages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
@@ -6777,13 +7042,13 @@ function ServicePackages() {
             {/* Header with Add Button */}
             <div className="section-header" style={{ marginBottom: '24px' }}>
                 <h2 className="section-title">Service Packages</h2>
-                <button className="add-package-btn" onClick={handleAddNew}>
+                {canCreate('service-packages') && <button className="add-package-btn" onClick={handleAddNew}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                         <line x1="12" y1="5" x2="12" y2="19"/>
                         <line x1="5" y1="12" x2="19" y2="12"/>
                     </svg>
                     Add Package
-                </button>
+                </button>}
             </div>
 
             {/* Packages Grid - Instant render with flash effect */}
@@ -6796,7 +7061,7 @@ function ServicePackages() {
                     </svg>
                     <h3>No Packages Yet</h3>
                     <p>Create your first service package to get started</p>
-                    <button className="primary-button" onClick={handleAddNew}>Create Package</button>
+                    {canCreate('service-packages') && <button className="primary-button" onClick={handleAddNew}>Create Package</button>}
                 </div>
             ) : (
                 <div className="packages-grid" style={{ 
@@ -6847,18 +7112,18 @@ function ServicePackages() {
                                             </svg>
                                         )}
                                     </button>
-                                    <button className="icon-btn" onClick={() => handleEdit(pkg)} title="Edit">
+                                    {canEdit('service-packages') && <button className="icon-btn" onClick={() => handleEdit(pkg)} title="Edit">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                         </svg>
-                                    </button>
-                                    <button className="icon-btn delete" onClick={() => handleDelete(pkg.id)} title="Delete">
+                                    </button>}
+                                    {canDelete('service-packages') && <button className="icon-btn delete" onClick={() => handleDelete(pkg.id)} title="Delete">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <polyline points="3 6 5 6 21 6"/>
                                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
                                         </svg>
-                                    </button>
+                                    </button>}
                                 </div>
                             </div>
                             <div className="package-body">
@@ -8099,6 +8364,7 @@ function EquipmentManagement() {
 
 // Fleet Accounts Management Component
 function FleetAccounts() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     const [accounts, setAccounts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('accounts');
@@ -9267,9 +9533,9 @@ function FleetAccounts() {
                         <option value="inactive">Inactive</option>
                     </select>
                 </div>
-                <button onClick={() => { resetAccountForm(); setShowAddModal(true); }} style={btnSuccess}>
+                {canCreate('fleet') && <button onClick={() => { resetAccountForm(); setShowAddModal(true); }} style={btnSuccess}>
                     + New Fleet Account
-                </button>
+                </button>}
             </div>
 
             {/* Accounts Table */}
@@ -9348,9 +9614,9 @@ function FleetAccounts() {
                                         <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
                                             <button onClick={() => openViewModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="View">View</button>
                                             <button onClick={() => openWashHistoryModal(acc)} style={{ padding: '8px 12px', background: '#8b5cf6', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Wash History">History</button>
-                                            <button onClick={() => openEditModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="Edit">Edit</button>
-                                            <button onClick={() => { setSelectedAccount(acc); setShowTopUpModal(true); }} style={{ padding: '8px 12px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Top Up">Top Up</button>
-                                            <button onClick={() => handleDeleteAccount(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid #ef4444`, cursor: 'pointer', fontSize: '12px', color: '#ef4444' }} title="Delete">Delete</button>
+                                            {canEdit('fleet') && <button onClick={() => openEditModal(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '12px', color: theme.text }} title="Edit">Edit</button>}
+                                            {canEdit('fleet') && <button onClick={() => { setSelectedAccount(acc); setShowTopUpModal(true); }} style={{ padding: '8px 12px', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white', fontWeight: '600' }} title="Top Up">Top Up</button>}
+                                            {canDelete('fleet') && <button onClick={() => handleDeleteAccount(acc)} style={{ padding: '8px 12px', background: 'none', border: `1px solid #ef4444`, cursor: 'pointer', fontSize: '12px', color: '#ef4444' }} title="Delete">Delete</button>}
                                         </div>
                                     </td>
                                 </tr>
@@ -10095,6 +10361,8 @@ function FleetAccounts() {
 
 // Customer Management Component
 function CustomerManagement() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
+    const [permissionDenied, setPermissionDenied] = useState({ show: false, action: '' });
     const [customers, setCustomers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -10829,12 +11097,12 @@ function CustomerManagement() {
                     >
                         ⚙️ Loyalty Settings
                     </button>
-                    <button
+                    {canCreate('customers') && <button
                         onClick={() => { resetFormData(); setShowAddModal(true); }}
                         style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
                         + Add Customer
-                    </button>
+                    </button>}
                 </div>
             </div>
             )}
@@ -10940,10 +11208,10 @@ function CustomerManagement() {
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                                 <button onClick={() => openViewModal(customer)} style={{ padding: '6px 12px', backgroundColor: theme.btnViewBg, color: theme.btnViewText, border: `1px solid ${theme.btnViewBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>View</button>
-                                                <button onClick={() => openEditModal(customer)} style={{ padding: '6px 12px', backgroundColor: theme.btnEditBg, color: theme.btnEditText, border: `1px solid ${theme.btnEditBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>Edit</button>
-                                                <button onClick={() => openAddVehicleModal(customer)} style={{ padding: '6px 12px', backgroundColor: theme.btnAddVehicleBg, color: theme.btnAddVehicleText, border: `1px solid ${theme.btnAddVehicleBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>+ Car</button>
+                                                {canEdit('customers') && <button onClick={() => openEditModal(customer)} style={{ padding: '6px 12px', backgroundColor: theme.btnEditBg, color: theme.btnEditText, border: `1px solid ${theme.btnEditBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>Edit</button>}
+                                                {canCreate('customers') && <button onClick={() => openAddVehicleModal(customer)} style={{ padding: '6px 12px', backgroundColor: theme.btnAddVehicleBg, color: theme.btnAddVehicleText, border: `1px solid ${theme.btnAddVehicleBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>+ Car</button>}
                                                 <button onClick={() => generateReceipt(customer, customer.vehicles?.[0], { name: 'Service', price: 0 })} style={{ padding: '6px 12px', backgroundColor: theme.btnLoyaltyBg, color: theme.btnLoyaltyText, border: `1px solid ${theme.btnLoyaltyBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>🧾</button>
-                                                <button onClick={() => handleDeleteCustomer(customer.id)} style={{ padding: '6px 12px', backgroundColor: theme.btnDeleteBg, color: theme.btnDeleteText, border: `1px solid ${theme.btnDeleteBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>Delete</button>
+                                                {canDelete('customers') && <button onClick={() => handleDeleteCustomer(customer.id)} style={{ padding: '6px 12px', backgroundColor: theme.btnDeleteBg, color: theme.btnDeleteText, border: `1px solid ${theme.btnDeleteBorder}`, cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>Delete</button>}
                                             </div>
                                         </td>
                                     </tr>
@@ -11849,6 +12117,7 @@ function CustomerManagement() {
 
 // ==================== GARAGE MANAGEMENT MODULE ====================
 function GarageManagement() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     // State management
     const [queue, setQueue] = useState([]);
     const [jobs, setJobs] = useState([]);
@@ -12989,19 +13258,19 @@ function GarageManagement() {
                         {Icons.arrowRight} Send to Garage
                     </button>
                     <div style={{ borderLeft: `1px solid ${theme.border}`, height: '40px', margin: '0 8px' }}></div>
-                    <button
+                    {canCreate('garage-management') && <button
                         onClick={() => setShowAddModal(true)}
                         style={{ padding: '10px 20px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
                         {Icons.plus} Add New Vehicle
-                    </button>
+                    </button>}
                     <div style={{ borderLeft: `1px solid ${theme.border}`, height: '40px', margin: '0 8px' }}></div>
-                    <button
+                    {canEdit('garage-management') && <button
                         onClick={() => setShowServicesModal(true)}
                         style={{ padding: '10px 20px', backgroundColor: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
                         ⚙️ Manage Services
-                    </button>
+                    </button>}
                 </div>
             </div>
 
@@ -20162,6 +20431,7 @@ function HRModule() {
 
 // ==================== BILLING MODULE COMPONENT ====================
 function BillingModule() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     const [activeTab, setActiveTab] = useState('paid');
     const [invoices, setInvoices] = useState([]);
     const [pendingInvoices, setPendingInvoices] = useState([]);
@@ -20175,6 +20445,19 @@ function BillingModule() {
     const [customDateTo, setCustomDateTo] = useState('');
     const [sourceFilter, setSourceFilter] = useState('all');
     const [paymentMethodFilter, setPaymentMethodFilter] = useState('all');
+    
+    // Hide cash payment option - stored in localStorage for persistence (hidden by default)
+    const [hideCashPayment, setHideCashPayment] = useState(() => {
+        const saved = localStorage.getItem('ecospark_hideCashPayment');
+        return saved === null ? true : saved === 'true'; // Default to hidden
+    });
+    
+    // Toggle cash payment visibility
+    const toggleCashVisibility = () => {
+        const newValue = !hideCashPayment;
+        setHideCashPayment(newValue);
+        localStorage.setItem('ecospark_hideCashPayment', newValue.toString());
+    };
     
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1);
@@ -21972,7 +22255,7 @@ function BillingModule() {
                     <button style={tabStyle(activeTab === 'expenses')} onClick={() => setActiveTab('expenses')}>
                         Expenses ({expenses.length})
                     </button>
-                    <button
+                    {canCreate('billing') && <button
                         onClick={() => setShowManualBillingModal(true)}
                         style={{
                             ...buttonStyle,
@@ -21986,7 +22269,7 @@ function BillingModule() {
                         }}
                     >
                         <span style={{ fontSize: '16px' }}>+</span> NEW INVOICE
-                    </button>
+                    </button>}
                 </div>
 
                 <div style={{ display: 'flex', gap: '0', padding: '0' }}>
@@ -22280,34 +22563,34 @@ function BillingModule() {
                                                         color: '#3b82f6', fontSize: '12px', border: 'none', borderRadius: '8px',
                                                         transition: 'all 0.2s'
                                                     }} title="Print Receipt">🧾</button>
-                                                    <button onClick={() => handleCancelPayment(invoice)} style={{ 
+                                                    {canEdit('billing') && <button onClick={() => handleCancelPayment(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 10px', 
                                                         background: isDark ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.1)', 
                                                         color: '#f59e0b', fontSize: '12px', border: 'none', borderRadius: '8px',
                                                         transition: 'all 0.2s'
-                                                    }} title="Revert Payment">↩</button>
-                                                    <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
+                                                    }} title="Revert Payment">↩</button>}
+                                                    {canDelete('billing') && <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 10px', 
                                                         background: isDark ? 'rgba(239,68,68,0.2)' : 'rgba(239,68,68,0.1)', 
                                                         color: '#ef4444', fontSize: '12px', border: 'none', borderRadius: '8px',
                                                         transition: 'all 0.2s'
-                                                    }} title="Delete">×</button>
+                                                    }} title="Delete">×</button>}
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button onClick={() => openPaymentModal(invoice)} style={{ 
+                                                    {canEdit('billing') && <button onClick={() => openPaymentModal(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 14px', 
                                                         background: '#10b981', 
                                                         color: 'white', fontSize: '11px', fontWeight: '700', border: 'none', borderRadius: '8px',
                                                         boxShadow: '0 2px 8px rgba(16,185,129,0.3)',
                                                         transition: 'all 0.2s', letterSpacing: '0.5px'
-                                                    }} title="Record Payment">PAY NOW</button>
-                                                    <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
+                                                    }} title="Record Payment">PAY NOW</button>}
+                                                    {canDelete('billing') && <button onClick={() => handleDeleteInvoice(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 10px', 
                                                         background: isDark ? 'rgba(239,68,68,0.2)' : 'rgba(239,68,68,0.1)', 
                                                         color: '#ef4444', fontSize: '12px', border: 'none', borderRadius: '8px',
                                                         transition: 'all 0.2s'
-                                                    }} title="Delete">×</button>
+                                                    }} title="Delete">×</button>}
                                                 </>
                                             )}
                                         </div>
@@ -22529,27 +22812,50 @@ function BillingModule() {
                             </div>
                         </div>
 
-                        <div style={{ marginBottom: '16px', fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Select Payment Method:</div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                            <div style={{ fontWeight: '700', color: theme.text, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Select Payment Method:</div>
+                            {/* Cash visibility toggle */}
                             <button
-                                onClick={handleCashPayment}
-                                disabled={actionLoading}
-                                style={{ 
-                                    ...buttonStyle, 
-                                    padding: '18px', 
-                                    background: '#10b981', 
-                                    color: 'white',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '12px',
-                                    fontSize: '14px'
+                                type="button"
+                                onClick={toggleCashVisibility}
+                                title={hideCashPayment ? 'Show Cash option' : 'Hide Cash option'}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    color: theme.textSecondary,
+                                    opacity: 0.6
                                 }}
                             >
-                                <span style={{ fontSize: '24px' }}>💵</span>
-                                {actionLoading ? 'PROCESSING...' : 'CASH PAYMENT'}
+                                {hideCashPayment ? '👁️‍🗨️' : '👁️'}
                             </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {/* Cash Payment - Hidden when hideCashPayment is true */}
+                            {!hideCashPayment && (
+                                <button
+                                    onClick={handleCashPayment}
+                                    disabled={actionLoading}
+                                    style={{ 
+                                        ...buttonStyle, 
+                                        padding: '18px', 
+                                        background: '#10b981', 
+                                        color: 'white',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '12px',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    <span style={{ fontSize: '24px' }}>💵</span>
+                                    {actionLoading ? 'PROCESSING...' : 'CASH PAYMENT'}
+                                </button>
+                            )}
 
                             <button
                                 onClick={openMpesaModal}
@@ -23255,14 +23561,35 @@ function BillingModule() {
 
                         {/* Payment Method */}
                         <div style={{ marginBottom: '16px' }}>
-                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment</div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment</div>
+                                {/* Cash visibility toggle */}
+                                <button
+                                    type="button"
+                                    onClick={toggleCashVisibility}
+                                    title={hideCashPayment ? 'Show Cash option' : 'Hide Cash option'}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontSize: '14px',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        color: theme.textSecondary,
+                                        opacity: 0.6,
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {hideCashPayment ? '👁️‍🗨️' : '👁️'}
+                                </button>
+                            </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
                                 {[
                                     { id: 'unpaid', label: '⏳ Unpaid', color: '#ef4444' },
-                                    { id: 'cash', label: '💵 Cash', color: '#10b981' },
+                                    { id: 'cash', label: '💵 Cash', color: '#10b981', hideable: true },
                                     { id: 'card', label: '💳 Card', color: '#3b82f6' },
                                     { id: 'mpesa', label: '📱 M-Pesa', color: '#00a651' }
-                                ].map(opt => {
+                                ].filter(opt => !opt.hideable || !hideCashPayment).map(opt => {
                                     const isSelected = opt.id === 'unpaid' 
                                         ? manualBillingData.paymentStatus === 'unpaid' 
                                         : manualBillingData.paymentStatus === 'paid' && manualBillingData.paymentMethod === opt.id;
@@ -23584,6 +23911,7 @@ function FactoryResetTab({ theme }) {
 
 // ==================== STAFF MANAGEMENT COMPONENT ====================
 function StaffManagement() {
+    const { canCreate, canEdit, canDelete, isSuperAdmin, userProfile } = usePermissions();
     const [activeTab, setActiveTab] = useState('staff');
     const [staffList, setStaffList] = useState([]);
     const [usersList, setUsersList] = useState([]);
@@ -23605,6 +23933,13 @@ function StaffManagement() {
     const [filterStatus, setFilterStatus] = useState('active');
     const [auditFilter, setAuditFilter] = useState({ action: '', module: '' });
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    const [showSuperAdmin, setShowSuperAdmin] = useState(false); // Hidden super admin visibility toggle
+
+    // Super admin email constant
+    const SUPER_ADMIN_EMAIL = 'admin@ecospark.com';
+
+    // Check if an email is super admin
+    const isSuperAdminEmail = (email) => email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
 
     const [staffForm, setStaffForm] = useState({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
     const [userForm, setUserForm] = useState({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
@@ -23639,7 +23974,8 @@ function StaffManagement() {
         { id: 'view', label: 'View', icon: '👁️' },
         { id: 'create', label: 'Create', icon: '➕' },
         { id: 'edit', label: 'Edit', icon: '✏️' },
-        { id: 'delete', label: 'Delete', icon: '🗑️' }
+        { id: 'delete', label: 'Delete', icon: '🗑️' },
+        { id: 'change-status', label: 'Status', icon: '🔄' }
     ];
 
     const USER_ROLES = [
@@ -23656,20 +23992,20 @@ function StaffManagement() {
         const permissions = {};
         ALL_MODULES.forEach(mod => {
             if (role === 'admin') {
-                permissions[mod.id] = { view: true, create: true, edit: true, delete: true };
+                permissions[mod.id] = { view: true, create: true, edit: true, delete: true, 'change-status': true };
             } else if (role === 'manager') {
-                permissions[mod.id] = { view: true, create: true, edit: true, delete: mod.category !== 'System' };
+                permissions[mod.id] = { view: true, create: true, edit: true, delete: mod.category !== 'System', 'change-status': true };
             } else if (role === 'supervisor') {
                 const canManage = ['Core', 'Operations', 'Services'].includes(mod.category);
-                permissions[mod.id] = { view: true, create: canManage, edit: canManage, delete: false };
+                permissions[mod.id] = { view: true, create: canManage, edit: canManage, delete: false, 'change-status': canManage };
             } else if (role === 'receptionist') {
                 const canAccess = ['Core', 'Customer Relations', 'Financial'].includes(mod.category);
-                permissions[mod.id] = { view: canAccess, create: canAccess && mod.id !== 'billing', edit: canAccess && mod.id !== 'billing', delete: false };
+                permissions[mod.id] = { view: canAccess, create: canAccess && mod.id !== 'billing', edit: canAccess && mod.id !== 'billing', delete: false, 'change-status': false };
             } else if (role === 'technician') {
                 const canAccess = mod.category === 'Operations' || mod.id === 'dashboard';
-                permissions[mod.id] = { view: canAccess, create: false, edit: canAccess, delete: false };
+                permissions[mod.id] = { view: canAccess, create: false, edit: canAccess, delete: false, 'change-status': false };
             } else {
-                permissions[mod.id] = { view: mod.id === 'dashboard', create: false, edit: false, delete: false };
+                permissions[mod.id] = { view: mod.id === 'dashboard', create: false, edit: false, delete: false, 'change-status': false };
             }
         });
         return permissions;
@@ -23693,7 +24029,7 @@ function StaffManagement() {
             ...prev,
             permissions: {
                 ...prev.permissions,
-                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled }
+                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled, 'change-status': enabled }
             }
         }));
     };
@@ -23749,6 +24085,8 @@ function StaffManagement() {
     };
 
     const filteredAuditLogs = auditLogs.filter(log => {
+        // Hide super admin's logs unless showSuperAdmin is true
+        if (!showSuperAdmin && isSuperAdminEmail(log.userEmail)) return false;
         const matchesSearch = log.userName?.toLowerCase().includes(searchTerm.toLowerCase()) || log.userEmail?.toLowerCase().includes(searchTerm.toLowerCase()) || log.details?.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesAction = !auditFilter.action || log.action === auditFilter.action;
         const matchesModule = !auditFilter.module || log.module === auditFilter.module;
@@ -23783,6 +24121,8 @@ function StaffManagement() {
     });
 
     const filteredUsers = usersList.filter(u => {
+        // Hide super admin unless showSuperAdmin is true
+        if (!showSuperAdmin && isSuperAdminEmail(u.email)) return false;
         const matchesSearch = u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) || u.email?.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesStatus = filterStatus === 'all' || (filterStatus === 'active' ? u.isActive : !u.isActive);
         return matchesSearch && matchesStatus;
@@ -23891,6 +24231,12 @@ function StaffManagement() {
     };
 
     const handleUpdateUser = async (userId, updates) => {
+        // Find the user to check if they're super admin
+        const targetUser = usersList.find(u => u.id === userId);
+        if (targetUser && isSuperAdminEmail(targetUser.email)) {
+            setError('This account cannot be modified');
+            return;
+        }
         try {
             const result = await window.FirebaseServices.userService.updateUserProfile(userId, updates);
             if (result.success) setSuccessMessage('User updated');
@@ -23904,6 +24250,11 @@ function StaffManagement() {
 
     // Open delete confirmation modal
     const handleDeleteUserClick = (user) => {
+        // Prevent deletion of super admin
+        if (isSuperAdminEmail(user.email)) {
+            setError('This account cannot be deleted');
+            return;
+        }
         setUserToDelete(user);
         setShowDeleteUserModal(true);
     };
@@ -23945,6 +24296,11 @@ function StaffManagement() {
 
     // Open edit user modal
     const handleEditUser = (user) => {
+        // Prevent editing super admin
+        if (isSuperAdminEmail(user.email)) {
+            setError('This account cannot be modified');
+            return;
+        }
         setSelectedUser(user);
         setEditUserForm({
             displayName: user.displayName || '',
@@ -24029,7 +24385,7 @@ function StaffManagement() {
             ...prev,
             permissions: {
                 ...prev.permissions,
-                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled }
+                [moduleId]: { view: enabled, create: enabled, edit: enabled, delete: enabled, 'change-status': enabled }
             }
         }));
     };
@@ -24135,14 +24491,34 @@ function StaffManagement() {
                     <option value="active">Active</option><option value="inactive">Inactive</option><option value="all">All</option>
                 </select>
                 <div style={{ flex: 1 }}></div>
-                {activeTab === 'staff' && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add Staff</button>}
-                {activeTab === 'users' && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add User</button>}
+                {/* Hidden Super Admin Toggle - Only visible to super admin on users tab */}
+                {activeTab === 'users' && isSuperAdmin && (
+                    <button 
+                        onClick={() => setShowSuperAdmin(!showSuperAdmin)}
+                        title={showSuperAdmin ? 'Hide system account' : 'Show system account'}
+                        style={{ 
+                            padding: '8px 12px', 
+                            background: showSuperAdmin ? '#7c3aed' : 'transparent', 
+                            color: showSuperAdmin ? 'white' : theme.textSecondary,
+                            border: `1px dashed ${showSuperAdmin ? '#7c3aed' : theme.border}`, 
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            opacity: 0.7,
+                            transition: 'all 0.2s'
+                        }}
+                    >
+                        {showSuperAdmin ? '👁️ Visible' : '👁️‍🗨️'}
+                    </button>
+                )}
+                {activeTab === 'staff' && canCreate('staff') && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add Staff</button>}
+                {activeTab === 'users' && canCreate('staff') && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add User</button>}
             </div>
 
             {activeTab === 'staff' && (
                 <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
                     {loading ? <div style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>Loading...</div> : filteredStaff.length === 0 ? (
-                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>👷</div><p style={{ color: theme.textSecondary }}>No staff found</p><button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add Staff</button></div>
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>👷</div><p style={{ color: theme.textSecondary }}>No staff found</p>{canCreate('staff') && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add Staff</button>}</div>
                     ) : (
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Name</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Department</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Phone</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
@@ -24155,9 +24531,9 @@ function StaffManagement() {
                                         <td style={{ padding: '12px 16px', color: theme.textSecondary }}>{staff.phone || '-'}</td>
                                         <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 12px', fontSize: '12px', fontWeight: '600', background: staff.status === 'active' ? '#d1fae5' : '#fee2e2', color: staff.status === 'active' ? '#059669' : '#dc2626' }}>{staff.status === 'active' ? 'Active' : 'Inactive'}</span></td>
                                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                                            <button onClick={() => openEditStaff(staff)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>Edit</button>
-                                            <button onClick={() => handleToggleStaffStatus(staff)} style={{ padding: '6px 12px', background: staff.status === 'active' ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>{staff.status === 'active' ? 'Deactivate' : 'Activate'}</button>
-                                            <button onClick={() => handleDeleteStaff(staff)} style={{ padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' }}>Delete</button>
+                                            {canEdit('staff') && <button onClick={() => openEditStaff(staff)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>Edit</button>}
+                                            {canEdit('staff') && <button onClick={() => handleToggleStaffStatus(staff)} style={{ padding: '6px 12px', background: staff.status === 'active' ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', marginRight: '8px', fontSize: '12px' }}>{staff.status === 'active' ? 'Deactivate' : 'Activate'}</button>}
+                                            {canDelete('staff') && <button onClick={() => handleDeleteStaff(staff)} style={{ padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px' }}>Delete</button>}
                                         </td>
                                     </tr>
                                 ))}
@@ -24170,7 +24546,7 @@ function StaffManagement() {
             {activeTab === 'users' && (
                 <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
                     {filteredUsers.length === 0 ? (
-                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div><p style={{ color: theme.textSecondary }}>No users found</p><button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add User</button></div>
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div><p style={{ color: theme.textSecondary }}>No users found</p>{canCreate('staff') && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add User</button>}</div>
                     ) : (
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>User</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Description</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
@@ -24184,9 +24560,9 @@ function StaffManagement() {
                                             <td style={{ padding: '12px 16px', color: theme.textSecondary, fontSize: '13px' }}>{roleInfo.desc}</td>
                                             <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 12px', fontSize: '12px', fontWeight: '600', background: user.isActive ? '#d1fae5' : '#fee2e2', color: user.isActive ? '#059669' : '#dc2626' }}>{user.isActive ? 'Active' : 'Inactive'}</span></td>
                                             <td style={{ padding: '12px 16px', textAlign: 'center', display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                                <button onClick={() => handleEditUser(user)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>✏️ Edit</button>
-                                                <button onClick={() => handleUpdateUser(user.id, { isActive: !user.isActive })} style={{ padding: '6px 12px', background: user.isActive ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>{user.isActive ? '⏸️ Deactivate' : '✅ Activate'}</button>
-                                                <button onClick={() => handleDeleteUserClick(user)} style={{ padding: '6px 12px', background: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>🗑️ Delete</button>
+                                                {canEdit('staff') && <button onClick={() => handleEditUser(user)} style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>✏️ Edit</button>}
+                                                {canEdit('staff') && <button onClick={() => handleUpdateUser(user.id, { isActive: !user.isActive })} style={{ padding: '6px 12px', background: user.isActive ? '#f59e0b' : '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>{user.isActive ? '⏸️ Deactivate' : '✅ Activate'}</button>}
+                                                {canDelete('staff') && <button onClick={() => handleDeleteUserClick(user)} style={{ padding: '6px 12px', background: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>🗑️ Delete</button>}
                                             </td>
                                         </tr>
                                     );
@@ -24209,7 +24585,7 @@ function StaffManagement() {
                             <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>No users currently logged in</p>
                         ) : (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                                {activeSessions.map(session => {
+                                {activeSessions.filter(session => showSuperAdmin || !isSuperAdminEmail(session.email)).map(session => {
                                     const isActive = isUserOnline(session.odId);
                                     return (
                                         <div key={session.odId} style={{ 
@@ -24471,8 +24847,8 @@ function StaffManagement() {
                                         <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Configure which modules this user can access and what actions they can perform</p>
                                     </div>
                                     <div style={{ display: 'flex', gap: '8px' }}>
-                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
-                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true, 'change-status': true }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false, 'change-status': false }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
                                     </div>
                                 </div>
 
@@ -24480,14 +24856,14 @@ function StaffManagement() {
                                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                         <thead style={{ position: 'sticky', top: 0, background: theme.bgSecondary, zIndex: 1 }}>
                                             <tr>
-                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '40%' }}>Module</th>
-                                                {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '15%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
+                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '35%' }}>Module</th>
+                                                {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '13%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {ALL_MODULES.map((mod, idx) => {
                                                 const perms = userForm.permissions[mod.id] || {};
-                                                const allChecked = perms.view && perms.create && perms.edit && perms.delete;
+                                                const allChecked = perms.view && perms.create && perms.edit && perms.delete && perms['change-status'];
                                                 return (
                                                     <tr key={mod.id} style={{ background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
                                                         <td style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.border}` }}>
@@ -24561,8 +24937,8 @@ function StaffManagement() {
                                     <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Configure which modules this user can access</p>
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
-                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
+                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true, 'change-status': true }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
+                                    <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false, 'change-status': false }); setEditUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
                                 </div>
                             </div>
 
@@ -24570,16 +24946,16 @@ function StaffManagement() {
                                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                     <thead style={{ position: 'sticky', top: 0, background: theme.bgSecondary, zIndex: 1 }}>
                                         <tr>
-                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '35%' }}>Module</th>
+                                            <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '30%' }}>Module</th>
                                             <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '10%' }}>All</th>
-                                            {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '12%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
+                                            {PERMISSION_ACTIONS.map(a => <th key={a.id} style={{ padding: '12px 8px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}`, width: '10%' }}><span title={a.label}>{a.icon} {a.label}</span></th>)}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {ALL_MODULES.map((mod, idx) => {
                                             const perms = editUserForm.permissions[mod.id] || {};
-                                            const allChecked = perms.view && perms.create && perms.edit && perms.delete;
-                                            const noneChecked = !perms.view && !perms.create && !perms.edit && !perms.delete;
+                                            const allChecked = perms.view && perms.create && perms.edit && perms.delete && perms['change-status'];
+                                            const noneChecked = !perms.view && !perms.create && !perms.edit && !perms.delete && !perms['change-status'];
                                             return (
                                                 <tr key={mod.id} style={{ background: idx % 2 === 0 ? 'transparent' : theme.bgSecondary }}>
                                                     <td style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.border}` }}>
@@ -24671,6 +25047,7 @@ function StaffManagement() {
 
 // ==================== INVENTORY MODULE ====================
 function InventoryModule() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -24981,7 +25358,7 @@ function InventoryModule() {
                             </div>
                         )}
                     </div>
-                    <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Item</button>
+                    {canCreate('inventory') && <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Item</button>}
                 </div>
             </div>
 
@@ -25039,10 +25416,10 @@ function InventoryModule() {
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                                <button onClick={() => setUsageModal(item)} style={{ padding: '6px 10px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>Use</button>
+                                                {canEdit('inventory') && <button onClick={() => setUsageModal(item)} style={{ padding: '6px 10px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>Use</button>}
                                                 <button onClick={() => setViewItem(item)} style={{ padding: '6px 10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#2563eb' }}>View</button>
-                                                <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '11px' }}>Edit</button>
-                                                <button onClick={() => setDeleteConfirm(item)} style={{ padding: '6px 10px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '11px' }}>Del</button>
+                                                {canEdit('inventory') && <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '11px' }}>Edit</button>}
+                                                {canDelete('inventory') && <button onClick={() => setDeleteConfirm(item)} style={{ padding: '6px 10px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '11px' }}>Del</button>}
                                             </div>
                                         </td>
                                     </tr>
@@ -25294,6 +25671,7 @@ function InventoryModule() {
 
 // ==================== EXPENSES MODULE ====================
 function ExpensesModule() {
+    const { canCreate, canEdit, canDelete } = usePermissions();
     const [expenses, setExpenses] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -25480,7 +25858,7 @@ function ExpensesModule() {
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                     <button onClick={exportExpenses} style={btnSecondary}>📄 Export</button>
-                    <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Expense</button>
+                    {canCreate('expenses') && <button onClick={() => setShowModal(true)} style={btnPrimary}>+ Add Expense</button>}
                 </div>
             </div>
 
@@ -25517,8 +25895,8 @@ function ExpensesModule() {
                                     <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '14px', color: '#dc2626' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(expense.amount || 0).toLocaleString()}</td>
                                     <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                                            <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '12px' }}>Edit</button>
-                                            <button onClick={() => setDeleteConfirm(expense)} style={{ padding: '6px 12px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '12px' }}>Delete</button>
+                                            {canEdit('expenses') && <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '12px' }}>Edit</button>}
+                                            {canDelete('expenses') && <button onClick={() => setDeleteConfirm(expense)} style={{ padding: '6px 12px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '12px' }}>Delete</button>}
                                         </div>
                                     </td>
                                 </tr>
@@ -29203,14 +29581,19 @@ function App() {
     const hasModuleAccess = (moduleId) => {
         if (!userProfile) return false;
         if (!window.FirebaseServices?.userService) return true;
-        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions);
+        // Pass email for super admin check
+        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions, userProfile.email);
     };
 
     const hasPermission = (moduleId, action = 'view') => {
         if (!userProfile) return false;
         if (!window.FirebaseServices?.userService) return true;
-        return window.FirebaseServices.userService.hasPermission(userProfile.role, moduleId, action, userProfile.permissions);
+        // Pass email for super admin check
+        return window.FirebaseServices.userService.hasPermission(userProfile.role, moduleId, action, userProfile.permissions, userProfile.email);
     };
+
+    // Check if current user is super admin
+    const isSuperAdmin = window.FirebaseServices?.userService?.isSuperAdmin(userProfile?.email) || false;
 
     // Show login page if loading or not authenticated
     if (authLoading || !isAuthenticated) {
@@ -29223,7 +29606,8 @@ function App() {
         hasPermission,
         userRole: userProfile?.role || 'receptionist',
         userProfile,
-        currentUser
+        currentUser,
+        isSuperAdmin
     };
 
     return (
