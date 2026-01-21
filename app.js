@@ -3019,6 +3019,16 @@ function VehicleIntake() {
     // Invoices for payment status tracking
     const [invoices, setInvoices] = useState([]);
     
+    // Export modal state
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [exportDateRange, setExportDateRange] = useState('today');
+    const [exportCustomStart, setExportCustomStart] = useState('');
+    const [exportCustomEnd, setExportCustomEnd] = useState('');
+    const [exporting, setExporting] = useState(false);
+    
+    // Scroll navigation state
+    const [showScrollNav, setShowScrollNav] = useState(false);
+    
     // Garage services modal state
     const [showGarageModal, setShowGarageModal] = useState(false);
     const [garageVehicle, setGarageVehicle] = useState(null);
@@ -3058,6 +3068,202 @@ function VehicleIntake() {
         setAlertModal(prev => ({ ...prev, isOpen: false }));
     };
 
+    // Scroll detection for navigation
+    React.useEffect(() => {
+        let scrollTimeout;
+        let isScrolling = false;
+        
+        const handleScroll = () => {
+            if (!isScrolling) {
+                setShowScrollNav(true);
+                isScrolling = true;
+            }
+            
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => {
+                setShowScrollNav(false);
+                isScrolling = false;
+            }, 1500); // Hide 1.5 seconds after scrolling stops
+        };
+        
+        // Use passive listener for better scroll performance
+        window.addEventListener('scroll', handleScroll, { passive: true });
+        return () => {
+            window.removeEventListener('scroll', handleScroll);
+            clearTimeout(scrollTimeout);
+        };
+    }, []);
+
+    // Export intake records to PDF
+    const handleExportRecords = async () => {
+        setExporting(true);
+        try {
+            const now = new Date();
+            let startDate, endDate, rangeLabel;
+            
+            switch (exportDateRange) {
+                case 'today':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+                    rangeLabel = `Today (${startDate.toLocaleDateString()})`;
+                    break;
+                case 'week':
+                    const dayOfWeek = now.getDay();
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+                    endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+                    rangeLabel = `This Week (${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()})`;
+                    break;
+                case 'month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+                    rangeLabel = `This Month (${startDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`;
+                    break;
+                case 'custom':
+                    if (!exportCustomStart || !exportCustomEnd) {
+                        showAlert('Error', 'Please select both start and end dates.', 'error');
+                        setExporting(false);
+                        return;
+                    }
+                    startDate = new Date(exportCustomStart);
+                    endDate = new Date(exportCustomEnd + 'T23:59:59');
+                    rangeLabel = `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+                    break;
+                default:
+                    startDate = new Date(0);
+                    endDate = now;
+                    rangeLabel = 'All Records';
+            }
+            
+            // Filter records by date range
+            const filteredRecords = vehicles.filter(v => {
+                const recordDate = new Date(v.timeIn || v.createdAt);
+                return recordDate >= startDate && recordDate <= endDate;
+            }).sort((a, b) => new Date(b.timeIn || b.createdAt) - new Date(a.timeIn || a.createdAt));
+            
+            if (filteredRecords.length === 0) {
+                showAlert('No Records', 'No intake records found for the selected date range.', 'info');
+                setExporting(false);
+                return;
+            }
+            
+            // Get branding
+            const branding = getBrandingForReceipts();
+            const currencySymbol = branding.currencySymbol || 'KES';
+            
+            // Generate PDF content
+            const pdfContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Intake Records - ${rangeLabel}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; color: #1e293b; background: #fff; }
+        .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #e2e8f0; }
+        .header h1 { font-size: 24px; color: #0f172a; margin-bottom: 5px; }
+        .header .company { font-size: 14px; color: #64748b; margin-bottom: 10px; }
+        .header .date-range { font-size: 16px; font-weight: 600; color: #3b82f6; }
+        .summary { display: flex; justify-content: space-around; margin-bottom: 25px; padding: 15px; background: #f8fafc; border-radius: 8px; }
+        .summary-item { text-align: center; }
+        .summary-item .value { font-size: 24px; font-weight: 700; color: #1e293b; }
+        .summary-item .label { font-size: 12px; color: #64748b; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 11px; }
+        th { background: #1e293b; color: #fff; padding: 10px 8px; text-align: left; font-weight: 600; }
+        td { padding: 10px 8px; border-bottom: 1px solid #e2e8f0; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .plate { font-weight: 600; color: #1e293b; }
+        .status { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; }
+        .status-waiting { background: #fef3c7; color: #92400e; }
+        .status-in-progress { background: #dbeafe; color: #1e40af; }
+        .status-completed { background: #dcfce7; color: #166534; }
+        .footer { margin-top: 30px; text-align: center; font-size: 11px; color: #94a3b8; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+        @media print { body { padding: 15px; } .no-print { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>${branding.businessName || 'EcoSpark Car Wash'}</h1>
+        <div class="company">${branding.businessEmail || ''} ${branding.businessPhone ? '| ' + branding.businessPhone : ''}</div>
+        <div class="date-range">Intake Records: ${rangeLabel}</div>
+    </div>
+    
+    <div class="summary">
+        <div class="summary-item">
+            <div class="value">${filteredRecords.length}</div>
+            <div class="label">Total Records</div>
+        </div>
+        <div class="summary-item">
+            <div class="value">${filteredRecords.filter(r => r.status === 'completed').length}</div>
+            <div class="label">Completed</div>
+        </div>
+        <div class="summary-item">
+            <div class="value">${filteredRecords.filter(r => r.status === 'in-progress').length}</div>
+            <div class="label">In Progress</div>
+        </div>
+        <div class="summary-item">
+            <div class="value">${currencySymbol} ${filteredRecords.reduce((sum, r) => sum + (r.service?.price || 0), 0).toLocaleString()}</div>
+            <div class="label">Total Value</div>
+        </div>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Plate / ID</th>
+                <th>Category</th>
+                <th>Type</th>
+                <th>Customer</th>
+                <th>Phone</th>
+                <th>Service</th>
+                <th>Price</th>
+                <th>Status</th>
+                <th>Date/Time</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${filteredRecords.map((r, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td class="plate">${r.plateNumber || '-'}</td>
+                    <td>${(INTAKE_CATEGORIES.find(c => c.id === r.category)?.label) || r.category || 'Vehicle'}</td>
+                    <td>${r.itemType || r.vehicleType || '-'}</td>
+                    <td>${r.customerName || '-'}</td>
+                    <td>${r.customerPhone || '-'}</td>
+                    <td>${r.service?.name || '-'}</td>
+                    <td>${r.service?.price ? currencySymbol + ' ' + r.service.price.toLocaleString() : '-'}</td>
+                    <td><span class="status status-${r.status || 'waiting'}">${(r.status || 'waiting').toUpperCase()}</span></td>
+                    <td>${r.timeIn ? new Date(r.timeIn).toLocaleString() : '-'}</td>
+                </tr>
+            `).join('')}
+        </tbody>
+    </table>
+    
+    <div class="footer">
+        Generated on ${new Date().toLocaleString()} | ${branding.businessName || 'EcoSpark Car Wash'}
+    </div>
+    
+    <script>window.onload = function() { window.print(); }</script>
+</body>
+</html>`;
+            
+            // Open in new window for printing/saving as PDF
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(pdfContent);
+            printWindow.document.close();
+            
+            setShowExportModal(false);
+            setExportDateRange('today');
+            setExportCustomStart('');
+            setExportCustomEnd('');
+        } catch (err) {
+            console.error('Export error:', err);
+            showAlert('Export Failed', 'Failed to generate export. Please try again.', 'error');
+        } finally {
+            setExporting(false);
+        }
+    };
+
     // Generate next auto-ID for non-vehicle categories
     const generateNextId = (category) => {
         const prefix = {
@@ -3080,12 +3286,24 @@ function VehicleIntake() {
         return `${prefix}-${String(nextNum).padStart(3, '0')}`;
     };
 
-    // Set default service when packages load
+    // Set default service when packages load or category changes
     useEffect(() => {
-        if (servicePackages.length > 0 && !formData.service) {
-            setFormData(prev => ({ ...prev, service: servicePackages[0].id }));
+        if (servicePackages.length > 0) {
+            // Filter services for the current category
+            const filteredServices = servicePackages.filter(service => 
+                !service.appliesTo || 
+                service.appliesTo === 'all' || 
+                service.appliesTo === formData.category
+            );
+            // Set first matching service as default if current service is not valid for category
+            if (filteredServices.length > 0) {
+                const currentServiceValid = filteredServices.some(s => s.id === formData.service);
+                if (!currentServiceValid) {
+                    setFormData(prev => ({ ...prev, service: filteredServices[0].id }));
+                }
+            }
         }
-    }, [servicePackages]);
+    }, [servicePackages, formData.category]);
 
     // Filter vehicles based on search and date
     const getFilteredVehicles = () => {
@@ -4188,6 +4406,27 @@ function VehicleIntake() {
         }
     };
 
+    // Toggle hold status for a queue item
+    const handleToggleHold = async (vehicle) => {
+        const services = window.FirebaseServices;
+        if (!services?.intakeQueueService) {
+            setError('Firebase not ready. Please try again.');
+            return;
+        }
+        
+        try {
+            const newHoldStatus = !vehicle.isOnHold;
+            await services.intakeQueueService.updateQueueItem(vehicle.id, { 
+                isOnHold: newHoldStatus,
+                holdTime: newHoldStatus ? new Date().toISOString() : null
+            });
+            console.log(`✅ Vehicle ${newHoldStatus ? 'placed on hold' : 'resumed'}`);
+        } catch (err) {
+            console.error('Error toggling hold status:', err);
+            setError('Failed to update hold status. Please try again.');
+        }
+    };
+
     // Open assign modal
     const openAssignModal = (vehicle) => {
         setSelectedVehicle(vehicle);
@@ -4708,6 +4947,92 @@ function VehicleIntake() {
 
     return (
         <div className="vehicle-intake">
+            {/* Quick Scroll Navigation - always visible */}
+            <div style={{
+                position: 'fixed',
+                right: '20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                zIndex: 100,
+                background: 'rgba(255,255,255,0.95)',
+                padding: '8px',
+                borderRadius: '12px',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+                border: '1px solid #e2e8f0'
+            }}>
+                <button
+                    onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                    title="Scroll to Top"
+                    style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        background: '#fff',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#64748b',
+                        transition: 'all 0.2s'
+                    }}
+                    onMouseOver={e => { e.currentTarget.style.background = '#3b82f6'; e.currentTarget.style.color = '#fff'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 15l-6-6-6 6"/>
+                    </svg>
+                </button>
+                <button
+                    onClick={() => document.querySelector('.intake-table-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    title="Go to Intake Records"
+                    style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        background: '#fff',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#64748b',
+                        fontSize: '16px',
+                        transition: 'all 0.2s'
+                    }}
+                    onMouseOver={e => { e.currentTarget.style.background = '#10b981'; e.currentTarget.style.color = '#fff'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                >
+                    📋
+                </button>
+                <button
+                    onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })}
+                    title="Scroll to Bottom"
+                    style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        background: '#fff',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#64748b',
+                        transition: 'all 0.2s'
+                    }}
+                    onMouseOver={e => { e.currentTarget.style.background = '#3b82f6'; e.currentTarget.style.color = '#fff'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                </button>
+            </div>
+
             {/* Error Notification */}
             {error && (
                 <div className="intake-error-banner" style={{ 
@@ -4835,12 +5160,34 @@ function VehicleIntake() {
                         queue.filter(v => v != null).map((vehicle, index) => {
                             const existingVisits = vehicle?.existingVisits || 0;
                             const isReturning = vehicle?.isReturningVehicle || existingVisits >= 1;
+                            const isOnHold = vehicle?.isOnHold || false;
                             return (
-                            <div key={vehicle.id} className="queue-card" style={{ borderLeft: isReturning ? '3px solid #16a34a' : undefined }}>
+                            <div 
+                                key={vehicle.id} 
+                                className={`queue-card ${isOnHold ? 'queue-card-on-hold' : ''}`} 
+                                style={{ 
+                                    borderLeft: isOnHold ? '3px solid #f59e0b' : (isReturning ? '3px solid #16a34a' : undefined),
+                                    opacity: isOnHold ? 0.75 : 1,
+                                    background: isOnHold ? '#fef3c7' : undefined
+                                }}
+                            >
                                 <div className="queue-card-header">
                                     <span className="queue-card-plate">
                                         {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber}
-                                        {isReturning && (
+                                        {isOnHold && (
+                                            <span style={{
+                                                marginLeft: '6px',
+                                                fontSize: '9px',
+                                                padding: '2px 6px',
+                                                background: '#fbbf24',
+                                                color: '#78350f',
+                                                borderRadius: '8px',
+                                                fontWeight: '600'
+                                            }}>
+                                                ⏸️ ON HOLD
+                                            </span>
+                                        )}
+                                        {isReturning && !isOnHold && (
                                             <span style={{
                                                 marginLeft: '6px',
                                                 fontSize: '9px',
@@ -4870,14 +5217,31 @@ function VehicleIntake() {
                                 </div>
                                 <div className="queue-card-actions">
                                     <button 
+                                        className={`queue-action-btn ${isOnHold ? 'queue-action-resume' : 'queue-action-hold'}`}
+                                        onClick={() => handleToggleHold(vehicle)}
+                                        title={isOnHold ? 'Resume' : 'Put on Hold'}
+                                        style={{
+                                            background: isOnHold ? '#22c55e' : '#f59e0b',
+                                            color: 'white',
+                                            border: 'none',
+                                            minWidth: '38px'
+                                        }}
+                                    >
+                                        {isOnHold ? Icons.play : Icons.pause}
+                                    </button>
+                                    <button 
                                         className="queue-action-btn queue-action-primary"
                                         onClick={() => openAssignModal(vehicle)}
+                                        disabled={isOnHold}
+                                        title={isOnHold ? 'Resume first to assign' : 'Assign Bay'}
                                     >
                                         Assign Bay
                                     </button>
                                     <button 
                                         className="queue-action-btn"
                                         onClick={() => handleSendToGarage(vehicle)}
+                                        disabled={isOnHold}
+                                        title={isOnHold ? 'Resume first to send to garage' : 'Send to Garage'}
                                     >
                                         Garage
                                     </button>
@@ -4964,6 +5328,26 @@ function VehicleIntake() {
                                 </button>
                             ))}
                         </div>
+                        
+                        {/* Export Button */}
+                        <button
+                            onClick={() => setShowExportModal(true)}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '7px 14px',
+                                background: '#10b981',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            {Icons.download} Export
+                        </button>
                     </div>
                 </div>
                 
@@ -5560,17 +5944,25 @@ function VehicleIntake() {
                                     </select>
                                 </div>
                                 <div className="form-group">
-                                    <label>Service</label>
+                                    <label>Service *</label>
                                     <select 
                                         value={formData.service}
                                         onChange={e => setFormData({...formData, service: e.target.value})}
                                     >
-                                        {servicePackages.length > 0 ? servicePackages.map(service => (
+                                        {servicePackages.filter(service => 
+                                            !service.appliesTo || 
+                                            service.appliesTo === 'all' || 
+                                            service.appliesTo === formData.category
+                                        ).length > 0 ? servicePackages.filter(service => 
+                                            !service.appliesTo || 
+                                            service.appliesTo === 'all' || 
+                                            service.appliesTo === formData.category
+                                        ).map(service => (
                                             <option key={service.id} value={service.id}>
                                                 {service.name} - {getBrandingForReceipts().currencySymbol || 'KES'} {service.price?.toLocaleString()}
                                             </option>
                                         )) : (
-                                            <option value="">Loading packages...</option>
+                                            <option value="">No services for this category</option>
                                         )}
                                     </select>
                                 </div>
@@ -5601,12 +5993,16 @@ function VehicleIntake() {
                                     />
                                 </div>
                                 <div className="form-group">
-                                    <label>Phone</label>
+                                    <label>Phone Number *</label>
                                     <input 
                                         type="text" 
                                         value={formData.customerPhone}
                                         onChange={e => setFormData({...formData, customerPhone: e.target.value})}
-                                        placeholder="Optional"
+                                        placeholder="Required"
+                                        required
+                                        style={{
+                                            borderColor: !formData.customerPhone?.trim() ? '#f87171' : undefined
+                                        }}
                                     />
                                 </div>
                             </div>
@@ -5618,7 +6014,7 @@ function VehicleIntake() {
                             <button 
                                 className="modal-btn modal-btn-primary" 
                                 onClick={handleAddVehicle}
-                                disabled={formData.category === 'vehicle' && !formData.plateNumber.trim()}
+                                disabled={(formData.category === 'vehicle' && !formData.plateNumber.trim()) || !formData.customerPhone?.trim()}
                             >
                                 Add to Queue
                             </button>
@@ -6809,6 +7205,101 @@ function VehicleIntake() {
                 </div>
             )}
 
+            {/* Export Records Modal */}
+            {showExportModal && (
+                <div className="modal-overlay" onClick={() => setShowExportModal(false)}>
+                    <div className="modal modal-small" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+                        <div className="modal-header">
+                            <h2>📄 Export Intake Records</h2>
+                            <button className="modal-close" onClick={() => setShowExportModal(false)}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label>Select Date Range</label>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {[
+                                        { id: 'today', label: '📅 Today', desc: 'Current day records' },
+                                        { id: 'week', label: '📆 This Week', desc: 'Sunday to today' },
+                                        { id: 'month', label: '🗓️ This Month', desc: 'First of month to today' },
+                                        { id: 'custom', label: '📝 Custom Range', desc: 'Select specific dates' }
+                                    ].map(option => (
+                                        <button
+                                            key={option.id}
+                                            onClick={() => setExportDateRange(option.id)}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                padding: '12px 16px',
+                                                border: exportDateRange === option.id ? '2px solid #10b981' : '1px solid #e2e8f0',
+                                                borderRadius: '8px',
+                                                background: exportDateRange === option.id ? '#ecfdf5' : '#fff',
+                                                cursor: 'pointer',
+                                                textAlign: 'left'
+                                            }}
+                                        >
+                                            <div>
+                                                <div style={{ fontWeight: '600', color: '#1e293b', fontSize: '14px' }}>{option.label}</div>
+                                                <div style={{ fontSize: '11px', color: '#64748b' }}>{option.desc}</div>
+                                            </div>
+                                            {exportDateRange === option.id && (
+                                                <span style={{ color: '#10b981', fontWeight: 'bold' }}>✓</span>
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            {/* Custom Date Range Inputs */}
+                            {exportDateRange === 'custom' && (
+                                <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                                    <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                                        <label>Start Date</label>
+                                        <input
+                                            type="date"
+                                            value={exportCustomStart}
+                                            onChange={e => setExportCustomStart(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        />
+                                    </div>
+                                    <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                                        <label>End Date</label>
+                                        <input
+                                            type="date"
+                                            value={exportCustomEnd}
+                                            onChange={e => setExportCustomEnd(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div style={{ marginTop: '16px', padding: '12px', background: '#f8fafc', borderRadius: '8px', fontSize: '12px', color: '#64748b' }}>
+                                💡 The export will open in a new window. Use your browser's print function (Ctrl+P) to save as PDF.
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button 
+                                className="modal-btn modal-btn-secondary" 
+                                onClick={() => setShowExportModal(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                className="modal-btn modal-btn-primary" 
+                                onClick={handleExportRecords}
+                                disabled={exporting || (exportDateRange === 'custom' && (!exportCustomStart || !exportCustomEnd))}
+                                style={{ background: '#10b981' }}
+                            >
+                                {exporting ? 'Generating...' : '📄 Export PDF'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Alert Modal */}
             <AlertModal
                 isOpen={alertModal.isOpen}
@@ -6837,7 +7328,8 @@ function ServicePackages() {
         price: '',
         description: '',
         features: '',
-        category: 'standard'
+        category: 'standard',
+        appliesTo: 'all'
     });
     const [notification, setNotification] = useState(null);
 
@@ -6891,7 +7383,8 @@ function ServicePackages() {
             price: '',
             description: '',
             features: '',
-            category: 'standard'
+            category: 'standard',
+            appliesTo: 'all'
         });
         setShowModal(true);
     };
@@ -6904,7 +7397,8 @@ function ServicePackages() {
             price: pkg.price.toString(),
             description: pkg.description || '',
             features: Array.isArray(pkg.features) ? pkg.features.join(', ') : '',
-            category: pkg.category || 'standard'
+            category: pkg.category || 'standard',
+            appliesTo: pkg.appliesTo || 'all'
         });
         setShowModal(true);
     };
@@ -6928,6 +7422,7 @@ function ServicePackages() {
             description: formData.description.trim(),
             features: formData.features.split(',').map(f => f.trim()).filter(f => f),
             category: formData.category,
+            appliesTo: formData.appliesTo || 'all',
             isActive: true
         };
 
@@ -7088,12 +7583,31 @@ function ServicePackages() {
                     ) : packages.map(pkg => (
                         <div key={pkg.id} className={`package-card ${!pkg.isActive ? 'inactive' : ''}`}>
                             <div className="package-header">
-                                <span 
-                                    className="package-category" 
-                                    style={{ backgroundColor: getCategoryColor(pkg.category) }}
-                                >
-                                    {pkg.category || 'standard'}
-                                </span>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                    <span 
+                                        className="package-category" 
+                                        style={{ backgroundColor: getCategoryColor(pkg.category) }}
+                                    >
+                                        {pkg.category || 'standard'}
+                                    </span>
+                                    {pkg.appliesTo && pkg.appliesTo !== 'all' && (
+                                        <span style={{ 
+                                            fontSize: '10px', 
+                                            padding: '2px 8px', 
+                                            borderRadius: '10px', 
+                                            background: 'var(--bg-secondary)',
+                                            color: 'var(--text-secondary)',
+                                            border: '1px solid var(--border-color)'
+                                        }}>
+                                            {pkg.appliesTo === 'vehicle' && '🚗'}
+                                            {pkg.appliesTo === 'motorbike' && '🏍️'}
+                                            {pkg.appliesTo === 'bicycle' && '🚲'}
+                                            {pkg.appliesTo === 'carpet' && '🧹'}
+                                            {pkg.appliesTo === 'other' && '📦'}
+                                            {' '}{pkg.appliesTo}
+                                        </span>
+                                    )}
+                                </div>
                                 <div className="package-actions">
                                     <button 
                                         className="icon-btn" 
@@ -7196,6 +7710,22 @@ function ServicePackages() {
                                         <option value="special">Special</option>
                                     </select>
                                 </div>
+                            </div>
+                            <div className="form-group">
+                                <label>Applies To (Item Type)</label>
+                                <select
+                                    name="appliesTo"
+                                    value={formData.appliesTo || 'all'}
+                                    onChange={handleInputChange}
+                                    className="form-select"
+                                >
+                                    <option value="all">🌐 All Categories</option>
+                                    <option value="vehicle">🚗 Vehicles (Cars)</option>
+                                    <option value="motorbike">🏍️ Motorbikes</option>
+                                    <option value="bicycle">🚲 Bicycles</option>
+                                    <option value="carpet">🧹 Carpets</option>
+                                    <option value="other">📦 Other Items</option>
+                                </select>
                             </div>
                             <div className="form-group">
                                 <label>Description</label>
