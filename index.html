@@ -8,6 +8,11 @@
         html, body { 
             margin: 0; 
             padding: 0;
+            background: #1e3a5f;
+        }
+        #root {
+            min-height: 100vh;
+            background: #1e3a5f;
         }
     </style>
     <link rel="stylesheet" href="styles.css">
@@ -21,9 +26,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            background: #1e3a5f;
             z-index: 9999;
-            transition: opacity 0.4s ease, visibility 0.4s ease;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
         }
         .loading-screen.hidden {
             opacity: 0;
@@ -182,15 +187,15 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Safety: Remove loading screen after 3 seconds no matter what -->
+    <!-- Safety: Remove loading screen after 5 seconds no matter what -->
     <script>
         setTimeout(function() {
             var ls = document.getElementById('loadingScreen');
-            if (ls) {
+            if (ls && !ls.classList.contains('hidden')) {
                 ls.classList.add('hidden');
-                setTimeout(function() { if (ls.parentNode) ls.remove(); }, 300);
+                setTimeout(function() { if (ls.parentNode) ls.remove(); }, 500);
             }
-        }, 3000);
+        }, 5000);
     </script>
     
     <!-- Firebase -->
@@ -213,9 +218,9 @@
                     const loadingScreen = document.getElementById('loadingScreen');
                     if (loadingScreen) {
                         loadingScreen.classList.add('hidden');
-                        setTimeout(() => loadingScreen.remove(), 300);
+                        setTimeout(() => loadingScreen.remove(), 500);
                     }
-                }, 100);
+                }, 300);
             })
             .catch(err => {
                 console.error('App load error:', err);
