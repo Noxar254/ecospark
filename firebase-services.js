@@ -851,6 +851,30 @@ export const billingService = {
             console.warn('Could not record visit on payment:', visitErr);
           }
         }
+        
+        // Update wash history payment status if this is a wash invoice
+        if (invoiceData.source === 'wash') {
+          try {
+            // Try to find and update wash history by washHistoryId (stored in invoice) or by matching criteria
+            if (invoiceData.washHistoryId) {
+              await washBayService.updateWashHistoryPaymentStatus(invoiceData.washHistoryId, 'paid', paymentData);
+              console.log('✅ Updated wash history payment status via washHistoryId:', invoiceData.washHistoryId);
+            } else {
+              // Fallback: find by plate number, bay, and time
+              const findResult = await washBayService.findWashHistoryRecord(
+                invoiceData.plateNumber,
+                invoiceData.bayId,
+                invoiceData.createdAt
+              );
+              if (findResult.success && findResult.data) {
+                await washBayService.updateWashHistoryPaymentStatus(findResult.data.id, 'paid', paymentData);
+                console.log('✅ Updated wash history payment status via matching:', findResult.data.id);
+              }
+            }
+          } catch (washHistoryErr) {
+            console.warn('Could not update wash history payment status:', washHistoryErr);
+          }
+        }
       }
       
       return { success: true };
@@ -1349,6 +1373,7 @@ export const washBayService = {
       const servicePrice = safeNum(rawService, vehicle.servicePrice || cData.servicePrice || 0);
       
       // Build history record - all fields guaranteed to have values
+      const washHistoryId = String(now.getTime());
       const historyRecord = sanitizeForFirebase({
         bayId: safeStr(bayId, 'unknown'),
         bayName: (bayData && bayData.name) ? safeStr(bayData.name) : ('Bay ' + bayId),
@@ -1368,11 +1393,13 @@ export const washBayService = {
         duration: durationMins,
         notes: safeStr(cData.notes, ''),
         completedBy: safeStr(cData.completedBy, ''),
-        timestamp: endTimeStr
+        timestamp: endTimeStr,
+        paymentStatus: 'pending',
+        washHistoryId: washHistoryId
       });
       
       // Save to wash history
-      const historyRef = ref(realtimeDb, 'washHistory/' + now.getTime());
+      const historyRef = ref(realtimeDb, 'washHistory/' + washHistoryId);
       await set(historyRef, historyRecord);
       
       // Clear the bay
@@ -1383,9 +1410,65 @@ export const washBayService = {
         lastUpdated: endTimeStr
       });
       
-      return { success: true, duration: durationMins };
+      return { success: true, duration: durationMins, washHistoryId: washHistoryId };
     } catch (error) {
       console.error('Error completing wash:', error);
+      return { success: false, error: String(error.message || error) };
+    }
+  },
+
+  // Update wash history payment status
+  async updateWashHistoryPaymentStatus(washHistoryId, paymentStatus, paymentData) {
+    try {
+      if (!washHistoryId) return { success: false, error: 'Wash history ID is required' };
+      const historyRef = ref(realtimeDb, 'washHistory/' + washHistoryId);
+      const snapshot = await get(historyRef);
+      if (!snapshot.exists()) {
+        return { success: false, error: 'Wash history record not found' };
+      }
+      await update(historyRef, {
+        paymentStatus: paymentStatus || 'paid',
+        paidAt: paymentData?.paidAt || new Date().toISOString(),
+        paymentMethod: paymentData?.method || 'cash',
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating wash history payment status:', error);
+      return { success: false, error: String(error.message || error) };
+    }
+  },
+
+  // Find wash history by criteria (plate number, bay, time)
+  async findWashHistoryRecord(plateNumber, bayId, timestamp) {
+    try {
+      const historyRef = ref(realtimeDb, 'washHistory');
+      const snapshot = await get(historyRef);
+      if (!snapshot.exists()) return { success: true, data: null };
+      
+      const data = snapshot.val();
+      const targetTime = timestamp ? new Date(timestamp).getTime() : null;
+      
+      // Find matching record
+      for (const [id, record] of Object.entries(data)) {
+        if (record.vehicle?.plateNumber === plateNumber) {
+          // If bayId matches, it's a strong match
+          if (bayId && record.bayId === bayId) {
+            // If timestamp provided, check within 5 minute window
+            if (targetTime) {
+              const recordTime = new Date(record.endTime || record.timestamp).getTime();
+              if (Math.abs(recordTime - targetTime) < 300000) {
+                return { success: true, data: { id, ...record } };
+              }
+            } else {
+              return { success: true, data: { id, ...record } };
+            }
+          }
+        }
+      }
+      return { success: true, data: null };
+    } catch (error) {
+      console.error('Error finding wash history record:', error);
       return { success: false, error: String(error.message || error) };
     }
   },

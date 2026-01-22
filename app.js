@@ -18884,6 +18884,9 @@ function WashBaysContent() {
             if (!completeResult.success) {
                 throw new Error(completeResult.error || 'Failed to complete wash');
             }
+            
+            // Get the washHistoryId from completeResult for reliable invoice linking
+            const washHistoryId = completeResult.washHistoryId || null;
 
             // 4. Create invoice for the completed wash
             const washPrice = typeof currentVehicle.service === 'object' 
@@ -18906,9 +18909,10 @@ function WashBaysContent() {
                     totalAmount: washPrice,
                     assignedTo: currentVehicle.assignedBy || '',
                     startTime: bay.startTime || new Date().toISOString(),
-                    // Add recordId and visitNumber for reliable matching
+                    // Add recordId, visitNumber, and washHistoryId for reliable matching
                     washRecordId: currentVehicle.recordId || null,
-                    visitNumber: currentVehicle.visitNumber || 1
+                    visitNumber: currentVehicle.visitNumber || 1,
+                    washHistoryId: washHistoryId
                 });
             }
             
@@ -19709,6 +19713,7 @@ function WashBaysContent() {
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Started</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Completed</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Payment</th>
                             </tr>
                         </thead>
@@ -19761,10 +19766,21 @@ function WashBaysContent() {
                                     completedRecords = completedRecords.filter(r => r.bayId === historyBayFilter);
                                 }
                                 
-                                // Payment filter - check against invoices
+                                // Payment filter - FIRST check record's own paymentStatus, then fallback to invoice matching
                                 if (historyPaymentFilter !== 'all') {
                                     completedRecords = completedRecords.filter(record => {
+                                        // First check record's own paymentStatus (most reliable)
+                                        if (record.paymentStatus === 'paid') {
+                                            return historyPaymentFilter === 'paid';
+                                        }
+                                        if (record.paymentStatus === 'pending') {
+                                            return historyPaymentFilter === 'pending';
+                                        }
+                                        // Fallback to invoice matching for older records without paymentStatus
                                         const matchingInvoice = invoices.find(inv => {
+                                            if (inv.washHistoryId && (record.washHistoryId || record.id)) {
+                                                return inv.washHistoryId === record.washHistoryId || inv.washHistoryId === record.id;
+                                            }
                                             if (inv.washRecordId && record.vehicle?.recordId) {
                                                 return inv.washRecordId === record.vehicle.recordId;
                                             }
@@ -19848,6 +19864,18 @@ function WashBaysContent() {
                                                 <span style={{
                                                     padding: '4px 10px',
                                                     borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#dbeafe',
+                                                    color: '#1d4ed8'
+                                                }}>
+                                                    🚿 Washing
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    borderRadius: '12px',
                                                     fontSize: '12px',
                                                     fontWeight: '500',
                                                     backgroundColor: '#fef3c7',
@@ -19887,20 +19915,29 @@ function WashBaysContent() {
                                     const serviceName = getServiceName(record.vehicle);
                                     const servicePrice = getServicePrice(record.vehicle);
                                     
-                                    // Find matching invoice - try multiple matching strategies
-                                    const matchingInvoice = invoices.find(inv => {
-                                        // Match by washRecordId if available (most reliable)
-                                        if (inv.washRecordId && record.vehicle?.recordId) {
-                                            return inv.washRecordId === record.vehicle.recordId;
-                                        }
-                                        // Match by plate number + bay + time window
-                                        return inv.plateNumber === record.vehicle?.plateNumber &&
-                                            inv.source === 'wash' &&
-                                            inv.bayId === record.bayId &&
-                                            // Match within 5 minutes of the wash completion
-                                            Math.abs(new Date(inv.createdAt) - new Date(record.endTime || record.timestamp)) < 300000;
-                                    });
-                                    const isPaid = matchingInvoice?.paymentStatus === 'paid';
+                                    // Check payment status - FIRST check the record's own paymentStatus field (most reliable)
+                                    let isPaid = record.paymentStatus === 'paid';
+                                    
+                                    // Fallback: Find matching invoice if record doesn't have paymentStatus
+                                    if (!isPaid && record.paymentStatus !== 'paid') {
+                                        const matchingInvoice = invoices.find(inv => {
+                                            // Match by washHistoryId if available (most reliable)
+                                            if (inv.washHistoryId && (record.washHistoryId || record.id)) {
+                                                return inv.washHistoryId === record.washHistoryId || inv.washHistoryId === record.id;
+                                            }
+                                            // Match by washRecordId if available
+                                            if (inv.washRecordId && record.vehicle?.recordId) {
+                                                return inv.washRecordId === record.vehicle.recordId;
+                                            }
+                                            // Match by plate number + bay + time window
+                                            return inv.plateNumber === record.vehicle?.plateNumber &&
+                                                inv.source === 'wash' &&
+                                                inv.bayId === record.bayId &&
+                                                // Match within 5 minutes of the wash completion
+                                                Math.abs(new Date(inv.createdAt) - new Date(record.endTime || record.timestamp)) < 300000;
+                                        });
+                                        isPaid = matchingInvoice?.paymentStatus === 'paid';
+                                    }
                                     
                                     return (
                                     <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
@@ -19928,6 +19965,35 @@ function WashBaysContent() {
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', fontWeight: '600', color: '#3b82f6' }}>
                                             {record.duration ? `${record.duration} min` : '-'}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            {isPaid ? (
+                                                <span style={{
+                                                    padding: '4px 12px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#d1fae5',
+                                                    color: '#059669'
+                                                }}>
+                                                    ✓ Cleared
+                                                </span>
+                                            ) : (
+                                                <span style={{
+                                                    padding: '4px 12px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#fef3c7',
+                                                    color: '#d97706'
+                                                }}>
+                                                    {(record.vehicle?.vehicleType?.toLowerCase() === 'carpet' || 
+                                                      record.vehicle?.category?.toLowerCase() === 'carpet' ||
+                                                      serviceName?.toLowerCase().includes('carpet')) 
+                                                        ? '📦 Storage' 
+                                                        : '🅿️ Parking'}
+                                                </span>
+                                            )}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             {isPaid ? (
