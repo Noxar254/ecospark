@@ -23959,6 +23959,20 @@ function BillingModule() {
     const [selectedIntakeRecord, setSelectedIntakeRecord] = useState(null);
     const billingPlateSearchTimeout = React.useRef(null);
     
+    // Existing pending invoice detection for manual billing
+    const [existingPendingInvoice, setExistingPendingInvoice] = useState(null);
+    const [applyToExisting, setApplyToExisting] = useState(true); // Default to apply to existing
+    
+    // Delete confirmation modal with reason (Anti-theft feature)
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState(null);
+    const [deleteReason, setDeleteReason] = useState('');
+    const [deleteLoading, setDeleteLoading] = useState(false);
+    
+    // Activity logs for billing audit trail
+    const [billingActivityLogs, setBillingActivityLogs] = useState([]);
+    const [activityLogsLoading, setActivityLogsLoading] = useState(false);
+    
     // Service packages for billing (car wash services)
     const [servicePackages, setServicePackages] = useState([]);
     
@@ -24701,19 +24715,11 @@ function BillingModule() {
             });
             
             if (result.success) {
-                // Log activity
-                if (services.activityService) {
-                    const currentUser = window.currentUserProfile;
-                    services.activityService.logActivity({
-                        type: 'billing',
-                        action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (Cash)`,
-                        status: 'success',
-                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
-                        loggedByEmail: currentUser?.email || null,
-                        loggedByRole: currentUser?.role || null
-                    });
-                }
+                // Log strictly to billing activity log
+                await logBillingActivity('PAYMENT_RECEIVED', selectedInvoice, { 
+                    paymentMethod: 'cash',
+                    amount: selectedInvoice.totalAmount
+                });
                 
                 // Award loyalty points if customer has phone number
                 if (selectedInvoice.customerPhone) {
@@ -24728,7 +24734,6 @@ function BillingModule() {
                                     pointsToAward, 
                                     `Invoice ${selectedInvoice.invoiceNumber} payment`
                                 );
-                                // Update invoice with points earned
                                 await services.billingService.updateInvoice(selectedInvoice.id, {
                                     customerId: customerResult.data.id,
                                     pointsEarned: pointsToAward
@@ -24756,7 +24761,6 @@ function BillingModule() {
     const handleMpesaPayment = async () => {
         if (!selectedInvoice || !mpesaPhone) return;
         
-        // Validate phone number (Kenyan format)
         const phoneRegex = /^(?:254|\+254|0)?([17]\d{8})$/;
         if (!phoneRegex.test(mpesaPhone.replace(/\s/g, ''))) {
             setError('Please enter a valid Kenyan phone number');
@@ -24783,13 +24787,20 @@ function BillingModule() {
                     message: 'STK Push sent! Please check your phone and enter your M-Pesa PIN.'
                 });
                 
-                // Subscribe to payment status
                 const unsubPayment = services.billingService.subscribeToMpesaPayment(result.paymentId, (payment) => {
                     if (payment.status === 'completed') {
                         setMpesaStatus({ 
                             status: 'success', 
                             message: `Payment successful! Receipt: ${payment.mpesaReceiptNumber}` 
                         });
+                        
+                        // Log success
+                        logBillingActivity('PAYMENT_RECEIVED', selectedInvoice, {
+                            paymentMethod: 'm-pesa',
+                            mpesaCode: payment.mpesaReceiptNumber,
+                            mpesaPhone: formattedPhone
+                        });
+
                         setSuccessMessage('M-Pesa payment received!');
                         setTimeout(() => {
                             setShowMpesaModal(false);
@@ -24868,19 +24879,12 @@ function BillingModule() {
             });
             
             if (result.success) {
-                // Log activity
-                if (services.activityService) {
-                    const currentUser = window.currentUserProfile;
-                    services.activityService.logActivity({
-                        type: 'billing',
-                        action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (M-Pesa: ${manualMpesaCode.trim().toUpperCase()})`,
-                        status: 'success',
-                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
-                        loggedByEmail: currentUser?.email || null,
-                        loggedByRole: currentUser?.role || null
-                    });
-                }
+                // Log billing activity
+                await logBillingActivity('PAYMENT_RECEIVED', selectedInvoice, { 
+                    paymentMethod: 'm-pesa',
+                    mpesaCode: manualMpesaCode.trim().toUpperCase(),
+                    mpesaPhone: mpesaPhone || null
+                });
                 
                 setSuccessMessage('M-Pesa payment recorded successfully!');
                 setShowMpesaModal(false);
@@ -24917,19 +24921,12 @@ function BillingModule() {
             });
             
             if (result.success) {
-                // Log activity
-                if (services.activityService) {
-                    const currentUser = window.currentUserProfile;
-                    services.activityService.logActivity({
-                        type: 'billing',
-                        action: 'Payment Received',
-                        details: `Invoice ${selectedInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${selectedInvoice.totalAmount?.toLocaleString()} (Card${cardDetails.lastFourDigits ? ` ****${cardDetails.lastFourDigits}` : ''})`,
-                        status: 'success',
-                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
-                        loggedByEmail: currentUser?.email || null,
-                        loggedByRole: currentUser?.role || null
-                    });
-                }
+                // Log billing activity
+                await logBillingActivity('PAYMENT_RECEIVED', selectedInvoice, { 
+                    paymentMethod: 'card',
+                    cardLastFour: cardDetails.lastFourDigits || null,
+                    transactionRef: cardDetails.transactionRef.trim()
+                });
                 
                 setSuccessMessage('Card payment recorded successfully!');
                 setShowCardModal(false);
@@ -24952,29 +24949,140 @@ function BillingModule() {
     };
 
     // Delete invoice
-    const handleDeleteInvoice = async (invoice) => {
-        showAlert(
-            'Delete Invoice',
-            `Delete invoice ${invoice.invoiceNumber}? This action cannot be undone.`,
-            'warning',
-            async () => {
-                setActionLoading(true);
-                try {
-                    const services = window.FirebaseServices;
-                    const result = await services.billingService.deleteInvoice(invoice.id);
-                    if (result.success) {
-                        setSuccessMessage('Invoice deleted successfully');
-                    } else {
-                        setError(result.error || 'Failed to delete invoice');
-                    }
-                } catch (err) {
-                    setError('Failed to delete invoice');
-                } finally {
-                    setActionLoading(false);
+    // Open delete confirmation modal (Anti-theft: requires reason)
+    const handleDeleteInvoice = (invoice) => {
+        setDeleteTarget(invoice);
+        setDeleteReason('');
+        setShowDeleteModal(true);
+    };
+    
+    // Confirm delete with reason and log activity
+    const confirmDeleteInvoice = async () => {
+        if (!deleteTarget || !deleteReason.trim()) {
+            setError('Please provide a reason for deletion');
+            return;
+        }
+        
+        if (deleteReason.trim().length < 10) {
+            setError('Reason must be at least 10 characters');
+            return;
+        }
+        
+        setDeleteLoading(true);
+        try {
+            const services = window.FirebaseServices;
+
+            // Log activity first (Anti-Theft intent)
+            // We pass the reason and special action 'DELETE_INVOICE'
+            await logBillingActivity('DELETE_INVOICE', deleteTarget, {
+                reason: deleteReason.trim()
+            });
+            
+            // Now delete the invoice
+            const result = await services.billingService.deleteInvoice(deleteTarget.id);
+            if (result.success) {
+                setSuccessMessage('Invoice deleted. Activity logged for audit.');
+                setShowDeleteModal(false);
+                setDeleteTarget(null);
+                setDeleteReason('');
+                // Refresh activity logs if on activity tab
+                if (activeTab === 'activity') {
+                    loadBillingActivityLogs();
                 }
-            },
-            true
-        );
+            } else {
+                setError(result.error || 'Failed to delete invoice');
+            }
+        } catch (err) {
+            console.error('Delete error:', err);
+            setError('Failed to delete invoice: ' + err.message);
+        } finally {
+            setDeleteLoading(false);
+        }
+    };
+    
+    // Load billing activity logs
+    const loadBillingActivityLogs = async () => {
+        setActivityLogsLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const { db, collection, getDocs, query, orderBy, limit } = services.firestore;
+            const logsQuery = query(
+                collection(db, 'billing_activity_logs'),
+                orderBy('timestamp', 'desc'),
+                limit(100)
+            );
+            const snapshot = await getDocs(logsQuery);
+            const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setBillingActivityLogs(logs);
+        } catch (err) {
+            console.error('Failed to load activity logs:', err);
+        } finally {
+            setActivityLogsLoading(false);
+        }
+    };
+    
+    // Load activity logs when switching to activity tab
+    useEffect(() => {
+        if (activeTab === 'activity') {
+            loadBillingActivityLogs();
+        }
+    }, [activeTab]);
+    
+    // Helper function to log billing activity (payments, deletions, etc.)
+    const logBillingActivity = async (action, invoice, extraData = {}) => {
+        try {
+            const services = window.FirebaseServices;
+            const authUser = services.auth?.currentUser;
+            const userProfile = window.currentUserProfile;
+            
+            // Robust user identification
+            const userEmail = authUser?.email || userProfile?.email || 'No email';
+            // Try to get a real name, fallback to email prefix, then 'User'
+            const userName = userProfile?.name || authUser?.displayName || (userEmail.indexOf('@') > 0 ? userEmail.split('@')[0] : 'User');
+            const userId = authUser?.uid || userProfile?.id || 'unknown';
+            
+            const activityLog = {
+                action: action, // 'PAYMENT_RECEIVED', 'DELETE_INVOICE', 'PAYMENT_REVERTED'
+                invoiceId: invoice.id,
+                invoiceNumber: invoice.invoiceNumber || invoice.id?.slice(0, 8).toUpperCase(),
+                invoiceData: {
+                    customerName: invoice.customerName || 'Walk-in',
+                    customerPhone: invoice.customerPhone || '',
+                    plateNumber: invoice.plateNumber || '',
+                    totalAmount: invoice.totalAmount || 0,
+                    paymentStatus: invoice.paymentStatus || 'unpaid',
+                    // Prioritize passed payment method, else invoice's current method
+                    paymentMethod: extraData.paymentMethod || invoice.paymentMethod || '',
+                    source: invoice.source || 'wash',
+                    // Store strict values if provided
+                    mpesaCode: extraData.mpesaCode || invoice.mpesaCode || '',
+                    transactionRef: extraData.transactionRef || invoice.transactionRef || ''
+                },
+                ...extraData, // Spread extra data like reason, codes etc.
+                // Unified user identity field
+                processedBy: {
+                    uid: userId,
+                    email: userEmail,
+                    displayName: userName
+                },
+                // Backward compatibility for deletion logs if needed by other tools
+                deletedBy: action === 'DELETE_INVOICE' ? {
+                    uid: userId,
+                    email: userEmail,
+                    displayName: userName
+                } : null,
+                
+                timestamp: new Date().toISOString(),
+                date: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+                time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            };
+            
+            const { db, collection, addDoc } = services.firestore;
+            await addDoc(collection(db, 'billing_activity_logs'), activityLog);
+            console.log('Activity logged:', action);
+        } catch (err) {
+            console.error('Failed to log billing activity:', err);
+        }
     };
 
     // Cancel/Revert payment to unpaid
@@ -24989,7 +25097,12 @@ function BillingModule() {
                     const services = window.FirebaseServices;
                     const result = await services.billingService.revertToUnpaid(invoice.id);
                     if (result.success) {
+                        // Log the reversion
+                        await logBillingActivity('PAYMENT_REVERTED', invoice);
+                        
                         setSuccessMessage('Payment cancelled - invoice set to unpaid');
+                        // Refresh if needed
+                        if (activeTab === 'activity') loadBillingActivityLogs();
                     } else {
                         setError(result.error || 'Failed to cancel payment');
                     }
@@ -25215,6 +25328,7 @@ function BillingModule() {
         if (!searchTerm || searchTerm.length < 2) {
             setBillingPlateSearchResults([]);
             setShowBillingPlateSearch(false);
+            setExistingPendingInvoice(null);
             return;
         }
         
@@ -25227,6 +25341,19 @@ function BillingModule() {
                 setBillingPlateSearchResults(result.data);
                 setShowBillingPlateSearch(result.data.length > 0);
             }
+            
+            // Also search for existing pending invoices for this plate
+            const plateUpper = searchTerm.toUpperCase();
+            const existingPending = pendingInvoices.find(inv => 
+                inv.plateNumber?.toUpperCase() === plateUpper && 
+                (inv.paymentStatus === 'unpaid' || inv.paymentStatus === 'pending' || !inv.paymentStatus)
+            );
+            setExistingPendingInvoice(existingPending || null);
+            if (existingPending) {
+                setApplyToExisting(true); // Default to applying to existing
+                // Auto-set payment status to 'paid' since we're applying to existing
+                setManualBillingData(prev => ({ ...prev, paymentStatus: 'paid', paymentMethod: 'cash' }));
+            }
         } catch (err) {
             console.error('Error searching vehicles for billing:', err);
         }
@@ -25236,6 +25363,7 @@ function BillingModule() {
     const handleBillingPlateInputChange = (value) => {
         setManualBillingData(prev => ({ ...prev, plateNumber: value }));
         setSelectedIntakeRecord(null);
+        setExistingPendingInvoice(null);
         
         // Clear previous timeout
         if (billingPlateSearchTimeout.current) {
@@ -25260,16 +25388,32 @@ function BillingModule() {
             source: record.category === 'carpet' ? 'wash' : (record.source || prev.source)
         }));
         setShowBillingPlateSearch(false);
+        
+        // Check for existing pending invoice for this plate
+        const plateUpper = record.plateNumber?.toUpperCase();
+        const existingPending = pendingInvoices.find(inv => 
+            inv.plateNumber?.toUpperCase() === plateUpper && 
+            (inv.paymentStatus === 'unpaid' || inv.paymentStatus === 'pending' || !inv.paymentStatus)
+        );
+        setExistingPendingInvoice(existingPending || null);
+        if (existingPending) {
+            setApplyToExisting(true);
+            // Auto-set payment status to 'paid' since we're applying to existing
+            setManualBillingData(prev => ({ ...prev, paymentStatus: 'paid', paymentMethod: 'cash' }));
+        }
     };
 
     // Clear selected intake record
     const clearSelectedIntakeRecord = () => {
         setSelectedIntakeRecord(null);
+        setExistingPendingInvoice(null);
+        setApplyToExisting(true);
         setManualBillingData(prev => ({
             ...prev,
             customerName: '',
             customerPhone: '',
-            vehicleType: 'Sedan'
+            vehicleType: 'Sedan',
+            paymentStatus: 'unpaid' // Reset to default unpaid state
         }));
     };
 
@@ -25307,99 +25451,194 @@ function BillingModule() {
             return;
         }
         
-        const selectedServices = getSelectedServicesDetails();
-        if (selectedServices.length === 0) {
-            setError('Please select at least one service');
-            return;
+        // If applying to existing invoice, we don't need services selected
+        if (!applyToExisting || !existingPendingInvoice) {
+            const selectedServices = getSelectedServicesDetails();
+            if (selectedServices.length === 0) {
+                setError('Please select at least one service');
+                return;
+            }
         }
 
         setActionLoading(true);
         try {
             const services = window.FirebaseServices;
-            const totalAmount = selectedServices.reduce((sum, s) => sum + parseFloat(s.price), 0);
-            const servicesList = selectedServices.map(s => ({ name: s.name, price: s.price }));
-
-            const result = await services.billingService.createInvoice({
-                source: manualBillingData.source || 'wash',
-                customerName: manualBillingData.customerName || 'Walk-in',
-                customerPhone: manualBillingData.customerPhone || '',
-                plateNumber: manualBillingData.plateNumber.toUpperCase(),
-                vehicleType: manualBillingData.vehicleType || 'Vehicle',
-                services: servicesList,
-                totalAmount: totalAmount,
-                notes: manualBillingData.notes || '',
-                createdBy: 'manual',
-                // Payment info
-                paymentStatus: manualBillingData.paymentStatus,
-                paymentMethod: manualBillingData.paymentStatus === 'paid' ? manualBillingData.paymentMethod : null,
-                paidAmount: manualBillingData.paymentStatus === 'paid' ? totalAmount : 0,
-                paidAt: manualBillingData.paymentStatus === 'paid' ? new Date().toISOString() : null,
-                mpesaCode: manualBillingData.paymentMethod === 'mpesa' && manualBillingData.paymentStatus === 'paid' ? manualBillingData.mpesaCode : null
-            });
-
-            if (result.success) {
-                // Log activity
-                if (services.activityService) {
-                    const currentUser = window.currentUserProfile;
-                    services.activityService.logActivity({
-                        type: 'billing',
-                        action: 'Invoice Created',
-                        details: `${manualBillingData.plateNumber.toUpperCase()} - ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()} - ${manualBillingData.paymentStatus === 'paid' ? 'Paid' : 'Pending'}`,
-                        status: 'success',
-                        loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
-                        loggedByEmail: currentUser?.email || null,
-                        loggedByRole: currentUser?.role || null
-                    });
+            const currentUser = window.currentUserProfile;
+            
+            // If there's an existing pending invoice and user wants to apply payment to it
+            if (existingPendingInvoice && applyToExisting && manualBillingData.paymentStatus === 'paid') {
+                // Apply payment to the existing invoice instead of creating a new one
+                const paymentData = {
+                    method: manualBillingData.paymentMethod || 'cash',
+                    amount: existingPendingInvoice.totalAmount
+                };
+                
+                // Add M-Pesa code if applicable
+                if (manualBillingData.paymentMethod === 'mpesa' && manualBillingData.mpesaCode) {
+                    paymentData.mpesaCode = manualBillingData.mpesaCode.toUpperCase();
+                    paymentData.mpesaPhone = manualBillingData.customerPhone || null;
                 }
                 
-                // Award loyalty points if invoice is paid and has customer phone
-                if (manualBillingData.paymentStatus === 'paid' && manualBillingData.customerPhone) {
-                    try {
-                        const customerResult = await services.customerService.findCustomerByPhone(manualBillingData.customerPhone);
-                        if (customerResult.success && customerResult.data) {
-                            // Award 1 point per 100 KES spent
-                            const pointsToAward = Math.floor(totalAmount / 100);
-                            if (pointsToAward > 0) {
-                                await services.customerService.addLoyaltyPoints(
-                                    customerResult.data.id, 
-                                    pointsToAward, 
-                                    `Invoice ${result.invoiceNumber} payment`
-                                );
-                                // Update invoice with points earned and customer ID
-                                await services.billingService.updateInvoice(result.id, {
-                                    customerId: customerResult.data.id,
-                                    pointsEarned: pointsToAward
-                                });
-                            }
-                        }
-                    } catch (loyaltyErr) {
-                        console.log('Loyalty points error (non-critical):', loyaltyErr);
-                    }
+                // Add card reference if applicable
+                if (manualBillingData.paymentMethod === 'card' && manualBillingData.cardReference) {
+                    paymentData.transactionRef = manualBillingData.cardReference.toUpperCase();
                 }
-                setSuccessMessage(`Invoice ${result.invoiceNumber} created successfully!`);
-                setShowManualBillingModal(false);
-                // Reset form and search states
-                setManualBillingData({
-                    customerName: '',
-                    customerPhone: '',
-                    plateNumber: '',
-                    vehicleType: 'Sedan',
-                    source: 'wash',
-                    selectedServices: [],
-                    notes: '',
-                    paymentStatus: 'unpaid',
-                    paymentMethod: 'cash',
-                    mpesaCode: ''
-                });
-                setBillingPlateSearchResults([]);
-                setShowBillingPlateSearch(false);
-                setSelectedIntakeRecord(null);
+                
+                const result = await services.billingService.markAsPaid(existingPendingInvoice.id, paymentData);
+                
+                if (result.success) {
+                    // Log activity
+                    if (services.activityService) {
+                        services.activityService.logActivity({
+                            type: 'billing',
+                            action: 'Payment Received',
+                            details: `Invoice ${existingPendingInvoice.invoiceNumber}: ${getBrandingForReceipts().currencySymbol || 'KES'} ${existingPendingInvoice.totalAmount?.toLocaleString()} (${manualBillingData.paymentMethod?.toUpperCase() || 'Cash'}) - Applied to existing invoice`,
+                            status: 'success',
+                            loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                            loggedByEmail: currentUser?.email || null,
+                            loggedByRole: currentUser?.role || null
+                        });
+                    }
+                    
+                    // Award loyalty points if customer has phone number
+                    if (existingPendingInvoice.customerPhone || manualBillingData.customerPhone) {
+                        try {
+                            const phone = existingPendingInvoice.customerPhone || manualBillingData.customerPhone;
+                            const customerResult = await services.customerService.findCustomerByPhone(phone);
+                            if (customerResult.success && customerResult.data) {
+                                const pointsToAward = Math.floor((existingPendingInvoice.totalAmount || 0) / 100);
+                                if (pointsToAward > 0) {
+                                    await services.customerService.addLoyaltyPoints(
+                                        customerResult.data.id, 
+                                        pointsToAward, 
+                                        `Invoice ${existingPendingInvoice.invoiceNumber} payment`
+                                    );
+                                    await services.billingService.updateInvoice(existingPendingInvoice.id, {
+                                        customerId: customerResult.data.id,
+                                        pointsEarned: pointsToAward
+                                    });
+                                }
+                            }
+                        } catch (loyaltyErr) {
+                            console.log('Loyalty points error (non-critical):', loyaltyErr);
+                        }
+                    }
+                    
+                    setSuccessMessage(`Payment applied to invoice ${existingPendingInvoice.invoiceNumber}!`);
+                    setShowManualBillingModal(false);
+                    // Reset form
+                    setManualBillingData({
+                        customerName: '',
+                        customerPhone: '',
+                        plateNumber: '',
+                        vehicleType: 'Sedan',
+                        source: 'wash',
+                        selectedServices: [],
+                        notes: '',
+                        paymentStatus: 'unpaid',
+                        paymentMethod: 'cash',
+                        mpesaCode: '',
+                        cardReference: ''
+                    });
+                    setBillingPlateSearchResults([]);
+                    setShowBillingPlateSearch(false);
+                    setSelectedIntakeRecord(null);
+                    setExistingPendingInvoice(null);
+                    setApplyToExisting(true);
+                } else {
+                    setError(result.error || 'Failed to apply payment');
+                }
             } else {
-                setError(result.error || 'Failed to create invoice');
+                // Create a new invoice (original behavior)
+                const selectedServices = getSelectedServicesDetails();
+                const totalAmount = selectedServices.reduce((sum, s) => sum + parseFloat(s.price), 0);
+                const servicesList = selectedServices.map(s => ({ name: s.name, price: s.price }));
+
+                const result = await services.billingService.createInvoice({
+                    source: manualBillingData.source || 'wash',
+                    customerName: manualBillingData.customerName || 'Walk-in',
+                    customerPhone: manualBillingData.customerPhone || '',
+                    plateNumber: manualBillingData.plateNumber.toUpperCase(),
+                    vehicleType: manualBillingData.vehicleType || 'Vehicle',
+                    services: servicesList,
+                    totalAmount: totalAmount,
+                    notes: manualBillingData.notes || '',
+                    createdBy: 'manual',
+                    // Payment info
+                    paymentStatus: manualBillingData.paymentStatus,
+                    paymentMethod: manualBillingData.paymentStatus === 'paid' ? manualBillingData.paymentMethod : null,
+                    paidAmount: manualBillingData.paymentStatus === 'paid' ? totalAmount : 0,
+                    paidAt: manualBillingData.paymentStatus === 'paid' ? new Date().toISOString() : null,
+                    mpesaCode: manualBillingData.paymentMethod === 'mpesa' && manualBillingData.paymentStatus === 'paid' ? manualBillingData.mpesaCode : null,
+                    cardReference: manualBillingData.paymentMethod === 'card' && manualBillingData.paymentStatus === 'paid' ? manualBillingData.cardReference : null
+                });
+
+                if (result.success) {
+                    // Log activity
+                    if (services.activityService) {
+                        services.activityService.logActivity({
+                            type: 'billing',
+                            action: 'Invoice Created',
+                            details: `${manualBillingData.plateNumber.toUpperCase()} - ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalAmount.toLocaleString()} - ${manualBillingData.paymentStatus === 'paid' ? 'Paid' : 'Pending'}`,
+                            status: 'success',
+                            loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                            loggedByEmail: currentUser?.email || null,
+                            loggedByRole: currentUser?.role || null
+                        });
+                    }
+                    
+                    // Award loyalty points if invoice is paid and has customer phone
+                    if (manualBillingData.paymentStatus === 'paid' && manualBillingData.customerPhone) {
+                        try {
+                            const customerResult = await services.customerService.findCustomerByPhone(manualBillingData.customerPhone);
+                            if (customerResult.success && customerResult.data) {
+                                // Award 1 point per 100 KES spent
+                                const pointsToAward = Math.floor(totalAmount / 100);
+                                if (pointsToAward > 0) {
+                                    await services.customerService.addLoyaltyPoints(
+                                        customerResult.data.id, 
+                                        pointsToAward, 
+                                        `Invoice ${result.invoiceNumber} payment`
+                                    );
+                                    // Update invoice with points earned and customer ID
+                                    await services.billingService.updateInvoice(result.id, {
+                                        customerId: customerResult.data.id,
+                                        pointsEarned: pointsToAward
+                                    });
+                                }
+                            }
+                        } catch (loyaltyErr) {
+                            console.log('Loyalty points error (non-critical):', loyaltyErr);
+                        }
+                    }
+                    setSuccessMessage(`Invoice ${result.invoiceNumber} created successfully!`);
+                    setShowManualBillingModal(false);
+                    // Reset form and search states
+                    setManualBillingData({
+                        customerName: '',
+                        customerPhone: '',
+                        plateNumber: '',
+                        vehicleType: 'Sedan',
+                        source: 'wash',
+                        selectedServices: [],
+                        notes: '',
+                        paymentStatus: 'unpaid',
+                        paymentMethod: 'cash',
+                        mpesaCode: '',
+                        cardReference: ''
+                    });
+                    setBillingPlateSearchResults([]);
+                    setShowBillingPlateSearch(false);
+                    setSelectedIntakeRecord(null);
+                    setExistingPendingInvoice(null);
+                    setApplyToExisting(true);
+                } else {
+                    setError(result.error || 'Failed to create invoice');
+                }
             }
         } catch (err) {
             console.error('Manual billing error:', err);
-            setError('Failed to create invoice: ' + err.message);
+            setError('Failed to process: ' + err.message);
         } finally {
             setActionLoading(false);
         }
@@ -25746,6 +25985,10 @@ function BillingModule() {
                     <button style={tabStyle(activeTab === 'expenses')} onClick={() => setActiveTab('expenses')}>
                         Expenses ({expenses.length})
                     </button>
+                    <button style={{ ...tabStyle(activeTab === 'activity'), display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setActiveTab('activity')}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        Activity
+                    </button>
                     {canCreate('billing') && <button
                         onClick={() => setShowManualBillingModal(true)}
                         style={{
@@ -26048,6 +26291,12 @@ function BillingModule() {
                                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                             {invoice.paymentStatus === 'paid' ? (
                                                 <>
+                                                    <button onClick={() => viewInvoiceDetails(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)', 
+                                                        color: '#8b5cf6', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                                    }} title="View Details"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
                                                     <button onClick={() => handlePrintReceipt(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 10px', 
                                                         background: isDark ? 'rgba(59,130,246,0.2)' : 'rgba(59,130,246,0.1)', 
@@ -26069,6 +26318,12 @@ function BillingModule() {
                                                 </>
                                             ) : (
                                                 <>
+                                                    <button onClick={() => viewInvoiceDetails(invoice)} style={{ 
+                                                        ...buttonStyle, padding: '8px 10px', 
+                                                        background: isDark ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)', 
+                                                        color: '#8b5cf6', fontSize: '12px', border: 'none', borderRadius: '8px',
+                                                        transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                                    }} title="View Details"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
                                                     {canEdit('billing') && <button onClick={() => openPaymentModal(invoice)} style={{ 
                                                         ...buttonStyle, padding: '8px 14px', 
                                                         background: '#10b981', 
@@ -26277,6 +26532,229 @@ function BillingModule() {
                     </div>
                 )}
             </div>
+            )}
+
+            {/* Activity Log Tab - Simple & Clean */}
+            {activeTab === 'activity' && (
+            <div style={{ ...cardStyle, marginTop: '20px', padding: 0, overflow: 'hidden' }}>
+                {/* Simple Header */}
+                <div style={{ 
+                    padding: '16px 20px', 
+                    background: theme.bgSecondary,
+                    borderBottom: `1px solid ${theme.border}`,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                }}>
+                    <div style={{ fontSize: '15px', fontWeight: '600', color: theme.text }}>Activity Log</div>
+                    <button 
+                        onClick={loadBillingActivityLogs} 
+                        style={{ 
+                            background: 'none', 
+                            border: `1px solid ${theme.border}`, 
+                            padding: '6px 12px', 
+                            borderRadius: '6px', 
+                            color: theme.textSecondary, 
+                            cursor: 'pointer',
+                            fontSize: '12px'
+                        }}
+                    >
+                        Refresh
+                    </button>
+                </div>
+                
+                {/* Content */}
+                {activityLogsLoading ? (
+                    <div style={{ padding: '40px 20px', textAlign: 'center', color: theme.textSecondary }}>
+                        Loading...
+                    </div>
+                ) : billingActivityLogs.length === 0 ? (
+                    <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '14px', color: theme.textSecondary }}>No deletions recorded</div>
+                    </div>
+                ) : (
+                    <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                        {billingActivityLogs.map((log, idx) => {
+                            // Determine styles and icons based on action type
+                            const isDelete = log.action === 'DELETE_INVOICE';
+                            const isPayment = log.action === 'PAYMENT_RECEIVED';
+                            const isRevert = log.action === 'PAYMENT_REVERTED';
+                            
+                            let icon = '📋';
+                            let actionColor = theme.text;
+                            let actionText = 'processed';
+                            
+                            if (isDelete) {
+                                icon = '🗑️';
+                                actionColor = '#ef4444';
+                                actionText = 'deleted';
+                            } else if (isPayment) {
+                                icon = '💰';
+                                actionColor = '#10b981';
+                                actionText = 'paid';
+                            } else if (isRevert) {
+                                icon = '↩️';
+                                actionColor = '#f59e0b';
+                                actionText = 'reverted';
+                            }
+
+                            // Get user info (support both field names for backward compatibility)
+                            const user = log.processedBy || log.deletedBy || {};
+                            const userName = user.displayName || user.email || 'Unknown User';
+
+                            return (
+                                <div key={log.id} style={{ 
+                                    padding: '16px 20px', 
+                                    borderBottom: `1px solid ${theme.border}`,
+                                    background: idx % 2 === 0 ? theme.bg : theme.bgSecondary
+                                }}>
+                                    {/* Row 1: Action & Time */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '14px' }}>{icon}</span>
+                                            <span style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>{log.invoiceNumber}</span>
+                                            <span style={{ color: actionColor, fontSize: '12px', fontWeight: '500', textTransform: 'uppercase' }}>{actionText}</span>
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>{log.date} • {log.time}</div>
+                                    </div>
+                                    
+                                    {/* Row 2: By whom */}
+                                    <div style={{ fontSize: '13px', color: theme.text, marginBottom: '8px' }}>
+                                        <span style={{ color: theme.textSecondary }}>By:</span> {userName}
+                                    </div>
+                                    
+                                    {/* Row 3: Details (Reason or Payment Info) */}
+                                    {log.reason && (
+                                        <div style={{ 
+                                            background: isDark ? 'rgba(239,68,68,0.1)' : '#fef2f2', 
+                                            padding: '10px 12px', 
+                                            borderRadius: '6px',
+                                            fontSize: '13px',
+                                            marginBottom: '10px'
+                                        }}>
+                                            <span style={{ color: theme.textSecondary, fontSize: '11px' }}>Reason:</span>
+                                            <div style={{ color: theme.text, marginTop: '4px' }}>"{log.reason}"</div>
+                                        </div>
+                                    )}
+
+                                    {/* Payment specific details */}
+                                    {isPayment && (
+                                        <div style={{ 
+                                            background: isDark ? 'rgba(16, 185, 129, 0.1)' : '#ecfdf5', 
+                                            padding: '8px 12px', 
+                                            borderRadius: '6px', 
+                                            marginBottom: '10px',
+                                            fontSize: '12px'
+                                        }}>
+                                            <div style={{ display: 'flex', gap: '15px' }}>
+                                                <span>Method: <strong>{log.invoiceData?.paymentMethod || log.paymentMethod || 'Cash'}</strong></span>
+                                                {log.invoiceData?.mpesaCode && <span>Code: <strong>{log.invoiceData.mpesaCode}</strong></span>}
+                                                {log.invoiceData?.transactionRef && <span>Ref: <strong>{log.invoiceData.transactionRef}</strong></span>}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Row 4: Invoice details */}
+                                    {log.invoiceData && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '12px', color: theme.textSecondary }}>
+                                            <span><strong style={{ color: theme.text }}>{log.invoiceData.customerName || 'Walk-in'}</strong></span>
+                                            <span>Plate: <strong style={{ color: theme.text }}>{log.invoiceData.plateNumber || '-'}</strong></span>
+                                            <span>Amount: <strong style={{ color: isDelete ? '#ef4444' : isPayment ? '#10b981' : theme.text }}>{formatCurrency(log.invoiceData.totalAmount)}</strong></span>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+            )}
+
+            {/* Delete Confirmation Modal - Simple & Clean */}
+            {showDeleteModal && deleteTarget && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowDeleteModal(false); setDeleteTarget(null); setDeleteReason(''); }}>
+                    <div style={{ background: theme.bg, width: '400px', maxWidth: '90vw', borderRadius: '12px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={(e) => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ fontSize: '16px', fontWeight: '600', color: theme.text }}>Delete Invoice</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px' }}>
+                                {deleteTarget.invoiceNumber || deleteTarget.id?.slice(0,8).toUpperCase()} • {deleteTarget.customerName || 'Walk-in'} • {formatCurrency(deleteTarget.totalAmount)}
+                            </div>
+                        </div>
+                        
+                        {/* Body */}
+                        <div style={{ padding: '20px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: '500', color: theme.text }}>
+                                Reason for deletion <span style={{ color: '#ef4444' }}>*</span>
+                            </label>
+                            <textarea
+                                value={deleteReason}
+                                onChange={(e) => setDeleteReason(e.target.value)}
+                                placeholder="Why is this invoice being deleted? (min 10 characters)"
+                                style={{ 
+                                    ...inputStyle, 
+                                    width: '100%', 
+                                    minHeight: '80px', 
+                                    resize: 'vertical',
+                                    fontFamily: 'inherit',
+                                    borderRadius: '8px'
+                                }}
+                            />
+                            <div style={{ marginTop: '6px', fontSize: '11px', color: deleteReason.length >= 10 ? '#10b981' : theme.textSecondary }}>
+                                {deleteReason.length >= 10 ? '✓ Ready' : `${deleteReason.length}/10 characters`}
+                            </div>
+                            
+                            <div style={{ 
+                                marginTop: '16px',
+                                padding: '10px 12px', 
+                                background: isDark ? 'rgba(245,158,11,0.1)' : '#fffbeb',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                color: '#92400e'
+                            }}>
+                                This action will be logged with your name and timestamp.
+                            </div>
+                        </div>
+                        
+                        {/* Footer */}
+                        <div style={{ padding: '16px 20px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: '10px' }}>
+                            <button
+                                onClick={() => { setShowDeleteModal(false); setDeleteTarget(null); setDeleteReason(''); }}
+                                style={{ 
+                                    flex: 1, 
+                                    padding: '12px', 
+                                    background: theme.bgSecondary, 
+                                    color: theme.text, 
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    fontWeight: '500',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmDeleteInvoice}
+                                disabled={deleteLoading || deleteReason.trim().length < 10}
+                                style={{ 
+                                    flex: 1, 
+                                    padding: '12px', 
+                                    background: deleteReason.trim().length >= 10 ? '#ef4444' : '#d1d5db', 
+                                    color: 'white', 
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    fontWeight: '500',
+                                    cursor: deleteReason.trim().length >= 10 ? 'pointer' : 'not-allowed',
+                                    opacity: deleteLoading ? 0.6 : 1
+                                }}
+                            >
+                                {deleteLoading ? 'Deleting...' : 'Delete'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* Payment Method Modal */}
@@ -26705,101 +27183,189 @@ function BillingModule() {
                 </div>
             )}
 
-            {/* Invoice Detail Modal */}
+            {/* Invoice Detail Modal - Clean & Simple */}
             {showInvoiceDetailModal && selectedInvoice && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowInvoiceDetailModal(false)}>
-                    <div style={{ ...cardStyle, width: '520px', maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: `2px solid ${theme.border}`, paddingBottom: '20px' }}>
-                            <div>
-                                <h3 style={{ margin: '0 0 6px', color: theme.text, fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice Details</h3>
-                                <span style={{ color: '#3b82f6', fontWeight: '700', fontSize: '14px', letterSpacing: '0.3px' }}>{selectedInvoice.invoiceNumber}</span>
-                            </div>
-                            <button onClick={() => setShowInvoiceDetailModal(false)} style={{ background: 'none', border: 'none', fontSize: '28px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
-                        </div>
-
-                        {/* Invoice Info */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Customer</div>
-                                <div style={{ fontWeight: '600', color: theme.text }}>{selectedInvoice.customerName || 'Walk-in'}</div>
-                            </div>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Phone</div>
-                                <div style={{ fontWeight: '600', color: theme.text }}>{selectedInvoice.customerPhone || '-'}</div>
-                            </div>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid #3b82f6` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Vehicle</div>
-                                <div style={{ fontWeight: '700', color: theme.text, fontSize: '16px' }}>{selectedInvoice.plateNumber || '-'}</div>
-                            </div>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Source</div>
-                                <div style={{ marginTop: '4px' }}>{getSourceBadge(selectedInvoice.source)}</div>
-                            </div>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Created</div>
-                                <div style={{ color: theme.text, fontSize: '13px' }}>{formatDate(selectedInvoice.createdAt)}</div>
-                            </div>
-                            <div style={{ background: theme.bgSecondary, padding: '16px', borderLeft: `3px solid ${theme.border}` }}>
-                                <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Status</div>
-                                <div style={{ marginTop: '4px' }}>{getPaymentBadge(selectedInvoice.paymentStatus, selectedInvoice.paymentMethod)}</div>
-                            </div>
-                        </div>
-
-                        {/* Services */}
-                        {selectedInvoice.services && selectedInvoice.services.length > 0 && (
-                            <div style={{ marginBottom: '24px' }}>
-                                <div style={{ fontSize: '12px', fontWeight: '700', color: theme.text, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Services</div>
-                                <div style={{ background: theme.bgSecondary, borderRadius: '0', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
-                                    {selectedInvoice.services.map((service, idx) => (
-                                        <div key={idx} style={{ padding: '14px 18px', borderBottom: idx < selectedInvoice.services.length - 1 ? `1px solid ${theme.border}` : 'none', display: 'flex', justifyContent: 'space-between' }}>
-                                            <span style={{ color: theme.text, fontWeight: '500' }}>{service.name || service}</span>
-                                            <span style={{ fontWeight: '700', color: theme.text }}>{formatCurrency(service.price || 0)}</span>
-                                        </div>
-                                    ))}
+                    <div style={{ background: theme.bg, width: '480px', maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto', borderRadius: '12px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={(e) => e.stopPropagation()}>
+                        
+                        {/* Header */}
+                        <div style={{ padding: '24px 24px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Invoice</div>
+                                    <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text }}>{selectedInvoice.invoiceNumber || selectedInvoice.id?.slice(0,8).toUpperCase()}</div>
                                 </div>
-                            </div>
-                        )}
-
-                        {/* Total */}
-                        <div style={{ background: theme.bgTertiary, padding: '20px', borderRadius: '0', marginBottom: '24px', borderLeft: '4px solid #10b981' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontSize: '14px', fontWeight: '700', color: theme.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Amount</span>
-                                <span style={{ fontSize: '28px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(selectedInvoice.totalAmount)}</span>
+                                <button onClick={() => setShowInvoiceDetailModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary, padding: '0', lineHeight: '1' }}>×</button>
                             </div>
                         </div>
 
-                        {/* Payment Info */}
-                        {selectedInvoice.paymentStatus === 'paid' && (
-                            <div style={{ background: '#d1fae515', borderLeft: '4px solid #10b981', padding: '20px', borderRadius: '0', marginBottom: '24px' }}>
-                                <div style={{ fontWeight: '700', color: '#10b981', marginBottom: '16px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>✓ Payment Received</div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
-                                    <div><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Method:</span> <span style={{ color: theme.text, fontWeight: '600', display: 'block', marginTop: '4px' }}>{selectedInvoice.paymentMethod === 'mpesa' ? 'M-PESA' : 'CASH'}</span></div>
-                                    <div><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Paid:</span> <span style={{ color: theme.text, fontWeight: '600', display: 'block', marginTop: '4px' }}>{formatCurrency(selectedInvoice.paidAmount)}</span></div>
-                                    {selectedInvoice.mpesaCode && (
-                                        <div style={{ gridColumn: '1 / -1' }}><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>M-Pesa Code:</span> <span style={{ color: '#10b981', fontWeight: '700', display: 'block', marginTop: '4px', fontSize: '16px' }}>{selectedInvoice.mpesaCode}</span></div>
+                        {/* Content */}
+                        <div style={{ padding: '24px' }}>
+                            
+                            {/* Customer & Vehicle Row */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</div>
+                                    <div style={{ fontSize: '15px', fontWeight: '600', color: theme.text }}>{selectedInvoice.customerName || 'Walk-in'}</div>
+                                    {selectedInvoice.customerPhone && (
+                                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>{selectedInvoice.customerPhone}</div>
                                     )}
-                                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: theme.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Paid At:</span> <span style={{ color: theme.text, display: 'block', marginTop: '4px' }}>{formatDate(selectedInvoice.paidAt)}</span></div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Vehicle</div>
+                                    <div style={{ fontSize: '15px', fontWeight: '700', color: theme.text, letterSpacing: '0.5px' }}>{selectedInvoice.plateNumber || '-'}</div>
+                                    <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px', textTransform: 'capitalize' }}>{selectedInvoice.source || 'Wash'}</div>
                                 </div>
                             </div>
-                        )}
 
-                        {/* Actions */}
-                        <div style={{ display: 'flex', gap: '0' }}>
+                            {/* Date & Status Row */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Date</div>
+                                    <div style={{ fontSize: '14px', color: theme.text }}>{formatDate(selectedInvoice.createdAt)}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status</div>
+                                    <div style={{ 
+                                        display: 'inline-block',
+                                        padding: '4px 12px', 
+                                        borderRadius: '20px',
+                                        fontSize: '11px', 
+                                        fontWeight: '600',
+                                        background: selectedInvoice.paymentStatus === 'paid' ? '#dcfce7' : '#fef3c7',
+                                        color: selectedInvoice.paymentStatus === 'paid' ? '#166534' : '#92400e'
+                                    }}>
+                                        {selectedInvoice.paymentStatus === 'paid' ? '✓ Paid' : 'Pending'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Services */}
+                            {selectedInvoice.services && selectedInvoice.services.length > 0 && (
+                                <div style={{ marginBottom: '24px' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Services</div>
+                                    <div style={{ background: theme.bgSecondary, borderRadius: '8px', overflow: 'hidden' }}>
+                                        {selectedInvoice.services.map((service, idx) => (
+                                            <div key={idx} style={{ 
+                                                padding: '12px 16px', 
+                                                borderBottom: idx < selectedInvoice.services.length - 1 ? `1px solid ${theme.border}` : 'none', 
+                                                display: 'flex', 
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center'
+                                            }}>
+                                                <span style={{ color: theme.text, fontSize: '14px' }}>{service.name || service}</span>
+                                                <span style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>{formatCurrency(service.price || 0)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Total */}
+                            <div style={{ 
+                                background: theme.bgSecondary, 
+                                padding: '16px 20px', 
+                                borderRadius: '8px', 
+                                marginBottom: '24px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <span style={{ fontSize: '14px', fontWeight: '600', color: theme.textSecondary }}>Total Amount</span>
+                                <span style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>{formatCurrency(selectedInvoice.totalAmount)}</span>
+                            </div>
+
+                            {/* Payment Info - Only for paid invoices */}
+                            {selectedInvoice.paymentStatus === 'paid' && (
+                                <div style={{ 
+                                    background: isDark ? 'rgba(16, 185, 129, 0.1)' : '#f0fdf4', 
+                                    padding: '16px 20px', 
+                                    borderRadius: '8px', 
+                                    marginBottom: '24px'
+                                }}>
+                                    <div style={{ fontSize: '11px', color: '#10b981', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Payment Details</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Method</div>
+                                            <div style={{ fontSize: '14px', fontWeight: '600', color: theme.text }}>
+                                                {selectedInvoice.paymentMethod === 'mpesa' || selectedInvoice.paymentMethod === 'm-pesa' ? 'M-Pesa' : 
+                                                 selectedInvoice.paymentMethod === 'card' ? 'Card' : 'Cash'}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Amount Paid</div>
+                                            <div style={{ fontSize: '14px', fontWeight: '600', color: theme.text }}>{formatCurrency(selectedInvoice.paidAmount || selectedInvoice.totalAmount)}</div>
+                                        </div>
+                                        {(selectedInvoice.mpesaCode || selectedInvoice.transactionRef) && (
+                                            <div style={{ gridColumn: '1 / -1' }}>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Reference</div>
+                                                <div style={{ fontSize: '14px', fontWeight: '700', color: '#10b981', fontFamily: 'monospace' }}>
+                                                    {selectedInvoice.mpesaCode || selectedInvoice.transactionRef}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {selectedInvoice.paidAt && (
+                                            <div style={{ gridColumn: '1 / -1' }}>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Paid At</div>
+                                                <div style={{ fontSize: '13px', color: theme.text }}>{formatDate(selectedInvoice.paidAt)}</div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div style={{ padding: '16px 24px 24px', display: 'flex', gap: '12px' }}>
                             <button
                                 onClick={() => setShowInvoiceDetailModal(false)}
-                                style={{ ...buttonStyle, flex: 1, background: theme.bgSecondary, color: theme.text, padding: '16px' }}
+                                style={{ 
+                                    flex: 1, 
+                                    padding: '14px', 
+                                    background: theme.bgSecondary, 
+                                    color: theme.text, 
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    fontWeight: '600',
+                                    cursor: 'pointer'
+                                }}
                             >
-                                CLOSE
+                                Close
                             </button>
-                            {selectedInvoice.paymentStatus !== 'paid' && (
+                            {selectedInvoice.paymentStatus === 'paid' ? (
                                 <button
-                                    onClick={() => {
-                                        setShowInvoiceDetailModal(false);
-                                        openPaymentModal(selectedInvoice);
+                                    onClick={() => { setShowInvoiceDetailModal(false); handlePrintReceipt(selectedInvoice); }}
+                                    style={{ 
+                                        flex: 1, 
+                                        padding: '14px', 
+                                        background: '#3b82f6', 
+                                        color: 'white', 
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer'
                                     }}
-                                    style={{ ...buttonStyle, flex: 1, background: '#10b981', color: 'white', padding: '16px' }}
                                 >
-                                    💳 RECORD PAYMENT
+                                    🧾 Print Receipt
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={() => { setShowInvoiceDetailModal(false); openPaymentModal(selectedInvoice); }}
+                                    style={{ 
+                                        flex: 1, 
+                                        padding: '14px', 
+                                        background: '#10b981', 
+                                        color: 'white', 
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    💳 Record Payment
                                 </button>
                             )}
                         </div>
@@ -26809,12 +27375,14 @@ function BillingModule() {
 
             {/* Manual Billing Modal - Simple & Clean */}
             {showManualBillingModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); }}>
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); setExistingPendingInvoice(null); setApplyToExisting(true); }}>
                     <div style={{ ...cardStyle, width: '500px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>➕ New Invoice</h3>
-                            <button onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
+                            <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>
+                                {existingPendingInvoice && applyToExisting ? '💳 Apply Payment' : '➕ New Invoice'}
+                            </h3>
+                            <button onClick={() => { setShowManualBillingModal(false); setShowBillingPlateSearch(false); setExistingPendingInvoice(null); setApplyToExisting(true); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>✕</button>
                         </div>
 
                         {/* Customer & Vehicle Info */}
@@ -26940,11 +27508,122 @@ function BillingModule() {
                                         </div>
                                     </div>
                                 )}
+                                
+                                {/* Existing Pending Invoice Alert */}
+                                {existingPendingInvoice && (
+                                    <div style={{
+                                        marginTop: '10px',
+                                        padding: '14px',
+                                        background: isDark ? '#f59e0b15' : '#fef3c7',
+                                        border: `2px solid ${isDark ? '#f59e0b60' : '#fcd34d'}`,
+                                        borderLeft: '4px solid #f59e0b'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ fontSize: '20px' }}>⚠️</span>
+                                                <span style={{ fontSize: '13px', fontWeight: '700', color: '#d97706' }}>PENDING INVOICE FOUND</span>
+                                            </div>
+                                            <span style={{ 
+                                                fontSize: '18px', 
+                                                fontWeight: '800', 
+                                                color: '#f59e0b',
+                                                background: isDark ? '#f59e0b25' : '#fef9c3',
+                                                padding: '4px 12px'
+                                            }}>
+                                                {formatCurrency(existingPendingInvoice.totalAmount)}
+                                            </span>
+                                        </div>
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', color: theme.text, marginBottom: '12px' }}>
+                                            <div><span style={{ color: theme.textSecondary }}>Invoice:</span> <strong style={{ color: '#d97706' }}>{existingPendingInvoice.invoiceNumber || existingPendingInvoice.id?.slice(0,8).toUpperCase()}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Date:</span> <strong>{existingPendingInvoice.createdAt?.split('T')[0] || '-'}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Customer:</span> <strong>{existingPendingInvoice.customerName || 'Walk-in'}</strong></div>
+                                            <div><span style={{ color: theme.textSecondary }}>Source:</span> <strong>{existingPendingInvoice.source?.toUpperCase() || 'WASH'}</strong></div>
+                                        </div>
+                                        
+                                        {existingPendingInvoice.services && existingPendingInvoice.services.length > 0 && (
+                                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '12px', padding: '8px', background: isDark ? '#00000020' : '#ffffff80' }}>
+                                                <strong>Services:</strong> {existingPendingInvoice.services.map(s => s.name || s).join(', ')}
+                                            </div>
+                                        )}
+                                        
+                                        {/* Option to apply payment to existing */}
+                                        <div style={{ 
+                                            display: 'flex', 
+                                            gap: '8px',
+                                            padding: '10px',
+                                            background: isDark ? '#00000020' : '#ffffff80',
+                                            borderTop: `1px dashed ${theme.border}`
+                                        }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setApplyToExisting(true)}
+                                                style={{
+                                                    flex: 1,
+                                                    padding: '10px',
+                                                    border: `2px solid ${applyToExisting ? '#10b981' : theme.border}`,
+                                                    background: applyToExisting ? '#10b981' : theme.bg,
+                                                    color: applyToExisting ? 'white' : theme.text,
+                                                    fontSize: '11px',
+                                                    fontWeight: '700',
+                                                    cursor: 'pointer',
+                                                    borderRadius: '0',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '6px'
+                                                }}
+                                            >
+                                                <span>✓</span> CLEAR THIS INVOICE
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setApplyToExisting(false)}
+                                                style={{
+                                                    flex: 1,
+                                                    padding: '10px',
+                                                    border: `2px solid ${!applyToExisting ? '#3b82f6' : theme.border}`,
+                                                    background: !applyToExisting ? '#3b82f6' : theme.bg,
+                                                    color: !applyToExisting ? 'white' : theme.text,
+                                                    fontSize: '11px',
+                                                    fontWeight: '700',
+                                                    cursor: 'pointer',
+                                                    borderRadius: '0',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '6px'
+                                                }}
+                                            >
+                                                <span>+</span> CREATE NEW
+                                            </button>
+                                        </div>
+                                        
+                                        {applyToExisting && (
+                                            <div style={{ 
+                                                marginTop: '8px', 
+                                                padding: '8px 10px', 
+                                                background: '#10b98120', 
+                                                color: '#10b981', 
+                                                fontSize: '11px', 
+                                                fontWeight: '600',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px'
+                                            }}>
+                                                <span>💡</span> Payment will be applied to existing invoice #{existingPendingInvoice.invoiceNumber || existingPendingInvoice.id?.slice(0,8).toUpperCase()}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             <input type="text" value={manualBillingData.customerName} onChange={(e) => handleManualBillingChange('customerName', e.target.value)} placeholder="Customer Name" style={inputStyle} />
                             <input type="tel" value={manualBillingData.customerPhone} onChange={(e) => handleManualBillingChange('customerPhone', e.target.value)} placeholder="Phone" style={inputStyle} />
                         </div>
 
+                        {/* Source Selection & Services - Only show when NOT applying to existing invoice */}
+                        {!(existingPendingInvoice && applyToExisting) && (
+                        <>
                         {/* Source Selection - Garage or Wash */}
                         <div style={{ marginBottom: '16px' }}>
                             <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Service Type</div>
@@ -27062,11 +27741,13 @@ function BillingModule() {
                                 </div>
                             )}
                         </div>
+                        </>
+                        )}
 
                         {/* Payment Method */}
                         <div style={{ marginBottom: '16px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment</div>
+                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Payment {existingPendingInvoice && applyToExisting ? '(Apply to Existing Invoice)' : ''}</div>
                                 {/* Cash visibility toggle */}
                                 <button
                                     type="button"
@@ -27089,7 +27770,8 @@ function BillingModule() {
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
                                 {[
-                                    { id: 'unpaid', label: '⏳ Unpaid', color: '#ef4444' },
+                                    // Only show "Unpaid" option when NOT applying to existing invoice
+                                    ...(!(existingPendingInvoice && applyToExisting) ? [{ id: 'unpaid', label: '⏳ Unpaid', color: '#ef4444' }] : []),
                                     { id: 'cash', label: '💵 Cash', color: '#10b981', hideable: true },
                                     { id: 'card', label: '💳 Card', color: '#3b82f6' },
                                     { id: 'mpesa', label: '📱 M-Pesa', color: '#00a651' }
@@ -27278,17 +27960,35 @@ function BillingModule() {
                         )}
 
                         {/* Total & Submit */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', background: theme.bgSecondary, marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', background: existingPendingInvoice && applyToExisting ? (isDark ? '#f59e0b15' : '#fef3c7') : theme.bgSecondary, marginBottom: '16px', borderLeft: existingPendingInvoice && applyToExisting ? '4px solid #f59e0b' : 'none' }}>
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase' }}>Total</div>
-                                <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(getManualBillingTotal())}</div>
+                                <div style={{ fontSize: '11px', color: existingPendingInvoice && applyToExisting ? '#d97706' : theme.textSecondary, textTransform: 'uppercase' }}>
+                                    {existingPendingInvoice && applyToExisting ? 'Amount to Clear' : 'Total'}
+                                </div>
+                                <div style={{ fontSize: '24px', fontWeight: '800', color: existingPendingInvoice && applyToExisting ? '#f59e0b' : '#10b981' }}>
+                                    {formatCurrency(existingPendingInvoice && applyToExisting ? existingPendingInvoice.totalAmount : getManualBillingTotal())}
+                                </div>
+                                {existingPendingInvoice && applyToExisting && (
+                                    <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '2px' }}>
+                                        Invoice #{existingPendingInvoice.invoiceNumber || existingPendingInvoice.id?.slice(0,8).toUpperCase()}
+                                    </div>
+                                )}
                             </div>
                             <button
                                 onClick={handleSubmitManualBilling}
-                                disabled={actionLoading}
-                                style={{ padding: '14px 28px', background: '#10b981', color: 'white', border: 'none', fontWeight: '700', fontSize: '13px', cursor: actionLoading ? 'wait' : 'pointer', opacity: actionLoading ? 0.7 : 1 }}
+                                disabled={actionLoading || (existingPendingInvoice && applyToExisting && manualBillingData.paymentStatus !== 'paid')}
+                                style={{ 
+                                    padding: '14px 28px', 
+                                    background: existingPendingInvoice && applyToExisting ? '#f59e0b' : '#10b981', 
+                                    color: 'white', 
+                                    border: 'none', 
+                                    fontWeight: '700', 
+                                    fontSize: '13px', 
+                                    cursor: actionLoading ? 'wait' : 'pointer', 
+                                    opacity: actionLoading || (existingPendingInvoice && applyToExisting && manualBillingData.paymentStatus !== 'paid') ? 0.7 : 1 
+                                }}
                             >
-                                {actionLoading ? 'SAVING...' : 'CREATE'}
+                                {actionLoading ? 'PROCESSING...' : (existingPendingInvoice && applyToExisting ? '✓ CLEAR PAYMENT' : 'CREATE')}
                             </button>
                         </div>
                     </div>

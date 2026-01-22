@@ -5587,7 +5587,26 @@ if (typeof window !== 'undefined') {
     washBayService,
     authService,
     storageService,
-    factoryResetService
+    factoryResetService,
+    // Firestore utilities for direct access
+    firestore: {
+      db,
+      collection,
+      addDoc,
+      getDocs,
+      getDoc,
+      query,
+      where,
+      orderBy,
+      limit,
+      onSnapshot,
+      doc,
+      updateDoc,
+      deleteDoc,
+      setDoc
+    },
+    // Auth reference
+    auth
   };
   console.log('✅ FirebaseServices attached to window');
 }
