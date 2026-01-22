@@ -927,7 +927,14 @@ const menuGroups = [
     {
         label: 'Vehicle Management',
         items: [
-            { id: 'vehicle-intake', label: 'Vehicle Intake', icon: Icons.car },
+            { 
+                id: 'vehicle-intake', 
+                label: 'Vehicle Intake', 
+                icon: Icons.car,
+                subItems: [
+                    { id: 'vehicle-intake-all', label: 'View All Records', icon: '📋' }
+                ]
+            },
             { id: 'service-packages', label: 'Service Packages', icon: Icons.package }
         ]
     },
@@ -978,9 +985,11 @@ const menuGroups = [
 const settingsItem = { id: 'settings', label: 'System Settings', icon: Icons.settings };
 const activitiesItem = { id: 'activities', label: 'Activities', icon: Icons.clipboard };
 
-// Flatten menu items for easy lookup
+// Flatten menu items for easy lookup (including sub-items)
 const menuItems = [
-    ...menuGroups.flatMap(group => group.items),
+    ...menuGroups.flatMap(group => group.items.flatMap(item => 
+        item.subItems ? [item, ...item.subItems] : [item]
+    )),
     settingsItem,
     activitiesItem
 ];
@@ -1012,14 +1021,57 @@ function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasMod
                     <div key={groupIndex} className="sidebar-menu-group">
                         {!isCollapsed && <div className="sidebar-menu-header">{group.label}</div>}
                         {group.items.map((item) => (
-                            <div
-                                key={item.id}
-                                className={`sidebar-menu-item ${activeModule === item.id ? 'active' : ''}`}
-                                onClick={() => onModuleClick(item.id)}
-                            >
-                                <span className="sidebar-menu-item-icon">{item.icon}</span>
-                                <span>{item.label}</span>
-                            </div>
+                            <React.Fragment key={item.id}>
+                                <div
+                                    className={`sidebar-menu-item ${activeModule === item.id || (item.subItems && item.subItems.some(s => s.id === activeModule)) ? 'active' : ''}`}
+                                    onClick={() => onModuleClick(item.id)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span className="sidebar-menu-item-icon">{item.icon}</span>
+                                        <span>{item.label}</span>
+                                    </div>
+                                    {/* Dropdown indicator */}
+                                    {item.subItems && !isCollapsed && (
+                                        <span style={{ 
+                                            fontSize: '10px', 
+                                            opacity: 0.6,
+                                            transition: 'transform 0.2s',
+                                            transform: (activeModule === item.id || item.subItems.some(s => s.id === activeModule)) ? 'rotate(180deg)' : 'rotate(0deg)'
+                                        }}>
+                                            ▼
+                                        </span>
+                                    )}
+                                </div>
+                                {/* Sub-items - clean dropdown */}
+                                {item.subItems && !isCollapsed && (activeModule === item.id || item.subItems.some(s => s.id === activeModule)) && (
+                                    <div style={{ marginLeft: '32px', marginTop: '4px', marginBottom: '4px' }}>
+                                        {item.subItems.map(subItem => (
+                                            <div
+                                                key={subItem.id}
+                                                onClick={(e) => { e.stopPropagation(); onModuleClick(subItem.id); }}
+                                                style={{ 
+                                                    padding: '8px 12px', 
+                                                    fontSize: '12px',
+                                                    color: activeModule === subItem.id ? '#fff' : 'rgba(255,255,255,0.7)',
+                                                    backgroundColor: activeModule === subItem.id ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px',
+                                                    transition: 'all 0.15s'
+                                                }}
+                                                onMouseEnter={(e) => { if (activeModule !== subItem.id) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'; }}
+                                                onMouseLeave={(e) => { if (activeModule !== subItem.id) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                            >
+                                                <span style={{ fontSize: '12px' }}>{subItem.icon}</span>
+                                                <span>{subItem.label}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </React.Fragment>
                         ))}
                     </div>
                 ))}
@@ -2497,6 +2549,41 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                     updateNotifications('garage-', alerts);
                 }));
             }
+
+            // Subscribe to complaints for responses
+            if (svc.complaintsService?.subscribeToComplaints) {
+                unsubs.push(svc.complaintsService.subscribeToComplaints((complaints) => {
+                    const alerts = [];
+                    // Show resolved complaints notifications
+                    complaints.filter(c => c.status === 'completed' && c.response).forEach(complaint => {
+                        alerts.push({
+                            id: `complaint-resolved-${complaint.id}`,
+                            type: 'complaint',
+                            icon: '✅',
+                            title: `Complaint Resolved: ${complaint.subject}`,
+                            subtitle: complaint.response?.substring(0, 50) + (complaint.response?.length > 50 ? '...' : ''),
+                            timestamp: complaint.completedAt || complaint.respondedAt || complaint.updatedAt,
+                            module: 'support',
+                            color: '#22c55e',
+                            priority: 'high'
+                        });
+                    });
+                    // Show pending complaints with responses
+                    complaints.filter(c => c.status !== 'completed' && c.response).forEach(complaint => {
+                        alerts.push({
+                            id: `complaint-response-${complaint.id}`,
+                            type: 'complaint',
+                            icon: '💬',
+                            title: `Response Added: ${complaint.subject}`,
+                            subtitle: 'A response has been added to your complaint',
+                            timestamp: complaint.respondedAt || complaint.updatedAt,
+                            module: 'support',
+                            color: '#3b82f6'
+                        });
+                    });
+                    updateNotifications('complaint-', alerts);
+                }));
+            }
         };
 
         initSubscriptions();
@@ -2677,7 +2764,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                     )}
                 </button>
                 {/* Divider */}
-                <div style={{ width: '1px', height: '28px', backgroundColor: '#e2e8f0', margin: '0 8px' }}></div>
+                <div style={{ width: '1px', height: '28px', backgroundColor: isDarkMode ? '#334155' : '#e2e8f0', margin: '0 8px' }}></div>
                 
                 {/* Profile Section */}
                 <div className="dropdown-container">
@@ -2688,62 +2775,79 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             display: 'flex',
                             alignItems: 'center',
                             gap: '10px',
-                            padding: '4px 8px 4px 4px',
-                            background: profileOpen ? '#f1f5f9' : 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            transition: 'background 0.2s'
+                            padding: '6px 12px 6px 6px',
+                            background: profileOpen 
+                                ? (isDarkMode ? '#334155' : '#f1f5f9') 
+                                : 'transparent',
+                            border: isDarkMode ? '1px solid transparent' : '1px solid transparent',
+                            borderRadius: '0',
+                            cursor: 'pointer'
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = profileOpen ? '#f1f5f9' : 'transparent'}
+                        onMouseEnter={(e) => {
+                            e.currentTarget.style.background = isDarkMode ? '#334155' : '#f1f5f9';
+                            e.currentTarget.style.border = isDarkMode ? '1px solid #475569' : '1px solid #e2e8f0';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.currentTarget.style.background = profileOpen ? (isDarkMode ? '#334155' : '#f1f5f9') : 'transparent';
+                            e.currentTarget.style.border = '1px solid transparent';
+                        }}
                     >
                         <div style={{
                             width: '36px',
                             height: '36px',
-                            background: 'linear-gradient(135deg, #3b82f6 0%, #1e40af 100%)',
+                            borderRadius: '0',
+                            background: '#3b82f6',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             color: 'white',
                             fontSize: '14px',
-                            fontWeight: '600',
-                            boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)'
+                            fontWeight: '700',
+                            letterSpacing: '0.5px'
                         }}>
                             {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
                         </div>
                         <div style={{ textAlign: 'left', lineHeight: '1.3' }}>
-                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b' }}>
+                            <div style={{ 
+                                fontSize: '13px', 
+                                fontWeight: '600', 
+                                color: isDarkMode ? '#f1f5f9' : '#1e293b',
+                                maxWidth: '120px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                            }}>
                                 {userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User'}
                             </div>
                             <div style={{ 
                                 fontSize: '11px', 
-                                color: '#64748b', 
+                                color: isDarkMode ? '#94a3b8' : '#64748b', 
                                 textTransform: 'capitalize',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '4px'
+                                gap: '5px'
                             }}>
                                 <span style={{
-                                    width: '6px',
-                                    height: '6px',
+                                    width: '7px',
+                                    height: '7px',
                                     backgroundColor: '#22c55e',
+                                    borderRadius: '50%',
                                     display: 'inline-block'
                                 }}></span>
                                 {userProfile?.role || 'User'}
                             </div>
                         </div>
                         <svg 
-                            width="12" 
-                            height="12" 
+                            width="14" 
+                            height="14" 
                             viewBox="0 0 24 24" 
                             fill="none" 
-                            stroke="#94a3b8" 
+                            stroke={isDarkMode ? '#94a3b8' : '#64748b'}
                             strokeWidth="2.5" 
                             strokeLinecap="round" 
                             strokeLinejoin="round"
                             style={{
-                                transform: profileOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                                transition: 'transform 0.2s'
+                                transform: profileOpen ? 'rotate(180deg)' : 'rotate(0deg)'
                             }}
                         >
                             <polyline points="6 9 12 15 18 9"/>
@@ -2755,167 +2859,369 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             <div className="dropdown-overlay" onClick={() => setProfileOpen(false)}></div>
                             <div style={{
                                 position: 'absolute',
-                                top: 'calc(100% + 8px)',
+                                top: 'calc(100% + 10px)',
                                 right: '0',
-                                width: '280px',
-                                backgroundColor: 'white',
-                                boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
-                                border: '1px solid #e2e8f0',
+                                width: '300px',
+                                backgroundColor: isDarkMode ? '#1e293b' : 'white',
+                                borderRadius: '0',
+                                boxShadow: isDarkMode 
+                                    ? '0 4px 12px rgba(0,0,0,0.4)' 
+                                    : '0 4px 12px rgba(0,0,0,0.1)',
+                                border: isDarkMode ? '1px solid #334155' : '1px solid #e2e8f0',
                                 zIndex: 1000,
                                 overflow: 'hidden'
                             }}>
                                 {/* Profile Header */}
                                 <div style={{ 
-                                    padding: '20px',
-                                    background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)',
-                                    color: 'white'
+                                    padding: '24px 20px',
+                                    background: isDarkMode ? '#1e3a5f' : '#3b82f6',
+                                    position: 'relative'
                                 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                    
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', position: 'relative' }}>
                                         <div style={{
-                                            width: '50px',
-                                            height: '50px',
+                                            width: '60px',
+                                            height: '60px',
+                                            borderRadius: '0',
                                             backgroundColor: 'rgba(255,255,255,0.2)',
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
-                                            fontSize: '20px',
-                                            fontWeight: '600',
+                                            fontSize: '24px',
+                                            fontWeight: '700',
+                                            color: 'white',
                                             border: '2px solid rgba(255,255,255,0.3)'
                                         }}>
                                             {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
                                         </div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ flex: 1, minWidth: 0, color: 'white' }}>
                                             <div style={{ 
-                                                fontWeight: '600', 
-                                                fontSize: '15px',
+                                                fontWeight: '700', 
+                                                fontSize: '16px',
                                                 whiteSpace: 'nowrap',
                                                 overflow: 'hidden',
-                                                textOverflow: 'ellipsis'
+                                                textOverflow: 'ellipsis',
+                                                marginBottom: '4px'
                                             }}>
                                                 {userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User'}
                                             </div>
                                             <div style={{ 
                                                 fontSize: '12px', 
-                                                color: 'rgba(255,255,255,0.7)',
-                                                marginTop: '2px',
+                                                color: 'rgba(255,255,255,0.75)',
                                                 whiteSpace: 'nowrap',
                                                 overflow: 'hidden',
-                                                textOverflow: 'ellipsis'
+                                                textOverflow: 'ellipsis',
+                                                marginBottom: '8px'
                                             }}>
                                                 {userProfile?.email || ''}
                                             </div>
                                             <div style={{ 
-                                                marginTop: '6px',
-                                                display: 'inline-block',
-                                                padding: '2px 8px',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                padding: '4px 10px',
                                                 backgroundColor: 'rgba(255,255,255,0.2)',
-                                                fontSize: '10px',
-                                                fontWeight: '500',
+                                                borderRadius: '0',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
                                                 textTransform: 'uppercase',
                                                 letterSpacing: '0.5px'
                                             }}>
+                                                <span style={{
+                                                    width: '6px',
+                                                    height: '6px',
+                                                    borderRadius: '50%',
+                                                    backgroundColor: '#22c55e'
+                                                }}></span>
                                                 {userProfile?.role || 'User'}
                                             </div>
                                         </div>
                                     </div>
                                 </div>
                                 
+                                {/* Quick Stats */}
+                                <div style={{ 
+                                    display: 'grid', 
+                                    gridTemplateColumns: '1fr 1fr', 
+                                    gap: '1px',
+                                    background: isDarkMode ? '#334155' : '#e2e8f0',
+                                    borderBottom: isDarkMode ? '1px solid #334155' : '1px solid #e2e8f0'
+                                }}>
+                                    <div style={{ 
+                                        padding: '12px 16px', 
+                                        background: isDarkMode ? '#1e293b' : 'white',
+                                        textAlign: 'center'
+                                    }}>
+                                        <div style={{ fontSize: '18px', fontWeight: '700', color: '#3b82f6' }}>
+                                            {new Date().toLocaleDateString('en-US', { weekday: 'short' })}
+                                        </div>
+                                        <div style={{ fontSize: '10px', color: isDarkMode ? '#64748b' : '#94a3b8', textTransform: 'uppercase' }}>
+                                            Today
+                                        </div>
+                                    </div>
+                                    <div style={{ 
+                                        padding: '12px 16px', 
+                                        background: isDarkMode ? '#1e293b' : 'white',
+                                        textAlign: 'center'
+                                    }}>
+                                        <div style={{ fontSize: '18px', fontWeight: '700', color: '#10b981' }}>
+                                            {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                        </div>
+                                        <div style={{ fontSize: '10px', color: isDarkMode ? '#64748b' : '#94a3b8', textTransform: 'uppercase' }}>
+                                            Current Time
+                                        </div>
+                                    </div>
+                                </div>
+                                
                                 {/* Menu Items */}
-                                <div style={{ padding: '8px 0' }}>
+                                <div style={{ padding: '8px' }}>
                                     <a 
                                         href="#" 
                                         onClick={(e) => { e.preventDefault(); handleSettingsClick('profile'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: '12px',
-                                            padding: '10px 16px',
-                                            color: '#475569',
+                                            gap: '14px',
+                                            padding: '12px 14px',
+                                            color: isDarkMode ? '#e2e8f0' : '#475569',
                                             textDecoration: 'none',
                                             fontSize: '13px',
-                                            transition: 'background 0.15s'
+                                            fontWeight: '500',
+                                            borderRadius: '0'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = isDarkMode ? '#334155' : '#f1f5f9';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }}
                                     >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                                            <circle cx="12" cy="7" r="4"/>
-                                        </svg>
-                                        <span>My Profile</span>
+                                        <div style={{
+                                            width: '36px',
+                                            height: '36px',
+                                            borderRadius: '0',
+                                            background: isDarkMode ? '#334155' : '#eff6ff',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                                <circle cx="12" cy="7" r="4"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontWeight: '600' }}>My Profile</div>
+                                            <div style={{ fontSize: '11px', color: isDarkMode ? '#64748b' : '#94a3b8', marginTop: '2px' }}>View and edit profile</div>
+                                        </div>
                                     </a>
+                                    
                                     <a 
                                         href="#" 
                                         onClick={(e) => { e.preventDefault(); handleSettingsClick('account'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: '12px',
-                                            padding: '10px 16px',
-                                            color: '#475569',
+                                            gap: '14px',
+                                            padding: '12px 14px',
+                                            color: isDarkMode ? '#e2e8f0' : '#475569',
                                             textDecoration: 'none',
                                             fontSize: '13px',
-                                            transition: 'background 0.15s'
+                                            fontWeight: '500',
+                                            borderRadius: '0'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = isDarkMode ? '#334155' : '#f1f5f9';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }}
                                     >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <circle cx="12" cy="12" r="3"/>
-                                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                                        </svg>
-                                        <span>Account Settings</span>
+                                        <div style={{
+                                            width: '36px',
+                                            height: '36px',
+                                            borderRadius: '0',
+                                            background: isDarkMode ? '#334155' : '#f0fdf4',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <circle cx="12" cy="12" r="3"/>
+                                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontWeight: '600' }}>Settings</div>
+                                            <div style={{ fontSize: '11px', color: isDarkMode ? '#64748b' : '#94a3b8', marginTop: '2px' }}>Account & preferences</div>
+                                        </div>
                                     </a>
+                                    
                                     <a 
                                         href="#" 
                                         onClick={(e) => { e.preventDefault(); handleSettingsClick('support'); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: '12px',
-                                            padding: '10px 16px',
-                                            color: '#475569',
+                                            gap: '14px',
+                                            padding: '12px 14px',
+                                            color: isDarkMode ? '#e2e8f0' : '#475569',
                                             textDecoration: 'none',
                                             fontSize: '13px',
-                                            transition: 'background 0.15s'
+                                            fontWeight: '500',
+                                            borderRadius: '0'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = isDarkMode ? '#334155' : '#f1f5f9';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }}
                                     >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <circle cx="12" cy="12" r="10"/>
-                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                                            <line x1="12" y1="17" x2="12.01" y2="17"/>
-                                        </svg>
-                                        <span>Help & Support</span>
+                                        <div style={{
+                                            width: '36px',
+                                            height: '36px',
+                                            borderRadius: '0',
+                                            background: isDarkMode ? '#334155' : '#faf5ff',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <circle cx="12" cy="12" r="10"/>
+                                                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontWeight: '600' }}>Help & Support</div>
+                                            <div style={{ fontSize: '11px', color: isDarkMode ? '#64748b' : '#94a3b8', marginTop: '2px' }}>Get assistance</div>
+                                        </div>
                                     </a>
                                 </div>
                                 
+                                {/* Theme Toggle */}
+                                <div style={{ 
+                                    padding: '8px', 
+                                    borderTop: isDarkMode ? '1px solid #334155' : '1px solid #e2e8f0'
+                                }}>
+                                    <div 
+                                        onClick={onToggleTheme}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            padding: '12px 14px',
+                                            borderRadius: '0',
+                                            cursor: 'pointer'
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = isDarkMode ? '#334155' : '#f1f5f9'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                            <div style={{
+                                                width: '36px',
+                                                height: '36px',
+                                                borderRadius: '0',
+                                                background: isDarkMode ? '#334155' : '#fef3c7',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center'
+                                            }}>
+                                                {isDarkMode ? (
+                                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <circle cx="12" cy="12" r="5"/>
+                                                        <line x1="12" y1="1" x2="12" y2="3"/>
+                                                        <line x1="12" y1="21" x2="12" y2="23"/>
+                                                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                                                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                                                        <line x1="1" y1="12" x2="3" y2="12"/>
+                                                        <line x1="21" y1="12" x2="23" y2="12"/>
+                                                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                                                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                                                    </svg>
+                                                ) : (
+                                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                                                    </svg>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div style={{ fontWeight: '600', color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: '13px' }}>
+                                                    {isDarkMode ? 'Light Mode' : 'Dark Mode'}
+                                                </div>
+                                                <div style={{ fontSize: '11px', color: isDarkMode ? '#64748b' : '#94a3b8', marginTop: '2px' }}>
+                                                    Switch to {isDarkMode ? 'light' : 'dark'} theme
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div style={{
+                                            width: '44px',
+                                            height: '24px',
+                                            borderRadius: '0',
+                                            background: isDarkMode ? '#3b82f6' : '#e2e8f0',
+                                            position: 'relative'
+                                        }}>
+                                            <div style={{
+                                                width: '20px',
+                                                height: '20px',
+                                                borderRadius: '0',
+                                                background: 'white',
+                                                position: 'absolute',
+                                                top: '2px',
+                                                left: isDarkMode ? '22px' : '2px'
+                                            }}></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
                                 {/* Sign Out */}
-                                <div style={{ borderTop: '1px solid #e2e8f0', padding: '8px 0' }}>
+                                <div style={{ 
+                                    padding: '8px', 
+                                    borderTop: isDarkMode ? '1px solid #334155' : '1px solid #e2e8f0'
+                                }}>
                                     <a 
                                         href="#" 
                                         onClick={(e) => { e.preventDefault(); handleLogoutClick(); }}
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: '12px',
-                                            padding: '10px 16px',
-                                            color: '#dc2626',
+                                            gap: '14px',
+                                            padding: '12px 14px',
+                                            color: '#ef4444',
                                             textDecoration: 'none',
                                             fontSize: '13px',
-                                            fontWeight: '500',
-                                            transition: 'background 0.15s'
+                                            fontWeight: '600',
+                                            borderRadius: '0'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = isDarkMode ? 'rgba(239,68,68,0.1)' : '#fef2f2';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }}
                                     >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                                            <polyline points="16 17 21 12 16 7"/>
-                                            <line x1="21" y1="12" x2="9" y2="12"/>
-                                        </svg>
-                                        <span>Sign Out</span>
+                                        <div style={{
+                                            width: '36px',
+                                            height: '36px',
+                                            borderRadius: '0',
+                                            background: isDarkMode ? 'rgba(239,68,68,0.15)' : '#fef2f2',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                                                <polyline points="16 17 21 12 16 7"/>
+                                                <line x1="21" y1="12" x2="9" y2="12"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div>Sign Out</div>
+                                            <div style={{ fontSize: '11px', color: isDarkMode ? '#94a3b8' : '#f87171', fontWeight: '400', marginTop: '2px' }}>
+                                                End your session
+                                            </div>
+                                        </div>
                                     </a>
                                 </div>
                             </div>
@@ -3327,6 +3633,7 @@ function VehicleIntake() {
     }, [servicePackages, formData.category]);
 
     // Filter vehicles based on search and date
+    // SORTED: Most recent first (by timeIn or updatedAt) - returning vehicles appear at top
     const getFilteredVehicles = () => {
         if (!Array.isArray(vehicles)) return [];
         let filtered = vehicles.filter(v => v != null);
@@ -3370,6 +3677,15 @@ function VehicleIntake() {
                 }
             });
         }
+
+        // SORT: Most recent first - new vehicles and returning vehicles appear at top
+        // Priority: updatedAt (for returning vehicles) or timeIn (for new vehicles)
+        filtered.sort((a, b) => {
+            // Use the most recent timestamp between timeIn and updatedAt
+            const aTime = new Date(a.updatedAt || a.timeIn || a.createdAt).getTime();
+            const bTime = new Date(b.updatedAt || b.timeIn || b.createdAt).getTime();
+            return bTime - aTime; // Descending order (newest first)
+        });
 
         return filtered;
     };
@@ -7366,6 +7682,980 @@ function VehicleIntake() {
                 onConfirm={alertModal.onConfirm}
                 showCancel={alertModal.showCancel}
             />
+        </div>
+    );
+}
+
+// Vehicle Intake All Records - Sub-module for viewing all records in scrollable list
+function VehicleIntakeAll({ onBackClick }) {
+    const [vehicles, setVehicles] = useState([]);
+    const [invoices, setInvoices] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [dateFilter, setDateFilter] = useState('all');
+    
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
+    
+    // Modal states
+    const [showViewModal, setShowViewModal] = useState(false);
+    const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [showNotesModal, setShowNotesModal] = useState(false);
+    const [selectedVehicle, setSelectedVehicle] = useState(null);
+    const [vehicleHistory, setVehicleHistory] = useState(null);
+    
+    // Subscribe to data
+    useEffect(() => {
+        let mounted = true;
+        let unsubRecords = null;
+        let unsubInvoices = null;
+        
+        const initData = async () => {
+            const services = window.FirebaseServices;
+            if (!services?.intakeRecordsService) {
+                setLoading(false);
+                return;
+            }
+            
+            // Subscribe to intake records
+            unsubRecords = services.intakeRecordsService.subscribeToRecords(
+                (data) => {
+                    if (mounted) setVehicles(data || []);
+                    setLoading(false);
+                },
+                (err) => {
+                    console.error('Error loading records:', err);
+                    setLoading(false);
+                }
+            );
+            
+            // Subscribe to invoices for payment status
+            if (services.invoiceService) {
+                unsubInvoices = services.invoiceService.subscribeToInvoices(
+                    (data) => { if (mounted) setInvoices(data || []); },
+                    () => {}
+                );
+            }
+        };
+        
+        initData();
+        return () => {
+            mounted = false;
+            if (unsubRecords) unsubRecords();
+            if (unsubInvoices) unsubInvoices();
+        };
+    }, []);
+    
+    // View vehicle details
+    const handleView = (vehicle) => {
+        setSelectedVehicle(vehicle);
+        setShowViewModal(true);
+    };
+    
+    // View visit history
+    const handleHistory = async (plateNumber) => {
+        const services = window.FirebaseServices;
+        if (services?.vehicleHistoryService) {
+            try {
+                const result = await services.vehicleHistoryService.getVehicleHistory(plateNumber);
+                if (result.success && result.data) {
+                    setVehicleHistory(result.data);
+                    setShowHistoryModal(true);
+                }
+            } catch (err) {
+                console.error('Error loading history:', err);
+            }
+        }
+    };
+    
+    // View notes
+    const handleNotes = (vehicle) => {
+        setSelectedVehicle(vehicle);
+        setShowNotesModal(true);
+    };
+    
+    // Print receipt - same as main intake module
+    const handlePrint = (vehicle) => {
+        const total = vehicle.service?.price || 0;
+        const receiptNumber = `ECO-${Date.now().toString().slice(-8)}`;
+        const printDate = new Date().toLocaleString();
+        const brand = getBrandingForReceipts();
+        
+        const receiptHTML = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Receipt - ${vehicle.plateNumber}</title>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { 
+                        font-family: 'Courier New', monospace; 
+                        width: 280px; 
+                        margin: 0 auto; 
+                        padding: 20px 10px;
+                        background: #fff;
+                    }
+                    .receipt { text-align: center; }
+                    .header { margin-bottom: 15px; border-bottom: 2px dashed #000; padding-bottom: 15px; }
+                    .logo { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+                    .tagline { font-size: 10px; color: #666; }
+                    .company-info { font-size: 9px; color: #666; margin-top: 5px; }
+                    .receipt-no { font-size: 11px; margin-top: 10px; }
+                    .section { margin: 15px 0; text-align: left; }
+                    .section-title { font-weight: bold; font-size: 12px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
+                    .row { display: flex; justify-content: space-between; font-size: 12px; margin: 4px 0; }
+                    .row-label { color: #666; }
+                    .plate { font-size: 18px; font-weight: bold; letter-spacing: 2px; margin: 10px 0; }
+                    .divider { border-top: 1px dashed #000; margin: 15px 0; }
+                    .total-section { margin: 15px 0; padding: 10px 0; border-top: 2px solid #000; border-bottom: 2px solid #000; }
+                    .total { display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; }
+                    .footer { margin-top: 20px; font-size: 10px; color: #666; text-align: center; }
+                    @media print {
+                        body { width: 80mm; padding: 5mm; }
+                        @page { margin: 0; size: 80mm auto; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="receipt">
+                    <div class="header">
+                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="tagline">${brand.tagline || 'Premium Car Wash Services'}</div>
+                        ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
+                        ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
+                        ${brand.taxPin ? `<div class="company-info">PIN: ${brand.taxPin}</div>` : ''}
+                        <div class="receipt-no">${brand.receiptHeader || 'Receipt'} #${receiptNumber}</div>
+                    </div>
+                    
+                    <div class="plate">${vehicle.plateNumber}</div>
+                    
+                    <div class="section">
+                        <div class="section-title">VEHICLE INFO</div>
+                        <div class="row">
+                            <span class="row-label">Type:</span>
+                            <span>${vehicle.itemType || vehicle.vehicleType || '-'}</span>
+                        </div>
+                        <div class="row">
+                            <span class="row-label">Bay:</span>
+                            <span>${vehicle.assignedBay || 'N/A'}</span>
+                        </div>
+                        <div class="row">
+                            <span class="row-label">Status:</span>
+                            <span>${(vehicle.status || 'pending').toUpperCase()}</span>
+                        </div>
+                    </div>
+                    
+                    ${vehicle.customerName ? `
+                    <div class="section">
+                        <div class="section-title">CUSTOMER</div>
+                        <div class="row">
+                            <span class="row-label">Name:</span>
+                            <span>${vehicle.customerName}</span>
+                        </div>
+                        ${vehicle.customerPhone ? `<div class="row">
+                            <span class="row-label">Phone:</span>
+                            <span>${vehicle.customerPhone}</span>
+                        </div>` : ''}
+                    </div>
+                    ` : ''}
+                    
+                    <div class="section">
+                        <div class="section-title">SERVICE</div>
+                        <div class="row">
+                            <span>${vehicle.service?.name || 'Car Wash'}</span>
+                            <span>${brand.currencySymbol || 'KSH'} ${total}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="total-section">
+                        <div class="total">
+                            <span>TOTAL</span>
+                            <span>${brand.currencySymbol || 'KSH'} ${total}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="section" style="text-align: center;">
+                        <div class="row" style="justify-content: center;">
+                            <span class="row-label">Time In: ${vehicle.timeIn ? new Date(vehicle.timeIn).toLocaleString() : '-'}</span>
+                        </div>
+                        ${vehicle.timeOut ? `
+                        <div class="row" style="justify-content: center;">
+                            <span class="row-label">Time Out: ${new Date(vehicle.timeOut).toLocaleString()}</span>
+                        </div>
+                        ` : ''}
+                    </div>
+                    
+                    <div class="divider"></div>
+                    
+                    <div class="footer">
+                        <p>${brand.receiptFooter || 'Thank you for choosing us!'}</p>
+                        <p style="margin-top: 10px; font-size: 9px;">Printed: ${printDate}</p>
+                    </div>
+                </div>
+                <script>
+                    window.onload = function() { window.print(); }
+                </script>
+            </body>
+            </html>
+        `;
+        
+        const printWindow = window.open('', '_blank', 'width=320,height=600');
+        printWindow.document.write(receiptHTML);
+        printWindow.document.close();
+    };
+    
+    // Filter and sort vehicles
+    const filteredVehicles = React.useMemo(() => {
+        let filtered = vehicles.filter(v => v != null);
+        
+        // Search filter
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            filtered = filtered.filter(v => 
+                v.plateNumber?.toLowerCase()?.includes(query) ||
+                v.customerName?.toLowerCase()?.includes(query) ||
+                v.customerPhone?.includes(query) ||
+                v.service?.name?.toLowerCase()?.includes(query)
+            );
+        }
+        
+        // Date filter
+        if (dateFilter !== 'all') {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            filtered = filtered.filter(v => {
+                const vehicleDate = new Date(v.timeIn);
+                switch (dateFilter) {
+                    case 'today': return vehicleDate >= today;
+                    case 'week': 
+                        const weekStart = new Date(today);
+                        weekStart.setDate(weekStart.getDate() - 7);
+                        return vehicleDate >= weekStart;
+                    case 'month':
+                        const monthStart = new Date(today);
+                        monthStart.setDate(monthStart.getDate() - 30);
+                        return vehicleDate >= monthStart;
+                    default: return true;
+                }
+            });
+        }
+        
+        // Sort by most recent
+        filtered.sort((a, b) => {
+            const aTime = new Date(a.updatedAt || a.timeIn || a.createdAt).getTime();
+            const bTime = new Date(b.updatedAt || b.timeIn || b.createdAt).getTime();
+            return bTime - aTime;
+        });
+        
+        return filtered;
+    }, [vehicles, searchQuery, dateFilter]);
+    
+    // Payment status helper
+    const getPaymentStatus = (vehicle) => {
+        if (vehicle.paymentStatus === 'paid') return true;
+        const vehicleTimeIn = new Date(vehicle.timeIn);
+        const matchingInvoice = invoices.find(inv => {
+            if (inv.paymentStatus !== 'paid') return false;
+            const invoiceTime = new Date(inv.createdAt);
+            if (invoiceTime < vehicleTimeIn) return false;
+            if (inv.washRecordId === vehicle.id) return true;
+            if (inv.plateNumber === vehicle.plateNumber) {
+                const timeDiff = invoiceTime - vehicleTimeIn;
+                return timeDiff >= 0 && timeDiff < 14400000;
+            }
+            return false;
+        });
+        return !!matchingInvoice;
+    };
+    
+    // Status color helper
+    const getStatusColor = (status) => {
+        switch (status) {
+            case 'completed': return '#10b981';
+            case 'in-progress': return '#3b82f6';
+            case 'waiting': return '#f59e0b';
+            case 'garage': return '#8b5cf6';
+            default: return '#3b82f6';
+        }
+    };
+    
+    // Format time helper
+    const formatTime = (dateString) => {
+        if (!dateString) return '-';
+        const date = new Date(dateString);
+        return date.toLocaleString('en-US', { 
+            month: 'short', day: 'numeric', 
+            hour: '2-digit', minute: '2-digit' 
+        });
+    };
+    
+    // Pagination calculations
+    const totalPages = Math.ceil(filteredVehicles.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const paginatedVehicles = filteredVehicles.slice(startIndex, endIndex);
+    
+    // Reset to page 1 when filters change
+    React.useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, dateFilter]);
+    
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '16px' }}>⏳</div>
+                    <p style={{ color: '#64748b' }}>Loading all records...</p>
+                </div>
+            </div>
+        );
+    }
+    
+    return (
+        <div className="intake-module" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {/* Header with filters */}
+            <div style={{ 
+                padding: '16px 20px', 
+                background: '#fff', 
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={onBackClick}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '8px 16px',
+                            background: '#f1f5f9',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: '6px',
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            color: '#475569'
+                        }}
+                    >
+                        ← Back to Intake
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ 
+                            padding: '6px 14px', 
+                            background: '#dbeafe', 
+                            color: '#1e40af', 
+                            borderRadius: '20px', 
+                            fontSize: '13px', 
+                            fontWeight: '600' 
+                        }}>
+                            {filteredVehicles.length.toLocaleString()} {searchQuery || dateFilter !== 'all' ? 'matching' : 'total'} records
+                        </span>
+                        {vehicles.length !== filteredVehicles.length && (
+                            <span style={{ fontSize: '12px', color: '#64748b' }}>
+                                (of {vehicles.length.toLocaleString()} total)
+                            </span>
+                        )}
+                    </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    {/* Search */}
+                    <div style={{ position: 'relative', minWidth: '250px' }}>
+                        <input
+                            type="text"
+                            placeholder="Search plate, customer, service..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{
+                                width: '100%',
+                                padding: '10px 14px 10px 36px',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                fontSize: '13px',
+                                outline: 'none'
+                            }}
+                        />
+                        <svg 
+                            style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}
+                            width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        >
+                            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                        </svg>
+                    </div>
+                    
+                    {/* Date Filter */}
+                    <div style={{ display: 'flex', gap: '2px', backgroundColor: '#f1f5f9', borderRadius: '6px', padding: '3px' }}>
+                        {[
+                            { id: 'all', label: 'All' },
+                            { id: 'today', label: 'Today' },
+                            { id: 'week', label: 'Week' },
+                            { id: 'month', label: 'Month' }
+                        ].map(filter => (
+                            <button
+                                key={filter.id}
+                                onClick={() => setDateFilter(filter.id)}
+                                style={{
+                                    padding: '6px 12px',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: '500',
+                                    cursor: 'pointer',
+                                    backgroundColor: dateFilter === filter.id ? '#fff' : 'transparent',
+                                    color: dateFilter === filter.id ? '#1e293b' : '#64748b',
+                                    boxShadow: dateFilter === filter.id ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
+                                }}
+                            >
+                                {filter.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+            
+            {/* Scrollable Table */}
+            <div style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
+                <div style={{
+                    background: '#fff',
+                    borderRadius: '12px',
+                    border: '1px solid #e2e8f0',
+                    overflow: 'hidden'
+                }}>
+                    <table className="intake-table" style={{ margin: 0, width: '100%' }}>
+                        <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 10 }}>
+                            <tr>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>ID / Plate</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Type</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Visit #</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Service</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Price</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Status</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Payment</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Time In</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {paginatedVehicles.map((vehicle, index) => {
+                                const isPaid = getPaymentStatus(vehicle);
+                                return (
+                                    <tr key={vehicle.id} style={{ 
+                                        background: index % 2 === 0 ? '#fff' : '#fafafa',
+                                        borderBottom: '1px solid #f1f5f9'
+                                    }}>
+                                        <td style={{ padding: '14px 16px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ fontWeight: '600', fontFamily: 'monospace', fontSize: '14px' }}>
+                                                    🚗 {vehicle.plateNumber}
+                                                </span>
+                                                {vehicle.isReturningVehicle && (
+                                                    <span style={{
+                                                        padding: '2px 6px',
+                                                        background: '#dbeafe',
+                                                        color: '#1e40af',
+                                                        borderRadius: '4px',
+                                                        fontSize: '9px',
+                                                        fontWeight: '700'
+                                                    }}>
+                                                        RETURNING
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', color: '#64748b' }}>{vehicle.itemType || vehicle.vehicleType || '-'}</td>
+                                        <td style={{ padding: '14px 16px' }}>
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                minWidth: '28px',
+                                                height: '24px',
+                                                padding: '2px 8px',
+                                                background: (vehicle.visitNumber || 1) > 1 ? '#3b82f6' : '#10b981',
+                                                borderRadius: '12px',
+                                                fontSize: '12px',
+                                                fontWeight: '700',
+                                                color: '#fff'
+                                            }}>
+                                                {vehicle.visitNumber || 1}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontWeight: '500' }}>{vehicle.service?.name || '-'}</td>
+                                        <td style={{ padding: '14px 16px', color: '#10b981', fontWeight: '600' }}>
+                                            KSH {vehicle.service?.price || 0}
+                                        </td>
+                                        <td style={{ padding: '14px 16px' }}>
+                                            <span style={{
+                                                padding: '5px 12px',
+                                                borderRadius: '6px',
+                                                fontSize: '11px',
+                                                fontWeight: '600',
+                                                backgroundColor: getStatusColor(vehicle.status),
+                                                color: '#fff',
+                                                textTransform: 'capitalize'
+                                            }}>
+                                                {(vehicle.status || 'in-progress').replace('-', ' ')}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '14px 16px' }}>
+                                            {isPaid ? (
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    padding: '5px 12px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#d1fae5',
+                                                    color: '#059669'
+                                                }}>
+                                                    ✓ Paid
+                                                </span>
+                                            ) : (
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    padding: '5px 12px',
+                                                    borderRadius: '12px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: '#fef3c7',
+                                                    color: '#d97706'
+                                                }}>
+                                                    💰 Awaiting
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', fontSize: '12px', color: '#64748b' }}>{formatTime(vehicle.timeIn)}</td>
+                                        <td>
+                                            <div className="intake-table-actions">
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title="View Details"
+                                                    onClick={() => handleView(vehicle)}
+                                                >
+                                                    {Icons.eye}
+                                                </button>
+                                                {/* Customer Items Notes Button */}
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title={vehicle.customerItems ? 'View Items (' + vehicle.customerItems.split('\n').filter(i => i.trim()).length + ')' : 'No Items'}
+                                                    onClick={() => handleNotes(vehicle)}
+                                                    style={{ 
+                                                        color: vehicle.customerItems ? '#f59e0b' : '#94a3b8',
+                                                        position: 'relative'
+                                                    }}
+                                                >
+                                                    📋
+                                                    {vehicle.customerItems && (
+                                                        <span style={{
+                                                            position: 'absolute',
+                                                            top: '-2px',
+                                                            right: '-2px',
+                                                            width: '8px',
+                                                            height: '8px',
+                                                            backgroundColor: '#f59e0b',
+                                                            borderRadius: '50%'
+                                                        }}></span>
+                                                    )}
+                                                </button>
+                                                {/* Visit History Button */}
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title="Visit History"
+                                                    onClick={() => handleHistory(vehicle.plateNumber)}
+                                                    style={{ color: '#0284c7' }}
+                                                >
+                                                    {Icons.clock}
+                                                </button>
+                                                <button 
+                                                    className="table-action-btn" 
+                                                    title="Print Receipt"
+                                                    onClick={() => handlePrint(vehicle)}
+                                                    style={{ color: '#6366f1' }}
+                                                >
+                                                    {Icons.printer}
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                    {filteredVehicles.length === 0 && (
+                        <div style={{ 
+                            textAlign: 'center', 
+                            padding: '80px 20px', 
+                            color: '#64748b' 
+                        }}>
+                            <div style={{ fontSize: '64px', marginBottom: '20px' }}>📭</div>
+                            <h3 style={{ margin: '0 0 8px', color: '#1e293b' }}>No Records Found</h3>
+                            <p style={{ margin: 0 }}>Try adjusting your search or filters</p>
+                        </div>
+                    )}
+                </div>
+                
+                {/* Pagination Controls */}
+                {filteredVehicles.length > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '16px 20px',
+                        background: '#f8fafc',
+                        borderTop: '1px solid #e2e8f0',
+                        borderRadius: '0 0 12px 12px',
+                        flexWrap: 'wrap',
+                        gap: '12px'
+                    }}>
+                        {/* Left side - showing info */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: '#64748b' }}>
+                            <span>Showing {startIndex + 1}-{Math.min(endIndex, filteredVehicles.length)} of {filteredVehicles.length.toLocaleString()} records</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>Per page:</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    style={{
+                                        padding: '4px 8px',
+                                        border: '1px solid #e2e8f0',
+                                        borderRadius: '4px',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        backgroundColor: '#fff'
+                                    }}
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                    <option value={250}>250</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        {/* Right side - page navigation */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button
+                                onClick={() => setCurrentPage(1)}
+                                disabled={currentPage === 1}
+                                style={{
+                                    padding: '6px 10px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px',
+                                    background: currentPage === 1 ? '#f1f5f9' : '#fff',
+                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                ⏮ First
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                style={{
+                                    padding: '6px 12px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px',
+                                    background: currentPage === 1 ? '#f1f5f9' : '#fff',
+                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                ← Prev
+                            </button>
+                            
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 8px' }}>
+                                <span style={{ fontSize: '13px', color: '#64748b' }}>Page</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={totalPages}
+                                    value={currentPage}
+                                    onChange={(e) => {
+                                        const page = parseInt(e.target.value);
+                                        if (page >= 1 && page <= totalPages) {
+                                            setCurrentPage(page);
+                                        }
+                                    }}
+                                    style={{
+                                        width: '50px',
+                                        padding: '4px 6px',
+                                        border: '1px solid #e2e8f0',
+                                        borderRadius: '4px',
+                                        fontSize: '13px',
+                                        textAlign: 'center'
+                                    }}
+                                />
+                                <span style={{ fontSize: '13px', color: '#64748b' }}>of {totalPages.toLocaleString()}</span>
+                            </div>
+                            
+                            <button
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                    padding: '6px 12px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px',
+                                    background: currentPage === totalPages ? '#f1f5f9' : '#fff',
+                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                Next →
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(totalPages)}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                    padding: '6px 10px',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px',
+                                    background: currentPage === totalPages ? '#f1f5f9' : '#fff',
+                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                Last ⏭
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+            
+            {/* View Details Modal */}
+            {showViewModal && selectedVehicle && (
+                <div className="modal-overlay" onClick={() => setShowViewModal(false)}>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Item Details</h2>
+                            <button className="modal-close" onClick={() => setShowViewModal(false)}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="vehicle-details">
+                                <div className="detail-row">
+                                    <span className="detail-label">ID / Plate Number</span>
+                                    <span className="detail-value" style={{ fontWeight: 'bold', fontSize: '1.2em' }}>
+                                        {INTAKE_CATEGORIES.find(c => c.id === selectedVehicle.category)?.icon || '🚗'} {selectedVehicle.plateNumber}
+                                    </span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Category</span>
+                                    <span className="detail-value">{INTAKE_CATEGORIES.find(c => c.id === selectedVehicle.category)?.label || 'Vehicle'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Type</span>
+                                    <span className="detail-value">{selectedVehicle.itemType || selectedVehicle.vehicleType}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Service</span>
+                                    <span className="detail-value">{selectedVehicle.service?.name || '-'} (KSH {selectedVehicle.service?.price || 0})</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Priority</span>
+                                    <span className="detail-value" style={{ textTransform: 'uppercase', color: selectedVehicle.priority === 'urgent' ? '#ef4444' : selectedVehicle.priority === 'high' ? '#f59e0b' : '#64748b' }}>{selectedVehicle.priority || 'normal'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Status</span>
+                                    <span className="intake-status-badge" style={{ backgroundColor: getStatusColor(selectedVehicle.status) }}>
+                                        {selectedVehicle.status?.replace('-', ' ')}
+                                    </span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Assigned Bay</span>
+                                    <span className="detail-value">{selectedVehicle.assignedBay || 'Not assigned'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Customer Name</span>
+                                    <span className="detail-value">{selectedVehicle.customerName || '-'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Customer Phone</span>
+                                    <span className="detail-value">{selectedVehicle.customerPhone || '-'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Time In</span>
+                                    <span className="detail-value">{selectedVehicle.timeIn ? new Date(selectedVehicle.timeIn).toLocaleString() : '-'}</span>
+                                </div>
+                                <div className="detail-row">
+                                    <span className="detail-label">Time Out</span>
+                                    <span className="detail-value">{selectedVehicle.timeOut ? new Date(selectedVehicle.timeOut).toLocaleString() : '-'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="modal-btn modal-btn-primary" onClick={() => setShowViewModal(false)}>
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* Customer Items Notes Modal */}
+            {showNotesModal && selectedVehicle && (
+                <div className="modal-overlay" onClick={() => setShowNotesModal(false)}>
+                    <div className="modal" style={{ maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>📋 Customer Items - {selectedVehicle.plateNumber}</h2>
+                            <button className="modal-close" onClick={() => setShowNotesModal(false)}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            {selectedVehicle.customerItems ? (
+                                <div style={{
+                                    background: '#fffbeb',
+                                    border: '1px solid #fde68a',
+                                    borderRadius: '8px',
+                                    padding: '16px',
+                                    whiteSpace: 'pre-wrap',
+                                    fontSize: '14px',
+                                    lineHeight: '1.6'
+                                }}>
+                                    {selectedVehicle.customerItems}
+                                </div>
+                            ) : (
+                                <div style={{
+                                    textAlign: 'center',
+                                    padding: '40px',
+                                    color: '#94a3b8'
+                                }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '12px' }}>📝</div>
+                                    <p>No customer items recorded for this vehicle</p>
+                                </div>
+                            )}
+                        </div>
+                        <div className="modal-footer">
+                            <button className="modal-btn modal-btn-primary" onClick={() => setShowNotesModal(false)}>
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* Visit History Modal */}
+            {showHistoryModal && vehicleHistory && (
+                <div className="modal-overlay" onClick={() => { setShowHistoryModal(false); setVehicleHistory(null); }}>
+                    <div className="modal" style={{ maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Visit History - {vehicleHistory.plateNumber}</h2>
+                            <button className="modal-close" onClick={() => { setShowHistoryModal(false); setVehicleHistory(null); }}>
+                                {Icons.x}
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            {/* Summary Stats */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                                <div style={{ background: '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#0284c7' }}>{vehicleHistory.totalVisits || 0}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Visits</div>
+                                </div>
+                                <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>KSH {(vehicleHistory.totalSpent || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Spent</div>
+                                </div>
+                                <div style={{ background: '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#7c3aed' }}>{vehicleHistory.lastVisit ? new Date(vehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Last Visit</div>
+                                </div>
+                            </div>
+
+                            {/* Customer Info */}
+                            {(vehicleHistory.customerName || vehicleHistory.customerPhone) && (
+                                <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                                    <div style={{ display: 'flex', gap: '20px', fontSize: '13px' }}>
+                                        {vehicleHistory.customerName && (
+                                            <div><span style={{ color: '#64748b' }}>Customer:</span> <strong>{vehicleHistory.customerName}</strong></div>
+                                        )}
+                                        {vehicleHistory.customerPhone && (
+                                            <div><span style={{ color: '#64748b' }}>Phone:</span> <strong>{vehicleHistory.customerPhone}</strong></div>
+                                        )}
+                                        {vehicleHistory.vehicleType && (
+                                            <div><span style={{ color: '#64748b' }}>Type:</span> <strong>{vehicleHistory.vehicleType}</strong></div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Visit History Table */}
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', marginBottom: '8px' }}>Visit History</div>
+                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                                        <tr>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Date</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Time</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Service</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Bay</th>
+                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Amount</th>
+                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(vehicleHistory.visitHistory || []).length === 0 ? (
+                                            <tr>
+                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>
+                                                    No visit history recorded yet
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            (vehicleHistory.visitHistory || []).map((visit, index) => (
+                                                <tr key={visit.id || index} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '10px' }}>{visit.date ? new Date(visit.date).toLocaleDateString() : '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.timeIn ? new Date(visit.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.service?.name || '-'}</td>
+                                                    <td style={{ padding: '10px' }}>{visit.bay || '-'}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>KSH {(visit.amount || 0).toLocaleString()}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'center' }}>
+                                                        <span style={{
+                                                            padding: '2px 8px',
+                                                            borderRadius: '10px',
+                                                            fontSize: '11px',
+                                                            fontWeight: '500',
+                                                            background: visit.status === 'completed' ? '#dcfce7' : visit.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
+                                                            color: visit.status === 'completed' ? '#166534' : visit.status === 'in-progress' ? '#1e40af' : '#92400e'
+                                                        }}>
+                                                            {visit.status || 'unknown'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="modal-btn modal-btn-primary" onClick={() => { setShowHistoryModal(false); setVehicleHistory(null); }}>
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -27250,6 +28540,15 @@ function SystemSettings({ initialTab = 'profile' }) {
     const [savingContacts, setSavingContacts] = useState(false);
     const [editingContacts, setEditingContacts] = useState(false);
     
+    // Complaints state
+    const [complaints, setComplaints] = useState([]);
+    const [showAddComplaint, setShowAddComplaint] = useState(false);
+    const [newComplaint, setNewComplaint] = useState({ subject: '', description: '', priority: 'medium' });
+    const [savingComplaint, setSavingComplaint] = useState(false);
+    const [showComplaintNotes, setShowComplaintNotes] = useState(null);
+    const [complaintNote, setComplaintNote] = useState('');
+    const [viewingComplaintResponse, setViewingComplaintResponse] = useState(null);
+    
     // Profile image state
     const [profileImage, setProfileImage] = useState(userProfile?.photoURL || null);
     const [uploadingImage, setUploadingImage] = useState(false);
@@ -27294,6 +28593,128 @@ function SystemSettings({ initialTab = 'profile' }) {
             setError(err.message || 'Failed to save contacts');
         } finally {
             setSavingContacts(false);
+        }
+    };
+    
+    // Load complaints from Firebase
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (services?.complaintsService?.subscribeToComplaints) {
+            const unsubscribe = services.complaintsService.subscribeToComplaints((data) => {
+                setComplaints(data);
+            });
+            return () => unsubscribe && unsubscribe();
+        }
+    }, []);
+    
+    // Add new complaint
+    const handleAddComplaint = async () => {
+        if (!newComplaint.subject.trim() || !newComplaint.description.trim()) {
+            setError('Please fill in subject and description');
+            return;
+        }
+        setSavingComplaint(true);
+        try {
+            const services = window.FirebaseServices;
+            const complaintData = {
+                ...newComplaint,
+                status: 'awaiting',
+                createdAt: new Date().toISOString(),
+                createdBy: currentUser?.email || 'Unknown',
+                notes: []
+            };
+            if (services?.complaintsService?.addComplaint) {
+                const result = await services.complaintsService.addComplaint(complaintData);
+                if (result.success) {
+                    setSuccessMessage('Complaint submitted successfully!');
+                    setNewComplaint({ subject: '', description: '', priority: 'medium' });
+                    setShowAddComplaint(false);
+                } else {
+                    setError(result.error || 'Failed to submit complaint');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to submit complaint');
+        } finally {
+            setSavingComplaint(false);
+        }
+    };
+    
+    // Mark complaint as completed with response
+    const handleMarkCompleted = async (complaintId, response = '') => {
+        try {
+            const services = window.FirebaseServices;
+            const complaint = complaints.find(c => c.id === complaintId);
+            if (services?.complaintsService?.updateComplaint) {
+                const updateData = { 
+                    status: 'completed',
+                    completedAt: new Date().toISOString(),
+                    response: response || complaint?.response || 'Your complaint has been resolved.'
+                };
+                const result = await services.complaintsService.updateComplaint(complaintId, updateData);
+                if (result.success) {
+                    setSuccessMessage('Complaint marked as completed!');
+                    // Add notification for resolved complaint
+                    if (services?.activityService?.logActivity) {
+                        await services.activityService.logActivity({
+                            type: 'complaint_resolved',
+                            title: `Complaint Resolved: ${complaint?.subject || 'Complaint'}`,
+                            description: `Your complaint "${complaint?.subject}" has been resolved.`,
+                            timestamp: new Date().toISOString(),
+                            complaintId: complaintId,
+                            module: 'support'
+                        });
+                    }
+                } else {
+                    setError(result.error || 'Failed to update complaint');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to update complaint');
+        }
+    };
+    
+    // Add note to complaint
+    const handleAddNote = async (complaintId) => {
+        if (!complaintNote.trim()) return;
+        try {
+            const services = window.FirebaseServices;
+            const complaint = complaints.find(c => c.id === complaintId);
+            const newNote = {
+                text: complaintNote,
+                addedAt: new Date().toISOString(),
+                addedBy: currentUser?.email || 'Unknown'
+            };
+            const updatedNotes = [...(complaint?.notes || []), newNote];
+            if (services?.complaintsService?.updateComplaint) {
+                // Update complaint with note as response and send notification
+                const result = await services.complaintsService.updateComplaint(complaintId, { 
+                    notes: updatedNotes,
+                    response: complaintNote,
+                    respondedAt: new Date().toISOString(),
+                    respondedBy: currentUser?.email || 'Support Team'
+                });
+                if (result.success) {
+                    setSuccessMessage('Response added successfully!');
+                    // Log activity for notification
+                    if (services?.activityService?.logActivity) {
+                        await services.activityService.logActivity({
+                            type: 'complaint_response',
+                            title: `Response Added: ${complaint?.subject || 'Complaint'}`,
+                            description: `A response has been added to your complaint "${complaint?.subject}".`,
+                            timestamp: new Date().toISOString(),
+                            complaintId: complaintId,
+                            module: 'support'
+                        });
+                    }
+                    setComplaintNote('');
+                    setShowComplaintNotes(null);
+                } else {
+                    setError(result.error || 'Failed to add response');
+                }
+            }
+        } catch (err) {
+            setError(err.message || 'Failed to add response');
         }
     };
     
@@ -28099,6 +29520,504 @@ function SystemSettings({ initialTab = 'profile' }) {
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    {/* Complaints Section */}
+                    <div style={cardStyle}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 24px', borderBottom: `1px solid ${theme.border}`, paddingBottom: '16px' }}>
+                            <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                📋 Complaints
+                            </h3>
+                            <button
+                                onClick={() => setShowAddComplaint(true)}
+                                style={{
+                                    background: '#3b82f6',
+                                    border: 'none',
+                                    color: 'white',
+                                    padding: '8px 16px',
+                                    fontSize: '13px',
+                                    fontWeight: '600',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px'
+                                }}
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                                Add Complaint
+                            </button>
+                        </div>
+
+                        {/* Add Complaint Modal */}
+                        {showAddComplaint && (
+                            <div style={{
+                                position: 'fixed',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'rgba(0,0,0,0.5)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 9999
+                            }}>
+                                <div style={{
+                                    background: theme.bg,
+                                    width: '500px',
+                                    maxWidth: '90%',
+                                    border: `1px solid ${theme.border}`
+                                }}>
+                                    <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                                        <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>Submit New Complaint</h3>
+                                    </div>
+                                    <div style={{ padding: '20px', display: 'grid', gap: '16px' }}>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>Subject *</label>
+                                            <input
+                                                type="text"
+                                                value={newComplaint.subject}
+                                                onChange={(e) => setNewComplaint(prev => ({ ...prev, subject: e.target.value }))}
+                                                placeholder="Brief subject of your complaint..."
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '10px 14px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    fontSize: '14px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none'
+                                                }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>Priority</label>
+                                            <select
+                                                value={newComplaint.priority}
+                                                onChange={(e) => setNewComplaint(prev => ({ ...prev, priority: e.target.value }))}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '10px 14px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    fontSize: '14px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none'
+                                                }}
+                                            >
+                                                <option value="low">Low</option>
+                                                <option value="medium">Medium</option>
+                                                <option value="high">High</option>
+                                                <option value="urgent">Urgent</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>Description *</label>
+                                            <textarea
+                                                value={newComplaint.description}
+                                                onChange={(e) => setNewComplaint(prev => ({ ...prev, description: e.target.value }))}
+                                                placeholder="Describe your complaint in detail..."
+                                                rows={4}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '10px 14px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    fontSize: '14px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none',
+                                                    resize: 'vertical',
+                                                    fontFamily: 'inherit'
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div style={{ padding: '16px 20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                                        <button
+                                            onClick={() => { setShowAddComplaint(false); setNewComplaint({ subject: '', description: '', priority: 'medium' }); }}
+                                            style={{
+                                                background: 'transparent',
+                                                border: `1px solid ${theme.border}`,
+                                                color: theme.text,
+                                                padding: '10px 20px',
+                                                fontSize: '13px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleAddComplaint}
+                                            disabled={savingComplaint}
+                                            style={{
+                                                background: '#3b82f6',
+                                                border: 'none',
+                                                color: 'white',
+                                                padding: '10px 20px',
+                                                fontSize: '13px',
+                                                fontWeight: '600',
+                                                cursor: savingComplaint ? 'not-allowed' : 'pointer',
+                                                opacity: savingComplaint ? 0.7 : 1
+                                            }}
+                                        >
+                                            {savingComplaint ? 'Submitting...' : 'Submit Complaint'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Add Note Modal */}
+                        {showComplaintNotes && (
+                            <div style={{
+                                position: 'fixed',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'rgba(0,0,0,0.5)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 9999
+                            }}>
+                                <div style={{
+                                    background: theme.bg,
+                                    width: '500px',
+                                    maxWidth: '90%',
+                                    border: `1px solid ${theme.border}`
+                                }}>
+                                    <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}` }}>
+                                        <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>Add Note</h3>
+                                    </div>
+                                    <div style={{ padding: '20px' }}>
+                                        {/* Existing Notes */}
+                                        {complaints.find(c => c.id === showComplaintNotes)?.notes?.length > 0 && (
+                                            <div style={{ marginBottom: '16px' }}>
+                                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.textSecondary }}>Previous Notes</label>
+                                                <div style={{ maxHeight: '150px', overflowY: 'auto', background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '12px' }}>
+                                                    {complaints.find(c => c.id === showComplaintNotes)?.notes.map((note, idx) => (
+                                                        <div key={idx} style={{ marginBottom: idx < complaints.find(c => c.id === showComplaintNotes).notes.length - 1 ? '12px' : 0, paddingBottom: idx < complaints.find(c => c.id === showComplaintNotes).notes.length - 1 ? '12px' : 0, borderBottom: idx < complaints.find(c => c.id === showComplaintNotes).notes.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                                                            <div style={{ fontSize: '13px', color: theme.text, marginBottom: '4px' }}>{note.text}</div>
+                                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{note.addedBy} • {new Date(note.addedAt).toLocaleString()}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>New Note</label>
+                                            <textarea
+                                                value={complaintNote}
+                                                onChange={(e) => setComplaintNote(e.target.value)}
+                                                placeholder="Add your note here..."
+                                                rows={3}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '10px 14px',
+                                                    border: `1px solid ${theme.border}`,
+                                                    fontSize: '14px',
+                                                    background: theme.inputBg,
+                                                    color: theme.text,
+                                                    outline: 'none',
+                                                    resize: 'vertical',
+                                                    fontFamily: 'inherit'
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div style={{ padding: '16px 20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                                        <button
+                                            onClick={() => { setShowComplaintNotes(null); setComplaintNote(''); }}
+                                            style={{
+                                                background: 'transparent',
+                                                border: `1px solid ${theme.border}`,
+                                                color: theme.text,
+                                                padding: '10px 20px',
+                                                fontSize: '13px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={() => handleAddNote(showComplaintNotes)}
+                                            style={{
+                                                background: '#3b82f6',
+                                                border: 'none',
+                                                color: 'white',
+                                                padding: '10px 20px',
+                                                fontSize: '13px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            Add Note
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Complaints Table */}
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                <thead>
+                                    <tr style={{ background: theme.bgSecondary }}>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>#</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Subject</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Priority</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Date</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Notes</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {complaints.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>
+                                                <div style={{ fontSize: '32px', marginBottom: '12px' }}>📭</div>
+                                                <div>No complaints submitted yet</div>
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        complaints.map((complaint, index) => (
+                                            <tr key={complaint.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                                <td style={{ padding: '14px 16px', color: theme.textSecondary }}>{index + 1}</td>
+                                                <td style={{ padding: '14px 16px' }}>
+                                                    <div style={{ fontWeight: '600', color: theme.text, marginBottom: '4px' }}>{complaint.subject}</div>
+                                                    <div style={{ fontSize: '12px', color: theme.textSecondary, maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{complaint.description}</div>
+                                                </td>
+                                                <td style={{ padding: '14px 16px' }}>
+                                                    <span style={{
+                                                        display: 'inline-block',
+                                                        padding: '4px 10px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '600',
+                                                        textTransform: 'uppercase',
+                                                        background: complaint.priority === 'urgent' ? '#fef2f2' : complaint.priority === 'high' ? '#fff7ed' : complaint.priority === 'medium' ? '#fefce8' : '#f0fdf4',
+                                                        color: complaint.priority === 'urgent' ? '#ef4444' : complaint.priority === 'high' ? '#f97316' : complaint.priority === 'medium' ? '#eab308' : '#22c55e'
+                                                    }}>
+                                                        {complaint.priority}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '14px 16px', color: theme.textSecondary, fontSize: '12px' }}>
+                                                    {new Date(complaint.createdAt).toLocaleDateString()}
+                                                </td>
+                                                <td style={{ padding: '14px 16px' }}>
+                                                    <span style={{
+                                                        display: 'inline-block',
+                                                        padding: '4px 10px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '600',
+                                                        textTransform: 'uppercase',
+                                                        background: complaint.status === 'completed' ? '#f0fdf4' : '#fef3c7',
+                                                        color: complaint.status === 'completed' ? '#22c55e' : '#f59e0b'
+                                                    }}>
+                                                        {complaint.status === 'completed' ? 'Completed' : 'Awaiting'}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '14px 16px', color: theme.textSecondary, fontSize: '12px' }}>
+                                                    {complaint.notes?.length || 0} note{(complaint.notes?.length || 0) !== 1 ? 's' : ''}
+                                                </td>
+                                                <td style={{ padding: '14px 16px' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                                                        <button
+                                                            onClick={() => setShowComplaintNotes(complaint.id)}
+                                                            title="Add Note"
+                                                            style={{
+                                                                background: theme.bgSecondary,
+                                                                border: `1px solid ${theme.border}`,
+                                                                color: theme.text,
+                                                                padding: '6px 10px',
+                                                                fontSize: '12px',
+                                                                cursor: 'pointer',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '4px'
+                                                            }}
+                                                        >
+                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                                            </svg>
+                                                            Note
+                                                        </button>
+                                                        {complaint.response && (
+                                                            <button
+                                                                onClick={() => setViewingComplaintResponse(complaint)}
+                                                                title="View Response"
+                                                                style={{
+                                                                    background: '#3b82f6',
+                                                                    border: 'none',
+                                                                    color: 'white',
+                                                                    padding: '6px 10px',
+                                                                    fontSize: '12px',
+                                                                    cursor: 'pointer',
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '4px'
+                                                                }}
+                                                            >
+                                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                                                    <circle cx="12" cy="12" r="3"/>
+                                                                </svg>
+                                                                View
+                                                            </button>
+                                                        )}
+                                                        {complaint.status !== 'completed' && (
+                                                            <button
+                                                                onClick={() => handleMarkCompleted(complaint.id)}
+                                                                title="Mark as Completed"
+                                                                style={{
+                                                                    background: '#22c55e',
+                                                                    border: 'none',
+                                                                    color: 'white',
+                                                                    padding: '6px 10px',
+                                                                    fontSize: '12px',
+                                                                    cursor: 'pointer',
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '4px'
+                                                                }}
+                                                            >
+                                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                    <polyline points="20 6 9 17 4 12"/>
+                                                                </svg>
+                                                                Complete
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* View Response Modal */}
+                        {viewingComplaintResponse && (
+                            <div style={{
+                                position: 'fixed',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'rgba(0,0,0,0.5)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 9999
+                            }}>
+                                <div style={{
+                                    background: theme.bg,
+                                    width: '550px',
+                                    maxWidth: '90%',
+                                    maxHeight: '80vh',
+                                    overflow: 'auto',
+                                    border: `1px solid ${theme.border}`
+                                }}>
+                                    <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <h3 style={{ margin: 0, color: theme.text, fontSize: '16px', fontWeight: '700' }}>Complaint Response</h3>
+                                        <button
+                                            onClick={() => setViewingComplaintResponse(null)}
+                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: theme.textSecondary }}
+                                        >
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                                <line x1="6" y1="6" x2="18" y2="18"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    <div style={{ padding: '20px' }}>
+                                        {/* Complaint Info */}
+                                        <div style={{ marginBottom: '20px', padding: '16px', background: theme.bgSecondary, border: `1px solid ${theme.border}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                                <div>
+                                                    <div style={{ fontWeight: '700', color: theme.text, fontSize: '15px', marginBottom: '4px' }}>{viewingComplaintResponse.subject}</div>
+                                                    <div style={{ fontSize: '12px', color: theme.textSecondary }}>Submitted on {new Date(viewingComplaintResponse.createdAt).toLocaleDateString()}</div>
+                                                </div>
+                                                <span style={{
+                                                    padding: '4px 10px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    textTransform: 'uppercase',
+                                                    background: viewingComplaintResponse.status === 'completed' ? '#f0fdf4' : '#fef3c7',
+                                                    color: viewingComplaintResponse.status === 'completed' ? '#22c55e' : '#f59e0b'
+                                                }}>
+                                                    {viewingComplaintResponse.status === 'completed' ? 'Resolved' : 'Pending'}
+                                                </span>
+                                            </div>
+                                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>{viewingComplaintResponse.description}</div>
+                                        </div>
+
+                                        {/* Response Section */}
+                                        <div style={{ marginBottom: '16px' }}>
+                                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '8px', verticalAlign: 'middle' }}>
+                                                    <polyline points="20 6 9 17 4 12"/>
+                                                </svg>
+                                                Response from Support
+                                            </label>
+                                            <div style={{ 
+                                                padding: '16px', 
+                                                background: '#f0fdf4', 
+                                                border: '1px solid #bbf7d0', 
+                                                fontSize: '14px', 
+                                                color: '#166534',
+                                                lineHeight: '1.6'
+                                            }}>
+                                                {viewingComplaintResponse.response}
+                                            </div>
+                                            {viewingComplaintResponse.respondedAt && (
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
+                                                    Responded by {viewingComplaintResponse.respondedBy || 'Support Team'} on {new Date(viewingComplaintResponse.respondedAt).toLocaleString()}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Notes History */}
+                                        {viewingComplaintResponse.notes?.length > 0 && (
+                                            <div>
+                                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px', color: theme.text }}>Response History</label>
+                                                <div style={{ maxHeight: '200px', overflowY: 'auto', background: theme.bgSecondary, border: `1px solid ${theme.border}`, padding: '12px' }}>
+                                                    {viewingComplaintResponse.notes.map((note, idx) => (
+                                                        <div key={idx} style={{ marginBottom: idx < viewingComplaintResponse.notes.length - 1 ? '12px' : 0, paddingBottom: idx < viewingComplaintResponse.notes.length - 1 ? '12px' : 0, borderBottom: idx < viewingComplaintResponse.notes.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                                                            <div style={{ fontSize: '13px', color: theme.text, marginBottom: '4px' }}>{note.text}</div>
+                                                            <div style={{ fontSize: '11px', color: theme.textSecondary }}>{note.addedBy} • {new Date(note.addedAt).toLocaleString()}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div style={{ padding: '16px 20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'flex-end' }}>
+                                        <button
+                                            onClick={() => setViewingComplaintResponse(null)}
+                                            style={{
+                                                background: '#3b82f6',
+                                                border: 'none',
+                                                color: 'white',
+                                                padding: '10px 24px',
+                                                fontSize: '13px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -30197,6 +32116,7 @@ function ContentArea({ activeModule, onModuleClick, settingsTab }) {
             <div className="content-placeholder">
                 {activeModule === 'dashboard' && <Dashboard onModuleClick={onModuleClick} />}
                 {activeModule === 'vehicle-intake' && <VehicleIntake />}
+                {activeModule === 'vehicle-intake-all' && <VehicleIntakeAll onBackClick={() => onModuleClick('vehicle-intake')} />}
                 {activeModule === 'service-packages' && <ServicePackages />}
                 {activeModule === 'equipment' && <EquipmentManagement />}
                 {activeModule === 'customers' && <CustomerManagement />}
@@ -30372,30 +32292,35 @@ function App() {
         document.documentElement.setAttribute('data-theme', !isDarkMode ? 'dark' : 'light');
     };
 
+    // Permission helper functions - defined BEFORE handleModuleClick
+    const hasModuleAccess = (moduleId) => {
+        if (!userProfile) return false;
+        if (!window.FirebaseServices?.userService) return true;
+        
+        // Sub-modules inherit parent module permissions
+        // vehicle-intake-all inherits from vehicle-intake
+        const parentModuleMap = {
+            'vehicle-intake-all': 'vehicle-intake'
+        };
+        const effectiveModuleId = parentModuleMap[moduleId] || moduleId;
+        
+        // Pass email for super admin check
+        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, effectiveModuleId, userProfile.permissions, userProfile.email);
+    };
+
     const handleModuleClick = (moduleId, tab = null) => {
-        // Check if user has access to this module
-        if (userProfile && window.FirebaseServices?.userService) {
-            const hasAccess = window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions);
-            if (!hasAccess) {
-                const moduleName = menuItems.find(m => m.id === moduleId)?.label || moduleId;
-                setDeniedModule(moduleName);
-                setShowPermissionModal(true);
-                return;
-            }
+        // Check if user has access to this module using our helper
+        if (!hasModuleAccess(moduleId)) {
+            const moduleName = menuItems.find(m => m.id === moduleId)?.label || moduleId;
+            setDeniedModule(moduleName);
+            setShowPermissionModal(true);
+            return;
         }
         setActiveModule(moduleId);
         // Handle settings tab
         if (moduleId === 'settings' && tab) {
             setSettingsTab(tab);
         }
-    };
-
-    // Permission helper functions
-    const hasModuleAccess = (moduleId) => {
-        if (!userProfile) return false;
-        if (!window.FirebaseServices?.userService) return true;
-        // Pass email for super admin check
-        return window.FirebaseServices.userService.hasModuleAccess(userProfile.role, moduleId, userProfile.permissions, userProfile.email);
     };
 
     const hasPermission = (moduleId, action = 'view') => {

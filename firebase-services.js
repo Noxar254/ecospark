@@ -5361,6 +5361,64 @@ export const brandingService = {
   }
 };
 
+// ==================== COMPLAINTS SERVICE ====================
+export const complaintsService = {
+  // Add complaint
+  async addComplaint(complaintData) {
+    try {
+      const docRef = await addDoc(collection(db, 'complaints'), {
+        ...complaintData,
+        createdAt: complaintData.createdAt || new Date().toISOString()
+      });
+      return { success: true, id: docRef.id };
+    } catch (error) {
+      console.error('Error adding complaint:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update complaint
+  async updateComplaint(complaintId, updateData) {
+    try {
+      const complaintRef = doc(db, 'complaints', complaintId);
+      await updateDoc(complaintRef, {
+        ...updateData,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating complaint:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to complaints (real-time)
+  subscribeToComplaints(callback) {
+    const q = query(collection(db, 'complaints'), orderBy('createdAt', 'desc'));
+    return onSnapshot(q, (snapshot) => {
+      const complaints = [];
+      snapshot.forEach((doc) => {
+        complaints.push({ id: doc.id, ...doc.data() });
+      });
+      callback(complaints);
+    }, (error) => {
+      console.error('Error subscribing to complaints:', error);
+      callback([]);
+    });
+  },
+
+  // Delete complaint
+  async deleteComplaint(complaintId) {
+    try {
+      await deleteDoc(doc(db, 'complaints', complaintId));
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting complaint:', error);
+      return { success: false, error: error.message };
+    }
+  }
+};
+
 // ==================== SETTINGS SERVICE ====================
 export const settingsService = {
   // Save support contacts
@@ -5432,6 +5490,8 @@ if (typeof window !== 'undefined') {
     teamChatService,
     // Settings
     settingsService,
+    // Complaints
+    complaintsService,
     // Branding
     brandingService,
     // Audit Trail
