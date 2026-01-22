@@ -2519,12 +2519,12 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                     const alerts = activities.slice(0, 10).map(a => ({
                         id: `activity-${a.id}`,
                         type: 'activity',
-                        icon: a.type === 'intake' ? '🚗' : a.type === 'billing' ? '💳' : a.type === 'wash' ? '🚿' : a.type === 'garage' ? '🔧' : '📋',
+                        icon: a.type === 'intake' ? '🚗' : a.type === 'billing' ? '💳' : a.type === 'wash' ? '🚿' : a.type === 'garage' ? '🔧' : a.type === 'complaint' ? '⚠️' : '📋',
                         title: a.description || a.action || 'Activity',
-                        subtitle: a.user || 'System',
+                        subtitle: a.user || a.loggedBy || 'System',
                         timestamp: a.timestamp || a.createdAt,
-                        module: a.type === 'intake' ? 'vehicle-intake' : a.type === 'billing' ? 'billing' : a.type === 'wash' ? 'wash-bays' : a.type === 'garage' ? 'garage' : 'activities',
-                        color: '#3b82f6'
+                        module: a.type === 'intake' ? 'vehicle-intake' : a.type === 'billing' ? 'billing' : a.type === 'wash' ? 'wash-bays' : a.type === 'garage' ? 'garage' : a.type === 'complaint' ? 'customers' : 'activities',
+                        color: a.type === 'complaint' ? (a.status === 'success' ? '#10b981' : '#ef4444') : '#3b82f6'
                     }));
                     updateNotifications('activity-', alerts);
                 }));
@@ -3509,8 +3509,8 @@ function VehicleIntake() {
 </head>
 <body>
     <div class="header">
-        <h1>${branding.businessName || 'EcoSpark Car Wash'}</h1>
-        <div class="company">${branding.businessEmail || ''} ${branding.businessPhone ? '| ' + branding.businessPhone : ''}</div>
+        <h1>${branding.companyName || 'EcoSpark Car Wash'}</h1>
+        <div class="company">${branding.email || ''} ${branding.phone ? '| ' + branding.phone : ''}</div>
         <div class="date-range">Intake Records: ${rangeLabel}</div>
     </div>
     
@@ -3567,7 +3567,7 @@ function VehicleIntake() {
     </table>
     
     <div class="footer">
-        Generated on ${new Date().toLocaleString()} | ${branding.businessName || 'EcoSpark Car Wash'}
+        Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark Car Wash'}
     </div>
     
     <script>window.onload = function() { window.print(); }</script>
@@ -12238,6 +12238,7 @@ function FleetAccounts() {
 // Customer Management Component
 function CustomerManagement() {
     const { canCreate, canEdit, canDelete } = usePermissions();
+    const { branding } = useBranding();
     const [permissionDenied, setPermissionDenied] = useState({ show: false, action: '' });
     const [customers, setCustomers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -12255,9 +12256,35 @@ function CustomerManagement() {
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [activeTab, setActiveTab] = useState('customers'); // 'customers', 'reminders', or 'rewards'
+    const [activeTab, setActiveTab] = useState('customers'); // 'customers', 'reminders', 'rewards', or 'complaints'
     const [showRewardModal, setShowRewardModal] = useState(false);
     const [rewardCustomer, setRewardCustomer] = useState(null);
+    
+    // Complaint/Conflict Resolution state
+    const [showComplaintModal, setShowComplaintModal] = useState(false);
+    const [complaints, setComplaints] = useState([]);
+    const [selectedComplaint, setSelectedComplaint] = useState(null);
+    const [showViewComplaintModal, setShowViewComplaintModal] = useState(false);
+    const [showAddNoteModal, setShowAddNoteModal] = useState(false);
+    const [noteComplaint, setNoteComplaint] = useState(null);
+    const [resolutionNote, setResolutionNote] = useState('');
+    const [showComplaintReceiptModal, setShowComplaintReceiptModal] = useState(false);
+    const [complaintReceiptData, setComplaintReceiptData] = useState(null);
+    const [complaintSearch, setComplaintSearch] = useState('');
+    const [complaintDateFilter, setComplaintDateFilter] = useState('all');
+    const [complaintStatusFilter, setComplaintStatusFilter] = useState('all');
+    const [complaintPage, setComplaintPage] = useState(1);
+    const complaintsPerPage = 10;
+    const [complaintFormData, setComplaintFormData] = useState({
+        customerId: '',
+        customerName: '',
+        customerPhone: '',
+        plateNumber: '',
+        complaintNumber: '',
+        complaintType: 'service',
+        description: '',
+        priority: 'medium'
+    });
     
     // Alert modal state
     const [alertModal, setAlertModal] = useState({
@@ -12445,6 +12472,19 @@ function CustomerManagement() {
         return () => unsubscribe();
     }, []);
 
+    // Subscribe to complaints using complaintsService
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (!services?.complaintsService) return;
+        
+        const unsubscribe = services.complaintsService.subscribeToComplaints(
+            (complaintsData) => {
+                setComplaints(complaintsData);
+            }
+        );
+        return () => unsubscribe();
+    }, []);
+
     // Filter customers based on search
     const filteredCustomers = customers.filter(customer => {
         const query = searchQuery.toLowerCase();
@@ -12597,6 +12637,306 @@ function CustomerManagement() {
             .replace('{points}', customer.loyaltyPoints || 0)
             .replace('{name}', customer.name || 'Valued Customer')
             .replace('{reward}', loyaltySettings.rewardType || 'Free Wash');
+    };
+
+    // Get customer complaint status
+    const getCustomerComplaintStatus = (customerId) => {
+        const customerComplaints = complaints.filter(c => c.customerId === customerId);
+        if (customerComplaints.length === 0) return 'none';
+        const hasOpen = customerComplaints.some(c => c.status === 'open' || c.status === 'in-progress');
+        if (hasOpen) return 'open';
+        return 'resolved';
+    };
+
+    // Get active complaints count
+    const getActiveComplaintsCount = () => {
+        return complaints.filter(c => c.status === 'open' || c.status === 'in-progress').length;
+    };
+
+    // Reset complaint form
+    const resetComplaintForm = () => {
+        setComplaintFormData({
+            customerId: '',
+            customerName: '',
+            customerPhone: '',
+            plateNumber: '',
+            serviceCode: '',
+            complaintType: 'service',
+            description: '',
+            priority: 'medium'
+        });
+    };
+
+    // Generate auto complaint number
+    const generateComplaintNumber = () => {
+        const now = new Date();
+        const year = now.getFullYear().toString().slice(-2);
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const random = Math.floor(Math.random() * 9000) + 1000;
+        return `CMP-${year}${month}${day}-${random}`;
+    };
+
+    // Handle add complaint
+    const handleAddComplaint = async () => {
+        if (!complaintFormData.customerName || !complaintFormData.description) {
+            setError('Customer name and description are required');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (!services?.complaintsService) {
+                throw new Error('Complaints service not available');
+            }
+            
+            // Auto-generate complaint number
+            const complaintNumber = generateComplaintNumber();
+            const createdAt = new Date().toISOString();
+            
+            const complaintData = {
+                ...complaintFormData,
+                complaintNumber,
+                status: 'open',
+                createdAt,
+                updatedAt: createdAt,
+                resolvedAt: null,
+                resolution: ''
+            };
+            
+            const result = await services.complaintsService.addComplaint(complaintData);
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to add complaint');
+            }
+            
+            // Update customer complaint status if customerId exists
+            if (complaintFormData.customerId && services.customerService) {
+                await services.customerService.updateCustomer(complaintFormData.customerId, {
+                    hasActiveComplaint: true,
+                    lastComplaintAt: createdAt
+                });
+            }
+            
+            // Log activity for complaint raised
+            if (services.activityService) {
+                const currentUser = window.currentUserProfile;
+                services.activityService.logActivity({
+                    type: 'complaint',
+                    action: 'Complaint Raised',
+                    details: `⚠️ New ${complaintFormData.priority} priority ${complaintFormData.complaintType} complaint from ${complaintFormData.customerName}${complaintFormData.plateNumber ? ` (${complaintFormData.plateNumber})` : ''} - #${complaintNumber}`,
+                    status: 'warning',
+                    loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                    loggedByEmail: currentUser?.email || null,
+                    loggedByRole: currentUser?.role || null,
+                    metadata: {
+                        complaintId: result.id,
+                        complaintNumber,
+                        customerName: complaintFormData.customerName,
+                        plateNumber: complaintFormData.plateNumber,
+                        complaintType: complaintFormData.complaintType,
+                        priority: complaintFormData.priority
+                    }
+                });
+            }
+            
+            // Prepare receipt data and show receipt
+            setComplaintReceiptData({
+                ...complaintData,
+                id: result.id
+            });
+            setShowComplaintReceiptModal(true);
+            
+            resetComplaintForm();
+        } catch (err) {
+            console.error('Failed to add complaint:', err);
+            setError('Failed to register complaint: ' + (err.message || 'Unknown error'));
+        }
+        setActionLoading(false);
+    };
+
+    // Handle resolve complaint
+    const handleResolveComplaint = async (complaint, resolution = '') => {
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (!services?.complaintsService) {
+                throw new Error('Complaints service not available');
+            }
+            
+            const result = await services.complaintsService.updateComplaint(complaint.id, {
+                status: 'resolved',
+                resolvedAt: new Date().toISOString(),
+                resolution: resolution || 'Resolved by staff'
+            });
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to resolve complaint');
+            }
+            
+            // Update customer complaint status
+            if (complaint.customerId && services.customerService) {
+                const remainingOpen = complaints.filter(c => 
+                    c.customerId === complaint.customerId && 
+                    c.id !== complaint.id && 
+                    (c.status === 'open' || c.status === 'in-progress')
+                );
+                if (remainingOpen.length === 0) {
+                    await services.customerService.updateCustomer(complaint.customerId, {
+                        hasActiveComplaint: false,
+                        lastResolvedAt: new Date().toISOString()
+                    });
+                }
+            }
+            
+            setShowViewComplaintModal(false);
+            setSelectedComplaint(null);
+            setShowAddNoteModal(false);
+            setNoteComplaint(null);
+            setResolutionNote('');
+            showAlert('Success', 'Complaint has been marked as resolved', 'success');
+        } catch (err) {
+            console.error('Failed to resolve complaint:', err);
+            setError('Failed to resolve complaint: ' + (err.message || 'Unknown error'));
+        }
+        setActionLoading(false);
+    };
+
+    // Handle add note to complaint
+    const handleAddNote = async (markAsResolved = false) => {
+        if (!noteComplaint || !resolutionNote.trim()) {
+            setError('Please enter a note');
+            return;
+        }
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            if (!services?.complaintsService) {
+                throw new Error('Complaints service not available');
+            }
+            
+            // Get existing notes or create new array
+            const existingNotes = noteComplaint.notes || [];
+            const newNote = {
+                text: resolutionNote.trim(),
+                addedAt: new Date().toISOString(),
+                addedBy: 'Staff'
+            };
+            
+            // Determine new status
+            let newStatus = noteComplaint.status;
+            if (markAsResolved) {
+                newStatus = 'resolved';
+            } else if (noteComplaint.status === 'open') {
+                newStatus = 'in-progress';
+            }
+            
+            const updateData = {
+                notes: [...existingNotes, newNote],
+                status: newStatus,
+                updatedAt: new Date().toISOString()
+            };
+            
+            // Add resolution data if marking as resolved
+            if (markAsResolved) {
+                updateData.resolvedAt = new Date().toISOString();
+                updateData.resolution = resolutionNote.trim();
+            }
+            
+            const result = await services.complaintsService.updateComplaint(noteComplaint.id, updateData);
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to add note');
+            }
+            
+            // Update customer complaint status if resolved
+            if (markAsResolved && noteComplaint.customerId && services.customerService) {
+                // Check if customer has any other active complaints
+                const otherActiveComplaints = complaints.filter(c => 
+                    c.customerId === noteComplaint.customerId && 
+                    c.id !== noteComplaint.id && 
+                    c.status !== 'resolved'
+                );
+                if (otherActiveComplaints.length === 0) {
+                    await services.customerService.updateCustomer(noteComplaint.customerId, {
+                        hasActiveComplaint: false
+                    });
+                }
+            }
+            
+            // Log activity for complaint resolved
+            if (markAsResolved && services.activityService) {
+                const currentUser = window.currentUserProfile;
+                services.activityService.logActivity({
+                    type: 'complaint',
+                    action: 'Complaint Resolved',
+                    details: `✅ Complaint #${noteComplaint.complaintNumber || noteComplaint.id.slice(0,8)} resolved for ${noteComplaint.customerName}${noteComplaint.plateNumber ? ` (${noteComplaint.plateNumber})` : ''}`,
+                    status: 'success',
+                    loggedBy: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'System',
+                    loggedByEmail: currentUser?.email || null,
+                    loggedByRole: currentUser?.role || null,
+                    metadata: {
+                        complaintId: noteComplaint.id,
+                        complaintNumber: noteComplaint.complaintNumber,
+                        customerName: noteComplaint.customerName,
+                        plateNumber: noteComplaint.plateNumber,
+                        resolution: resolutionNote.trim()
+                    }
+                });
+            }
+            
+            setShowAddNoteModal(false);
+            setNoteComplaint(null);
+            setResolutionNote('');
+            showAlert('Success', markAsResolved ? 'Complaint has been resolved' : 'Note has been added to the complaint', 'success');
+        } catch (err) {
+            console.error('Failed to add note:', err);
+            setError('Failed to add note: ' + (err.message || 'Unknown error'));
+        }
+        setActionLoading(false);
+    };
+
+    // Handle delete complaint
+    const handleDeleteComplaint = async (complaintId) => {
+        showAlert(
+            'Delete Complaint',
+            'Are you sure you want to delete this complaint record?',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    if (!services?.complaintsService) {
+                        throw new Error('Complaints service not available');
+                    }
+                    
+                    const result = await services.complaintsService.deleteComplaint(complaintId);
+                    if (!result.success) {
+                        throw new Error(result.error || 'Failed to delete complaint');
+                    }
+                } catch (err) {
+                    console.error('Failed to delete complaint:', err);
+                    setError('Failed to delete complaint: ' + (err.message || 'Unknown error'));
+                }
+                setActionLoading(false);
+            },
+            true
+        );
+    };
+
+    // Open complaint form with customer pre-filled
+    const openComplaintForCustomer = (customer) => {
+        setComplaintFormData({
+            customerId: customer.id,
+            customerName: customer.name || '',
+            customerPhone: customer.phone || '',
+            plateNumber: customer.vehicles?.[0]?.plateNumber || '',
+            serviceCode: '',
+            complaintType: 'service',
+            description: '',
+            priority: 'medium'
+        });
+        setActiveTab('complaints');
     };
 
     // Generate receipt for a service
@@ -12943,6 +13283,15 @@ function CustomerManagement() {
                         <span style={{ backgroundColor: '#f59e0b', color: 'white', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getRewardEligibleCustomers().length + getPendingRewards().length}</span>
                     )}
                 </button>
+                <button
+                    onClick={() => setActiveTab('complaints')}
+                    style={{ padding: '12px 24px', backgroundColor: 'transparent', color: activeTab === 'complaints' ? '#3b82f6' : theme.textSecondary, border: 'none', borderBottom: activeTab === 'complaints' ? '2px solid #3b82f6' : '2px solid transparent', marginBottom: '-2px', cursor: 'pointer', fontSize: '14px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                    ⚠️ Complaints
+                    {getActiveComplaintsCount() > 0 && (
+                        <span style={{ backgroundColor: '#ef4444', color: 'white', padding: '2px 8px', fontSize: '11px', fontWeight: '600' }}>{getActiveComplaintsCount()}</span>
+                    )}
+                </button>
             </div>
 
             {/* Header with search and actions */}
@@ -13016,6 +13365,7 @@ function CustomerManagement() {
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Vehicles</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Visits</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Points</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Status</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Reward</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `1px solid ${theme.border}` }}>Actions</th>
                             </tr>
@@ -13023,7 +13373,7 @@ function CustomerManagement() {
                         <tbody>
                             {filteredCustomers.length === 0 ? (
                                 <tr>
-                                    <td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textMuted }}>
+                                    <td colSpan="8" style={{ padding: '40px', textAlign: 'center', color: theme.textMuted }}>
                                         {searchQuery ? 'No customers found matching your search' : 'No customers yet. Add your first customer!'}
                                     </td>
                                 </tr>
@@ -13053,6 +13403,34 @@ function CustomerManagement() {
                                             <span style={{ padding: '4px 10px', backgroundColor: '#fef3c7', color: '#d97706', fontSize: '13px', fontWeight: '600' }}>
                                                 {customer.loyaltyPoints || 0} pts
                                             </span>
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            {(() => {
+                                                const status = getCustomerComplaintStatus(customer.id);
+                                                if (status === 'open') {
+                                                    return (
+                                                        <span 
+                                                            onClick={() => openComplaintForCustomer(customer)}
+                                                            style={{ padding: '4px 10px', backgroundColor: '#fee2e2', color: '#dc2626', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}
+                                                            title="Has active complaint - Click to view"
+                                                        >
+                                                            ⚠️ COMPLAINT
+                                                        </span>
+                                                    );
+                                                } else if (status === 'resolved') {
+                                                    return (
+                                                        <span style={{ padding: '4px 10px', backgroundColor: '#d1fae5', color: '#059669', fontSize: '11px', fontWeight: '500' }} title="All complaints resolved">
+                                                            ✅ Resolved
+                                                        </span>
+                                                    );
+                                                } else {
+                                                    return (
+                                                        <span style={{ padding: '4px 10px', backgroundColor: '#f0fdf4', color: '#15803d', fontSize: '11px', fontWeight: '500' }}>
+                                                            ✓ No Issues
+                                                        </span>
+                                                    );
+                                                }
+                                            })()}
                                         </td>
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             {customer.pendingReward ? (
@@ -13284,6 +13662,1085 @@ function CustomerManagement() {
                             <div style={{ fontSize: '13px', color: theme.textMuted }}>Customers will appear here when they reach {loyaltySettings.rewardThreshold || 20} loyalty points</div>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* Complaints/Conflict Resolution Tab */}
+            {activeTab === 'complaints' && (
+                <div>
+                    {/* Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
+                        <div>
+                            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: '600', color: theme.text }}>⚠️ Conflict Resolution Center</h3>
+                            <p style={{ margin: 0, fontSize: '13px', color: theme.textMuted }}>Manage and resolve customer complaints</p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button
+                                onClick={() => {
+                                    // Export to CSV
+                                    const headers = ['Complaint #', 'Date', 'Customer', 'Phone', 'Car Plate', 'Type', 'Priority', 'Status', 'Description', 'Resolution'];
+                                    const rows = complaints.map(c => {
+                                        const date = c.createdAt?.toDate ? c.createdAt.toDate() : (c.createdAt ? new Date(c.createdAt) : null);
+                                        return [
+                                            c.complaintNumber || c.id.slice(0,8),
+                                            date ? date.toLocaleString() : '',
+                                            c.customerName || '',
+                                            c.customerPhone || '',
+                                            c.plateNumber || '',
+                                            c.complaintType || '',
+                                            c.priority || '',
+                                            c.status || '',
+                                            (c.description || '').replace(/,/g, ';').replace(/\n/g, ' '),
+                                            (c.resolution || '').replace(/,/g, ';').replace(/\n/g, ' ')
+                                        ];
+                                    });
+                                    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                                    const blob = new Blob([csv], { type: 'text/csv' });
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = `complaints_${new Date().toISOString().split('T')[0]}.csv`;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                }}
+                                style={{ padding: '10px 16px', backgroundColor: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
+                            >
+                                📊 Export CSV
+                            </button>
+                            <button
+                                onClick={() => {
+                                    // Export to PDF
+                                    const printWindow = window.open('', '', 'width=900,height=700');
+                                    const complaintsHtml = complaints.map(c => {
+                                        const date = c.createdAt?.toDate ? c.createdAt.toDate() : (c.createdAt ? new Date(c.createdAt) : null);
+                                        const statusColor = c.status === 'resolved' ? '#059669' : c.status === 'in-progress' ? '#d97706' : '#dc2626';
+                                        const priorityColor = c.priority === 'urgent' ? '#dc2626' : c.priority === 'high' ? '#ea580c' : c.priority === 'medium' ? '#d97706' : '#15803d';
+                                        return `
+                                            <tr>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; font-family: monospace; font-weight: 600; color: #d97706;">${c.complaintNumber || c.id.slice(0,8)}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb;">${date ? date.toLocaleDateString() : '-'}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb;">${c.customerName || '-'}<br><small style="color: #6b7280;">${c.customerPhone || ''}</small></td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; font-family: monospace;">${c.plateNumber || '-'}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; text-transform: capitalize;">${c.complaintType || '-'}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; font-size: 11px; max-width: 200px;">${(c.description || '-').substring(0, 100)}${(c.description || '').length > 100 ? '...' : ''}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; text-transform: uppercase; color: ${priorityColor}; font-weight: 600;">${c.priority || '-'}</td>
+                                                <td style="padding: 8px; border: 1px solid #e5e7eb; text-transform: capitalize; color: ${statusColor}; font-weight: 600;">${c.status || '-'}</td>
+                                            </tr>
+                                        `;
+                                    }).join('');
+                                    
+                                    printWindow.document.write(`
+                                        <html>
+                                        <head>
+                                            <title>Complaints Report - ${branding.companyName || 'EcoSpark'}</title>
+                                            <style>
+                                                body { font-family: Arial, sans-serif; margin: 20px; }
+                                                h1 { color: #1f2937; font-size: 20px; margin-bottom: 5px; }
+                                                .subtitle { color: #6b7280; font-size: 12px; margin-bottom: 20px; }
+                                                table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                                                th { padding: 10px 8px; border: 1px solid #e5e7eb; background: #f9fafb; text-align: left; font-weight: 600; color: #374151; }
+                                                .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+                                                .stat { padding: 10px 15px; background: #f9fafb; border: 1px solid #e5e7eb; }
+                                                .stat-value { font-size: 20px; font-weight: 700; }
+                                                .stat-label { font-size: 11px; color: #6b7280; }
+                                                @media print { body { margin: 10px; } }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <h1>⚠️ Complaints Report</h1>
+                                            <div class="subtitle">${branding.companyName || 'EcoSpark'} - Generated on ${new Date().toLocaleString()}</div>
+                                            
+                                            <div class="stats">
+                                                <div class="stat">
+                                                    <div class="stat-value" style="color: #dc2626;">${complaints.filter(c => c.status === 'open').length}</div>
+                                                    <div class="stat-label">Open</div>
+                                                </div>
+                                                <div class="stat">
+                                                    <div class="stat-value" style="color: #d97706;">${complaints.filter(c => c.status === 'in-progress').length}</div>
+                                                    <div class="stat-label">In Progress</div>
+                                                </div>
+                                                <div class="stat">
+                                                    <div class="stat-value" style="color: #059669;">${complaints.filter(c => c.status === 'resolved').length}</div>
+                                                    <div class="stat-label">Resolved</div>
+                                                </div>
+                                                <div class="stat">
+                                                    <div class="stat-value">${complaints.length}</div>
+                                                    <div class="stat-label">Total</div>
+                                                </div>
+                                            </div>
+                                            
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Complaint #</th>
+                                                        <th>Date</th>
+                                                        <th>Customer</th>
+                                                        <th>Car Plate</th>
+                                                        <th>Type</th>
+                                                        <th>Complaint</th>
+                                                        <th>Priority</th>
+                                                        <th>Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    ${complaintsHtml}
+                                                </tbody>
+                                            </table>
+                                            
+                                            <div style="margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px;">
+                                                ${branding.receiptFooter || 'Thank you for choosing us!'}<br>
+                                                ${branding.website || ''}
+                                            </div>
+                                        </body>
+                                        </html>
+                                    `);
+                                    printWindow.document.close();
+                                    printWindow.focus();
+                                    setTimeout(() => { printWindow.print(); }, 300);
+                                }}
+                                style={{ padding: '10px 16px', backgroundColor: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}
+                            >
+                                📄 Export PDF
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Stats */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginBottom: '20px' }}>
+                        <div style={{ backgroundColor: '#fee2e2', padding: '16px', border: '1px solid #fecaca' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#dc2626' }}>{complaints.filter(c => c.status === 'open').length}</div>
+                            <div style={{ fontSize: '12px', color: '#991b1b' }}>Open Complaints</div>
+                        </div>
+                        <div style={{ backgroundColor: '#fef3c7', padding: '16px', border: '1px solid #fde68a' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#d97706' }}>{complaints.filter(c => c.status === 'in-progress').length}</div>
+                            <div style={{ fontSize: '12px', color: '#92400e' }}>In Progress</div>
+                        </div>
+                        <div style={{ backgroundColor: '#d1fae5', padding: '16px', border: '1px solid #a7f3d0' }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: '#059669' }}>{complaints.filter(c => c.status === 'resolved').length}</div>
+                            <div style={{ fontSize: '12px', color: '#065f46' }}>Resolved</div>
+                        </div>
+                        <div style={{ backgroundColor: theme.bgTertiary, padding: '16px', border: `1px solid ${theme.border}` }}>
+                            <div style={{ fontSize: '24px', fontWeight: '600', color: theme.text }}>{complaints.length}</div>
+                            <div style={{ fontSize: '12px', color: theme.textMuted }}>Total</div>
+                        </div>
+                    </div>
+
+                    {/* Add Complaint Form */}
+                    <div style={{ backgroundColor: theme.bg, padding: '20px', marginBottom: '20px', border: `1px solid ${theme.border}` }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: '600', color: theme.text }}>📝 Register New Complaint</h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+                            <div>
+                                <label style={labelStyle}>Customer Name *</label>
+                                <input 
+                                    type="text" 
+                                    value={complaintFormData.customerName} 
+                                    onChange={(e) => setComplaintFormData({...complaintFormData, customerName: e.target.value})} 
+                                    style={inputStyle} 
+                                    placeholder="Customer name" 
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Phone</label>
+                                <input 
+                                    type="tel" 
+                                    value={complaintFormData.customerPhone} 
+                                    onChange={(e) => setComplaintFormData({...complaintFormData, customerPhone: e.target.value})} 
+                                    style={inputStyle} 
+                                    placeholder="Phone number" 
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Car Plate Number</label>
+                                <input 
+                                    type="text" 
+                                    value={complaintFormData.plateNumber} 
+                                    onChange={(e) => setComplaintFormData({...complaintFormData, plateNumber: e.target.value.toUpperCase()})} 
+                                    style={inputStyle} 
+                                    placeholder="e.g., KAA 123A" 
+                                />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Complaint Type</label>
+                                <select 
+                                    value={complaintFormData.complaintType} 
+                                    onChange={(e) => setComplaintFormData({...complaintFormData, complaintType: e.target.value})} 
+                                    style={inputStyle}
+                                >
+                                    <option value="service">Service Quality</option>
+                                    <option value="damage">Vehicle Damage</option>
+                                    <option value="billing">Billing Issue</option>
+                                    <option value="delay">Service Delay</option>
+                                    <option value="staff">Staff Behavior</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Priority</label>
+                                <select 
+                                    value={complaintFormData.priority} 
+                                    onChange={(e) => setComplaintFormData({...complaintFormData, priority: e.target.value})} 
+                                    style={inputStyle}
+                                >
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="urgent">Urgent</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Link to Customer</label>
+                                <select 
+                                    value={complaintFormData.customerId} 
+                                    onChange={(e) => {
+                                        const customer = customers.find(c => c.id === e.target.value);
+                                        setComplaintFormData({
+                                            ...complaintFormData, 
+                                            customerId: e.target.value,
+                                            customerName: customer?.name || complaintFormData.customerName,
+                                            customerPhone: customer?.phone || complaintFormData.customerPhone,
+                                            plateNumber: customer?.vehicles?.[0]?.plateNumber || complaintFormData.plateNumber
+                                        });
+                                    }} 
+                                    style={inputStyle}
+                                >
+                                    <option value="">-- Optional: Link to existing customer --</option>
+                                    {customers.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name} - {c.phone}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={labelStyle}>Complaint Description *</label>
+                            <textarea 
+                                value={complaintFormData.description} 
+                                onChange={(e) => setComplaintFormData({...complaintFormData, description: e.target.value})} 
+                                style={{ ...inputStyle, minHeight: '100px', resize: 'vertical' }} 
+                                placeholder="Describe the complaint in detail..." 
+                            />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button 
+                                onClick={resetComplaintForm} 
+                                style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px' }}
+                            >
+                                Clear
+                            </button>
+                            <button 
+                                onClick={handleAddComplaint} 
+                                disabled={actionLoading || !complaintFormData.customerName || !complaintFormData.description}
+                                style={{ padding: '10px 20px', backgroundColor: '#ef4444', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: (actionLoading || !complaintFormData.customerName || !complaintFormData.description) ? 0.7 : 1 }}
+                            >
+                                {actionLoading ? 'Registering...' : '⚠️ Register Complaint'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Complaints Table */}
+                    <div style={{ backgroundColor: theme.bg, border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: theme.text }}>📋 Complaint Records</h4>
+                                <span style={{ fontSize: '12px', color: theme.textMuted }}>{complaints.length} total</span>
+                            </div>
+                            
+                            {/* Search and Filters */}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+                                {/* Search Input */}
+                                <div style={{ flex: '1', minWidth: '200px', position: 'relative' }}>
+                                    <input 
+                                        type="text"
+                                        value={complaintSearch}
+                                        onChange={(e) => { setComplaintSearch(e.target.value); setComplaintPage(1); }}
+                                        placeholder="Search by complaint #, customer name, or car plate..."
+                                        style={{ 
+                                            width: '100%',
+                                            padding: '10px 12px 10px 36px',
+                                            backgroundColor: theme.inputBg,
+                                            border: `1px solid ${theme.border}`,
+                                            color: theme.text,
+                                            fontSize: '13px'
+                                        }}
+                                    />
+                                    <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: theme.textMuted }}>🔍</span>
+                                </div>
+                                
+                                {/* Date Filter */}
+                                <select 
+                                    value={complaintDateFilter}
+                                    onChange={(e) => { setComplaintDateFilter(e.target.value); setComplaintPage(1); }}
+                                    style={{ 
+                                        padding: '10px 12px',
+                                        backgroundColor: theme.inputBg,
+                                        border: `1px solid ${theme.border}`,
+                                        color: theme.text,
+                                        fontSize: '13px',
+                                        minWidth: '140px'
+                                    }}
+                                >
+                                    <option value="all">All Time</option>
+                                    <option value="today">Today</option>
+                                    <option value="yesterday">Yesterday</option>
+                                    <option value="week">This Week</option>
+                                    <option value="month">This Month</option>
+                                </select>
+                                
+                                {/* Status Filter */}
+                                <select 
+                                    value={complaintStatusFilter}
+                                    onChange={(e) => { setComplaintStatusFilter(e.target.value); setComplaintPage(1); }}
+                                    style={{ 
+                                        padding: '10px 12px',
+                                        backgroundColor: theme.inputBg,
+                                        border: `1px solid ${theme.border}`,
+                                        color: theme.text,
+                                        fontSize: '13px',
+                                        minWidth: '130px'
+                                    }}
+                                >
+                                    <option value="all">All Status</option>
+                                    <option value="open">Open</option>
+                                    <option value="in-progress">In Progress</option>
+                                    <option value="resolved">Resolved</option>
+                                </select>
+                                
+                                {/* Clear Filters */}
+                                {(complaintSearch || complaintDateFilter !== 'all' || complaintStatusFilter !== 'all') && (
+                                    <button 
+                                        onClick={() => { setComplaintSearch(''); setComplaintDateFilter('all'); setComplaintStatusFilter('all'); setComplaintPage(1); }}
+                                        style={{ 
+                                            padding: '10px 14px',
+                                            backgroundColor: theme.bgTertiary,
+                                            border: `1px solid ${theme.border}`,
+                                            color: theme.textSecondary,
+                                            fontSize: '13px',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        ✕ Clear
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {(() => {
+                            // Filter complaints
+                            const now = new Date();
+                            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                            const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+                            const weekStart = new Date(today.getTime() - (today.getDay() * 24 * 60 * 60 * 1000));
+                            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                            
+                            const filteredComplaints = complaints.filter(complaint => {
+                                // Search filter
+                                if (complaintSearch) {
+                                    const search = complaintSearch.toLowerCase();
+                                    const matchesSearch = 
+                                        (complaint.complaintNumber || '').toLowerCase().includes(search) ||
+                                        (complaint.customerName || '').toLowerCase().includes(search) ||
+                                        (complaint.plateNumber || '').toLowerCase().includes(search) ||
+                                        (complaint.customerPhone || '').toLowerCase().includes(search);
+                                    if (!matchesSearch) return false;
+                                }
+                                
+                                // Status filter
+                                if (complaintStatusFilter !== 'all' && complaint.status !== complaintStatusFilter) {
+                                    return false;
+                                }
+                                
+                                // Date filter
+                                if (complaintDateFilter !== 'all') {
+                                    const complaintDate = complaint.createdAt?.toDate ? complaint.createdAt.toDate() : (complaint.createdAt ? new Date(complaint.createdAt) : null);
+                                    if (!complaintDate) return false;
+                                    
+                                    const complaintDay = new Date(complaintDate.getFullYear(), complaintDate.getMonth(), complaintDate.getDate());
+                                    
+                                    switch (complaintDateFilter) {
+                                        case 'today':
+                                            if (complaintDay.getTime() !== today.getTime()) return false;
+                                            break;
+                                        case 'yesterday':
+                                            if (complaintDay.getTime() !== yesterday.getTime()) return false;
+                                            break;
+                                        case 'week':
+                                            if (complaintDay < weekStart) return false;
+                                            break;
+                                        case 'month':
+                                            if (complaintDay < monthStart) return false;
+                                            break;
+                                    }
+                                }
+                                
+                                return true;
+                            });
+                            
+                            // Pagination
+                            const totalPages = Math.ceil(filteredComplaints.length / complaintsPerPage);
+                            const startIndex = (complaintPage - 1) * complaintsPerPage;
+                            const paginatedComplaints = filteredComplaints.slice(startIndex, startIndex + complaintsPerPage);
+                            
+                            if (filteredComplaints.length === 0) {
+                                return (
+                                    <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>{complaintSearch || complaintDateFilter !== 'all' || complaintStatusFilter !== 'all' ? '🔍' : '✅'}</div>
+                                        <div style={{ fontSize: '16px', fontWeight: '500', color: theme.text, marginBottom: '8px' }}>
+                                            {complaintSearch || complaintDateFilter !== 'all' || complaintStatusFilter !== 'all' ? 'No Matching Complaints' : 'No Complaints'}
+                                        </div>
+                                        <div style={{ fontSize: '13px', color: theme.textMuted }}>
+                                            {complaintSearch || complaintDateFilter !== 'all' || complaintStatusFilter !== 'all' 
+                                                ? 'Try adjusting your search or filters' 
+                                                : 'Great! No customer complaints have been registered.'}
+                                        </div>
+                                    </div>
+                                );
+                            }
+                            
+                            return (
+                                <>
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                            <thead>
+                                                <tr style={{ backgroundColor: theme.bgTertiary }}>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Date</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Customer</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Car Plate</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Complaint #</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Type</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Priority</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Status</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase', borderBottom: `1px solid ${theme.border}` }}>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {paginatedComplaints.map(complaint => {
+                                                    const createdDate = complaint.createdAt?.toDate ? complaint.createdAt.toDate() : (complaint.createdAt ? new Date(complaint.createdAt) : null);
+                                                    return (
+                                                    <tr key={complaint.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                                        <td style={{ padding: '12px 16px' }}>
+                                                            <div style={{ fontSize: '13px', color: theme.text }}>
+                                                                {createdDate ? createdDate.toLocaleDateString() : 'N/A'}
+                                                            </div>
+                                                    <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                                                        {createdDate ? createdDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    <div style={{ fontWeight: '500', color: theme.text }}>{complaint.customerName || '-'}</div>
+                                                    <div style={{ fontSize: '12px', color: theme.textMuted }}>{complaint.customerPhone || '-'}</div>
+                                                </td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    {complaint.plateNumber ? (
+                                                        <span style={{ padding: '4px 8px', backgroundColor: theme.bgTertiary, fontSize: '12px', fontWeight: '500', color: theme.text, border: `1px solid ${theme.border}` }}>
+                                                            {complaint.plateNumber}
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ color: theme.textMuted, fontSize: '12px' }}>-</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '12px 16px' }}>
+                                                    {complaint.complaintNumber ? (
+                                                        <span style={{ padding: '4px 8px', backgroundColor: '#fef3c7', fontSize: '12px', fontWeight: '600', color: '#d97706', border: '1px solid #fde68a', fontFamily: 'monospace' }}>
+                                                            {complaint.complaintNumber}
+                                                        </span>
+                                                    ) : complaint.serviceCode ? (
+                                                        <span style={{ padding: '4px 8px', backgroundColor: '#dbeafe', fontSize: '12px', fontWeight: '500', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+                                                            {complaint.serviceCode}
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ color: theme.textMuted, fontSize: '12px' }}>-</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '12px 16px', fontSize: '13px', color: theme.text, textTransform: 'capitalize' }}>
+                                                    {complaint.complaintType === 'service' && '🔧 '}
+                                                    {complaint.complaintType === 'damage' && '💥 '}
+                                                    {complaint.complaintType === 'billing' && '💳 '}
+                                                    {complaint.complaintType === 'delay' && '⏰ '}
+                                                    {complaint.complaintType === 'staff' && '👤 '}
+                                                    {complaint.complaintType || 'Other'}
+                                                </td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600',
+                                                        backgroundColor: complaint.priority === 'urgent' ? '#fee2e2' : complaint.priority === 'high' ? '#ffedd5' : complaint.priority === 'medium' ? '#fef3c7' : '#f0fdf4',
+                                                        color: complaint.priority === 'urgent' ? '#dc2626' : complaint.priority === 'high' ? '#ea580c' : complaint.priority === 'medium' ? '#d97706' : '#15803d',
+                                                        textTransform: 'uppercase'
+                                                    }}>
+                                                        {complaint.priority}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600',
+                                                        backgroundColor: complaint.status === 'resolved' ? '#d1fae5' : complaint.status === 'in-progress' ? '#fef3c7' : '#fee2e2',
+                                                        color: complaint.status === 'resolved' ? '#059669' : complaint.status === 'in-progress' ? '#d97706' : '#dc2626'
+                                                    }}>
+                                                        {complaint.status === 'resolved' ? '✅ Resolved' : complaint.status === 'in-progress' ? '🔄 In Progress' : '🔴 Open'}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                                        <button 
+                                                            onClick={() => { setSelectedComplaint(complaint); setShowViewComplaintModal(true); }}
+                                                            style={{ padding: '6px 10px', backgroundColor: theme.btnViewBg, color: theme.btnViewText, border: `1px solid ${theme.btnViewBorder}`, cursor: 'pointer', fontSize: '11px', fontWeight: '500' }}
+                                                        >
+                                                            View
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => { setNoteComplaint(complaint); setResolutionNote(''); setShowAddNoteModal(true); }}
+                                                            style={{ padding: '6px 10px', backgroundColor: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', cursor: 'pointer', fontSize: '11px', fontWeight: '500' }}
+                                                        >
+                                                            📝 Note
+                                                        </button>
+                                                        {complaint.status !== 'resolved' && (
+                                                            <button 
+                                                                onClick={() => { setNoteComplaint(complaint); setResolutionNote(''); setShowAddNoteModal(true); }}
+                                                                style={{ padding: '6px 10px', backgroundColor: '#d1fae5', color: '#059669', border: '1px solid #a7f3d0', cursor: 'pointer', fontSize: '11px', fontWeight: '500' }}
+                                                                title="Add resolution note and mark as resolved"
+                                                            >
+                                                                ✓ Resolve
+                                                            </button>
+                                                        )}
+                                                        <button 
+                                                            onClick={() => { setComplaintReceiptData(complaint); setShowComplaintReceiptModal(true); }}
+                                                            style={{ padding: '6px 10px', backgroundColor: '#e0e7ff', color: '#4338ca', border: '1px solid #c7d2fe', cursor: 'pointer', fontSize: '11px', fontWeight: '500' }}
+                                                            title="Print complaint receipt"
+                                                        >
+                                                            🖨️
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleDeleteComplaint(complaint.id)}
+                                                            style={{ padding: '6px 10px', backgroundColor: theme.btnDeleteBg, color: theme.btnDeleteText, border: `1px solid ${theme.btnDeleteBorder}`, cursor: 'pointer', fontSize: '11px', fontWeight: '500' }}
+                                                        >
+                                                            🗑️
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )})}
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            {/* Pagination */}
+                            {totalPages > 1 && (
+                                <div style={{ 
+                                    padding: '16px 20px', 
+                                    borderTop: `1px solid ${theme.border}`,
+                                    display: 'flex', 
+                                    justifyContent: 'space-between', 
+                                    alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '12px'
+                                }}>
+                                    <div style={{ fontSize: '13px', color: theme.textMuted }}>
+                                        Showing {startIndex + 1} - {Math.min(startIndex + complaintsPerPage, filteredComplaints.length)} of {filteredComplaints.length} complaints
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                        <button 
+                                            onClick={() => setComplaintPage(1)}
+                                            disabled={complaintPage === 1}
+                                            style={{ 
+                                                padding: '8px 12px', 
+                                                backgroundColor: complaintPage === 1 ? theme.bgTertiary : theme.bg,
+                                                border: `1px solid ${theme.border}`,
+                                                color: complaintPage === 1 ? theme.textMuted : theme.text,
+                                                cursor: complaintPage === 1 ? 'not-allowed' : 'pointer',
+                                                fontSize: '12px'
+                                            }}
+                                        >
+                                            ⟨⟨ First
+                                        </button>
+                                        <button 
+                                            onClick={() => setComplaintPage(p => Math.max(1, p - 1))}
+                                            disabled={complaintPage === 1}
+                                            style={{ 
+                                                padding: '8px 12px', 
+                                                backgroundColor: complaintPage === 1 ? theme.bgTertiary : theme.bg,
+                                                border: `1px solid ${theme.border}`,
+                                                color: complaintPage === 1 ? theme.textMuted : theme.text,
+                                                cursor: complaintPage === 1 ? 'not-allowed' : 'pointer',
+                                                fontSize: '12px'
+                                            }}
+                                        >
+                                            ⟨ Prev
+                                        </button>
+                                        
+                                        {/* Page Numbers */}
+                                        {(() => {
+                                            const pages = [];
+                                            let start = Math.max(1, complaintPage - 2);
+                                            let end = Math.min(totalPages, start + 4);
+                                            if (end - start < 4) start = Math.max(1, end - 4);
+                                            
+                                            for (let i = start; i <= end; i++) {
+                                                pages.push(
+                                                    <button 
+                                                        key={i}
+                                                        onClick={() => setComplaintPage(i)}
+                                                        style={{ 
+                                                            padding: '8px 12px', 
+                                                            backgroundColor: complaintPage === i ? '#3b82f6' : theme.bg,
+                                                            border: `1px solid ${complaintPage === i ? '#3b82f6' : theme.border}`,
+                                                            color: complaintPage === i ? 'white' : theme.text,
+                                                            cursor: 'pointer',
+                                                            fontSize: '12px',
+                                                            fontWeight: complaintPage === i ? '600' : '400'
+                                                        }}
+                                                    >
+                                                        {i}
+                                                    </button>
+                                                );
+                                            }
+                                            return pages;
+                                        })()}
+                                        
+                                        <button 
+                                            onClick={() => setComplaintPage(p => Math.min(totalPages, p + 1))}
+                                            disabled={complaintPage === totalPages}
+                                            style={{ 
+                                                padding: '8px 12px', 
+                                                backgroundColor: complaintPage === totalPages ? theme.bgTertiary : theme.bg,
+                                                border: `1px solid ${theme.border}`,
+                                                color: complaintPage === totalPages ? theme.textMuted : theme.text,
+                                                cursor: complaintPage === totalPages ? 'not-allowed' : 'pointer',
+                                                fontSize: '12px'
+                                            }}
+                                        >
+                                            Next ⟩
+                                        </button>
+                                        <button 
+                                            onClick={() => setComplaintPage(totalPages)}
+                                            disabled={complaintPage === totalPages}
+                                            style={{ 
+                                                padding: '8px 12px', 
+                                                backgroundColor: complaintPage === totalPages ? theme.bgTertiary : theme.bg,
+                                                border: `1px solid ${theme.border}`,
+                                                color: complaintPage === totalPages ? theme.textMuted : theme.text,
+                                                cursor: complaintPage === totalPages ? 'not-allowed' : 'pointer',
+                                                fontSize: '12px'
+                                            }}
+                                        >
+                                            Last ⟩⟩
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                            );
+                        })()}
+                    </div>
+                </div>
+            )}
+
+            {/* View Complaint Modal */}
+            {showViewComplaintModal && selectedComplaint && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '550px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>⚠️ Complaint Details</h2>
+                            <button onClick={() => { setShowViewComplaintModal(false); setSelectedComplaint(null); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textMuted }}>×</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            {/* Complaint Number Banner */}
+                            {(selectedComplaint.complaintNumber || selectedComplaint.serviceCode) && (
+                                <div style={{ 
+                                    padding: '14px', 
+                                    marginBottom: '16px',
+                                    backgroundColor: '#fef3c7',
+                                    border: '2px solid #fbbf24',
+                                    textAlign: 'center'
+                                }}>
+                                    <div style={{ fontSize: '11px', color: '#92400e', marginBottom: '4px', textTransform: 'uppercase' }}>Complaint Number</div>
+                                    <div style={{ fontSize: '18px', fontWeight: '700', color: '#92400e', fontFamily: 'monospace', letterSpacing: '1px' }}>
+                                        {selectedComplaint.complaintNumber || selectedComplaint.serviceCode}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Status Banner */}
+                            <div style={{ 
+                                padding: '16px', 
+                                marginBottom: '20px',
+                                backgroundColor: selectedComplaint.status === 'resolved' ? '#d1fae5' : selectedComplaint.status === 'in-progress' ? '#fef3c7' : '#fee2e2',
+                                border: `1px solid ${selectedComplaint.status === 'resolved' ? '#a7f3d0' : selectedComplaint.status === 'in-progress' ? '#fde68a' : '#fecaca'}`,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <div>
+                                    <div style={{ fontSize: '12px', color: selectedComplaint.status === 'resolved' ? '#065f46' : selectedComplaint.status === 'in-progress' ? '#92400e' : '#991b1b', fontWeight: '600', textTransform: 'uppercase' }}>Status</div>
+                                    <div style={{ fontSize: '16px', fontWeight: '600', color: selectedComplaint.status === 'resolved' ? '#059669' : selectedComplaint.status === 'in-progress' ? '#d97706' : '#dc2626' }}>
+                                        {selectedComplaint.status === 'resolved' ? '✅ Resolved' : selectedComplaint.status === 'in-progress' ? '🔄 In Progress' : '🔴 Open'}
+                                    </div>
+                                </div>
+                                <div style={{ 
+                                    padding: '6px 12px', 
+                                    backgroundColor: selectedComplaint.priority === 'urgent' ? '#dc2626' : selectedComplaint.priority === 'high' ? '#ea580c' : selectedComplaint.priority === 'medium' ? '#d97706' : '#15803d',
+                                    color: 'white',
+                                    fontSize: '11px',
+                                    fontWeight: '600',
+                                    textTransform: 'uppercase'
+                                }}>
+                                    {selectedComplaint.priority} Priority
+                                </div>
+                            </div>
+
+                            {/* Details Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Customer</div>
+                                    <div style={{ fontSize: '14px', fontWeight: '500', color: theme.text }}>{selectedComplaint.customerName || '-'}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Phone</div>
+                                    <div style={{ fontSize: '14px', color: theme.text }}>{selectedComplaint.customerPhone || '-'}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Car Plate</div>
+                                    <div style={{ fontSize: '14px', color: theme.text }}>
+                                        {selectedComplaint.plateNumber ? (
+                                            <span style={{ padding: '4px 8px', backgroundColor: theme.bgTertiary, fontSize: '13px', fontWeight: '500', border: `1px solid ${theme.border}` }}>
+                                                {selectedComplaint.plateNumber}
+                                            </span>
+                                        ) : '-'}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Type</div>
+                                    <div style={{ fontSize: '14px', color: theme.text, textTransform: 'capitalize' }}>{selectedComplaint.complaintType || '-'}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Created</div>
+                                    <div style={{ fontSize: '14px', color: theme.text }}>
+                                        {(() => {
+                                            const d = selectedComplaint.createdAt?.toDate ? selectedComplaint.createdAt.toDate() : (selectedComplaint.createdAt ? new Date(selectedComplaint.createdAt) : null);
+                                            return d ? d.toLocaleString() : '-';
+                                        })()}
+                                    </div>
+                                </div>
+                                {selectedComplaint.resolvedAt && (
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Resolved</div>
+                                        <div style={{ fontSize: '14px', color: theme.text }}>
+                                            {(() => {
+                                                const d = selectedComplaint.resolvedAt?.toDate ? selectedComplaint.resolvedAt.toDate() : (selectedComplaint.resolvedAt ? new Date(selectedComplaint.resolvedAt) : null);
+                                                return d ? d.toLocaleString() : '-';
+                                            })()}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Description */}
+                            <div style={{ marginBottom: '20px' }}>
+                                <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase' }}>Description</div>
+                                <div style={{ padding: '14px', backgroundColor: theme.bgTertiary, border: `1px solid ${theme.border}`, fontSize: '14px', color: theme.text, lineHeight: '1.6' }}>
+                                    {selectedComplaint.description || 'No description provided'}
+                                </div>
+                            </div>
+
+                            {/* Resolution */}
+                            {selectedComplaint.resolution && (
+                                <div style={{ marginBottom: '20px' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase' }}>Resolution</div>
+                                    <div style={{ padding: '14px', backgroundColor: '#d1fae5', border: '1px solid #a7f3d0', fontSize: '14px', color: '#065f46', lineHeight: '1.6' }}>
+                                        {selectedComplaint.resolution}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Notes History */}
+                            {selectedComplaint.notes && selectedComplaint.notes.length > 0 && (
+                                <div style={{ marginBottom: '20px' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase' }}>Notes History ({selectedComplaint.notes.length})</div>
+                                    <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                                        {selectedComplaint.notes.map((note, idx) => (
+                                            <div key={idx} style={{ padding: '12px 14px', backgroundColor: theme.bgTertiary, border: `1px solid ${theme.border}`, marginBottom: '8px' }}>
+                                                <div style={{ fontSize: '14px', color: theme.text, marginBottom: '6px', lineHeight: '1.5' }}>{note.text}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textMuted, display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                    <span>📅 {(() => {
+                                                        const d = note.timestamp?.toDate ? note.timestamp.toDate() : (note.timestamp ? new Date(note.timestamp) : null);
+                                                        return d ? d.toLocaleString() : '-';
+                                                    })()}</span>
+                                                    {note.addedBy && <span>• 👤 {note.addedBy}</span>}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                {selectedComplaint.customerPhone && (
+                                    <button 
+                                        onClick={() => { window.location.href = `tel:${selectedComplaint.customerPhone}`; }}
+                                        style={{ padding: '10px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+                                    >
+                                        📞 Call
+                                    </button>
+                                )}
+                                <button 
+                                    onClick={() => { setComplaintReceiptData(selectedComplaint); setShowComplaintReceiptModal(true); }}
+                                    style={{ padding: '10px 16px', backgroundColor: '#4338ca', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+                                >
+                                    🖨️ Print
+                                </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <button onClick={() => { setShowViewComplaintModal(false); setSelectedComplaint(null); }} style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px' }}>Close</button>
+                                {selectedComplaint.status !== 'resolved' && (
+                                    <button 
+                                        onClick={() => handleResolveComplaint(selectedComplaint)}
+                                        disabled={actionLoading}
+                                        style={{ padding: '10px 20px', backgroundColor: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: actionLoading ? 0.7 : 1 }}
+                                    >
+                                        {actionLoading ? 'Processing...' : '✅ Mark as Resolved'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Note Modal */}
+            {showAddNoteModal && noteComplaint && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001, padding: '20px' }}>
+                    <div style={{ backgroundColor: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>📝 Add Resolution Note</h2>
+                            <button onClick={() => { setShowAddNoteModal(false); setNoteComplaint(null); setResolutionNote(''); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textMuted }}>×</button>
+                        </div>
+                        <div style={{ padding: '20px' }}>
+                            {/* Complaint Info */}
+                            <div style={{ padding: '14px', backgroundColor: theme.bgTertiary, border: `1px solid ${theme.border}`, marginBottom: '20px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Customer</div>
+                                        <div style={{ fontSize: '14px', color: theme.text, fontWeight: '500' }}>{noteComplaint.customerName}</div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Car Plate</div>
+                                        <div style={{ fontSize: '14px', color: theme.text, fontWeight: '500' }}>{noteComplaint.plateNumber || '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Complaint #</div>
+                                        <div style={{ fontSize: '14px', color: '#d97706', fontWeight: '600', fontFamily: 'monospace' }}>{noteComplaint.complaintNumber || noteComplaint.serviceCode || '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '2px' }}>Type</div>
+                                        <div style={{ fontSize: '14px', color: theme.text, fontWeight: '500' }}>{noteComplaint.complaintType}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Existing Notes */}
+                            {noteComplaint.notes && noteComplaint.notes.length > 0 && (
+                                <div style={{ marginBottom: '20px' }}>
+                                    <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase' }}>Previous Notes</div>
+                                    <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                                        {noteComplaint.notes.map((note, idx) => (
+                                            <div key={idx} style={{ padding: '10px 12px', backgroundColor: theme.bgSecondary, border: `1px solid ${theme.border}`, marginBottom: '8px', fontSize: '13px' }}>
+                                                <div style={{ color: theme.text, marginBottom: '4px' }}>{note.text}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                                                    {(() => {
+                                                        const d = note.timestamp?.toDate ? note.timestamp.toDate() : (note.timestamp ? new Date(note.timestamp) : null);
+                                                        return d ? d.toLocaleString() : '-';
+                                                    })()}
+                                                    {note.addedBy && ` • ${note.addedBy}`}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* New Note Input */}
+                            <div>
+                                <label style={labelStyle}>Resolution Note *</label>
+                                <textarea 
+                                    value={resolutionNote}
+                                    onChange={(e) => setResolutionNote(e.target.value)}
+                                    style={{ ...inputStyle, minHeight: '120px', resize: 'vertical' }}
+                                    placeholder="Enter details about how this complaint was resolved or any progress updates..."
+                                />
+                            </div>
+                        </div>
+                        <div style={{ padding: '20px', borderTop: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                            <button 
+                                onClick={() => { setShowAddNoteModal(false); setNoteComplaint(null); setResolutionNote(''); }} 
+                                style={{ padding: '10px 20px', backgroundColor: theme.bgTertiary, color: theme.text, border: `1px solid ${theme.border}`, cursor: 'pointer', fontSize: '14px' }}
+                            >
+                                Cancel
+                            </button>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <button 
+                                    onClick={() => handleAddNote(false)}
+                                    disabled={actionLoading || !resolutionNote.trim()}
+                                    style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: (actionLoading || !resolutionNote.trim()) ? 0.6 : 1 }}
+                                >
+                                    {actionLoading ? 'Saving...' : '💾 Save Note'}
+                                </button>
+                                {noteComplaint.status !== 'resolved' && (
+                                    <button 
+                                        onClick={() => handleAddNote(true)}
+                                        disabled={actionLoading || !resolutionNote.trim()}
+                                        style={{ padding: '10px 20px', backgroundColor: '#10b981', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', opacity: (actionLoading || !resolutionNote.trim()) ? 0.6 : 1 }}
+                                    >
+                                        {actionLoading ? 'Saving...' : '✅ Save & Resolve'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Complaint Receipt Modal */}
+            {showComplaintReceiptModal && complaintReceiptData && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: theme.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002, padding: '20px' }}>
+                    <div style={{ backgroundColor: '#fff', width: '100%', maxWidth: '360px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+                        <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fef3c7' }}>
+                            <h2 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#92400e' }}>⚠️ Complaint Receipt</h2>
+                            <button onClick={() => { setShowComplaintReceiptModal(false); setComplaintReceiptData(null); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#92400e' }}>×</button>
+                        </div>
+                        
+                        {/* Receipt Content - Printable */}
+                        <div id="complaint-receipt-content" style={{ padding: '20px', backgroundColor: '#fff' }}>
+                            {/* Header with Branding */}
+                            <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '16px', borderBottom: '2px dashed #d1d5db' }}>
+                                {branding.logoUrl && (
+                                    <img src={branding.logoUrl} alt="Logo" style={{ maxHeight: '50px', maxWidth: '150px', marginBottom: '8px', objectFit: 'contain' }} />
+                                )}
+                                <div style={{ fontSize: '18px', fontWeight: '700', color: branding.primaryColor || '#1f2937', marginBottom: '2px' }}>
+                                    {branding.companyName || 'EcoSpark'} {branding.tagline ? '' : 'Car Wash'}
+                                </div>
+                                {branding.tagline && (
+                                    <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>{branding.tagline}</div>
+                                )}
+                                <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Customer Complaint Receipt</div>
+                                {(branding.address || branding.city) && (
+                                    <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '4px' }}>
+                                        {branding.address}{branding.address && branding.city ? ', ' : ''}{branding.city}
+                                    </div>
+                                )}
+                                {branding.phone && (
+                                    <div style={{ fontSize: '10px', color: '#9ca3af' }}>Tel: {branding.phone}</div>
+                                )}
+                            </div>
+                            
+                            {/* Complaint Number - Prominent */}
+                            <div style={{ textAlign: 'center', marginBottom: '16px', padding: '12px', backgroundColor: '#fef3c7', border: '2px solid #fbbf24' }}>
+                                <div style={{ fontSize: '11px', color: '#92400e', marginBottom: '4px', textTransform: 'uppercase' }}>Complaint Number</div>
+                                <div style={{ fontSize: '20px', fontWeight: '700', color: '#92400e', fontFamily: 'monospace', letterSpacing: '1px' }}>
+                                    {complaintReceiptData.complaintNumber || complaintReceiptData.serviceCode || 'N/A'}
+                                </div>
+                            </div>
+                            
+                            {/* Details */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontSize: '12px', color: '#6b7280' }}>Date:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '500', color: '#1f2937' }}>
+                                        {(() => {
+                                            const d = complaintReceiptData.createdAt?.toDate ? complaintReceiptData.createdAt.toDate() : (complaintReceiptData.createdAt ? new Date(complaintReceiptData.createdAt) : new Date());
+                                            return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                                        })()}
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontSize: '12px', color: '#6b7280' }}>Customer:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '500', color: '#1f2937' }}>{complaintReceiptData.customerName || '-'}</span>
+                                </div>
+                                {complaintReceiptData.customerPhone && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                        <span style={{ fontSize: '12px', color: '#6b7280' }}>Phone:</span>
+                                        <span style={{ fontSize: '12px', fontWeight: '500', color: '#1f2937' }}>{complaintReceiptData.customerPhone}</span>
+                                    </div>
+                                )}
+                                {complaintReceiptData.plateNumber && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                        <span style={{ fontSize: '12px', color: '#6b7280' }}>Car Plate:</span>
+                                        <span style={{ fontSize: '12px', fontWeight: '600', color: '#1f2937', fontFamily: 'monospace' }}>{complaintReceiptData.plateNumber}</span>
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontSize: '12px', color: '#6b7280' }}>Type:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '500', color: '#1f2937', textTransform: 'capitalize' }}>{complaintReceiptData.complaintType || 'Other'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontSize: '12px', color: '#6b7280' }}>Priority:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '600', color: complaintReceiptData.priority === 'urgent' ? '#dc2626' : complaintReceiptData.priority === 'high' ? '#ea580c' : '#d97706', textTransform: 'uppercase' }}>{complaintReceiptData.priority || 'Medium'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #e5e7eb' }}>
+                                    <span style={{ fontSize: '12px', color: '#6b7280' }}>Status:</span>
+                                    <span style={{ fontSize: '12px', fontWeight: '600', color: '#dc2626' }}>OPEN</span>
+                                </div>
+                            </div>
+                            
+                            {/* Description */}
+                            <div style={{ marginBottom: '16px' }}>
+                                <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px', textTransform: 'uppercase' }}>Complaint Description:</div>
+                                <div style={{ fontSize: '12px', color: '#1f2937', lineHeight: '1.5', padding: '10px', backgroundColor: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                                    {complaintReceiptData.description || 'No description provided'}
+                                </div>
+                            </div>
+                            
+                            {/* Footer */}
+                            <div style={{ textAlign: 'center', paddingTop: '16px', borderTop: '2px dashed #d1d5db' }}>
+                                <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>Please keep this receipt for your records.</div>
+                                <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px' }}>Use the complaint number above for follow-up.</div>
+                                {branding.receiptFooter && (
+                                    <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '4px' }}>{branding.receiptFooter}</div>
+                                )}
+                                {branding.website && (
+                                    <div style={{ fontSize: '10px', color: '#9ca3af' }}>{branding.website}</div>
+                                )}
+                                {!branding.receiptFooter && !branding.website && (
+                                    <div style={{ fontSize: '10px', color: '#9ca3af' }}>Thank you for bringing this to our attention.</div>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Actions */}
+                        <div style={{ padding: '16px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', gap: '10px', backgroundColor: '#f9fafb' }}>
+                            <button 
+                                onClick={() => { setShowComplaintReceiptModal(false); setComplaintReceiptData(null); }} 
+                                style={{ padding: '10px 20px', backgroundColor: '#fff', color: '#374151', border: '1px solid #d1d5db', cursor: 'pointer', fontSize: '14px' }}
+                            >
+                                Close
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    const printContent = document.getElementById('complaint-receipt-content');
+                                    const printWindow = window.open('', '', 'width=400,height=600');
+                                    printWindow.document.write(`
+                                        <html>
+                                        <head>
+                                            <title>Complaint Receipt - ${complaintReceiptData.complaintNumber || 'N/A'}</title>
+                                            <style>
+                                                body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+                                                @media print { body { margin: 0; padding: 10px; } }
+                                            </style>
+                                        </head>
+                                        <body>${printContent.innerHTML}</body>
+                                        </html>
+                                    `);
+                                    printWindow.document.close();
+                                    printWindow.focus();
+                                    setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+                                }}
+                                style={{ padding: '10px 20px', backgroundColor: '#4338ca', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}
+                            >
+                                🖨️ Print Receipt
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -25772,17 +27229,332 @@ function FactoryResetTab({ theme }) {
     const [progress, setProgress] = useState(null);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
+    
+    // Backup states
+    const [backupTab, setBackupTab] = useState('backup'); // 'backup', 'restore', 'reset'
+    const [creatingBackup, setCreatingBackup] = useState(false);
+    const [backupProgress, setBackupProgress] = useState(null);
+    const [backupSuccess, setBackupSuccess] = useState(null);
+    const [restoring, setRestoring] = useState(false);
+    const [restoreProgress, setRestoreProgress] = useState(null);
+    const [restoreSuccess, setRestoreSuccess] = useState(null);
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [backupPreview, setBackupPreview] = useState(null);
+    const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+    const [preResetBackupDone, setPreResetBackupDone] = useState(false);
+    const [backupHistory, setBackupHistory] = useState([]);
+    
+    const fileInputRef = React.useRef(null);
 
     const CONFIRM_PHRASE = 'DELETE ALL DATA';
 
-    // Firestore collections to delete
-    const FIRESTORE_COLLECTIONS = ['vehicles', 'customers', 'settings', 'invoices', 'vehicleIntake', 'vehicleProfiles', 'mpesa_payments', 'activities', 'servicePackages', 'equipment', 'garageJobs', 'garageServices', 'inventory', 'fleetAccounts', 'expenses', 'users'];
+    // Firestore collections to backup/delete
+    const FIRESTORE_COLLECTIONS = ['vehicles', 'customers', 'settings', 'invoices', 'vehicleIntake', 'vehicleProfiles', 'mpesa_payments', 'activities', 'servicePackages', 'equipment', 'garageJobs', 'garageServices', 'inventory', 'fleetAccounts', 'expenses', 'users', 'complaints', 'branding', 'notifications'];
     
-    // Realtime Database paths to delete
+    // Realtime Database paths to backup/delete
     const REALTIME_PATHS = ['stats', 'washBays', 'washHistory', 'staff', 'vehicleIntake', 'garage', 'audit_logs'];
     
-    // Storage folders to delete
+    // Storage folders to delete (can't backup files easily without Blaze)
     const STORAGE_FOLDERS = ['uploads', 'images', 'documents', 'receipts', 'vehicle-images'];
+    
+    // Load backup history from localStorage on mount
+    useEffect(() => {
+        try {
+            const history = localStorage.getItem('ecospark_backup_history');
+            if (history) {
+                setBackupHistory(JSON.parse(history));
+            }
+        } catch (e) {
+            console.error('Failed to load backup history:', e);
+        }
+    }, []);
+    
+    // Save backup record to history
+    const saveBackupToHistory = (backupInfo) => {
+        const newHistory = [backupInfo, ...backupHistory].slice(0, 20); // Keep last 20 records
+        setBackupHistory(newHistory);
+        localStorage.setItem('ecospark_backup_history', JSON.stringify(newHistory));
+    };
+    
+    // Create backup - fetches all data and downloads as JSON
+    const handleCreateBackup = async (isPreReset = false) => {
+        setCreatingBackup(true);
+        setBackupProgress({ phase: 'Starting...', current: 0, total: FIRESTORE_COLLECTIONS.length + REALTIME_PATHS.length });
+        setError(null);
+        setBackupSuccess(null);
+        
+        const backupData = {
+            metadata: {
+                version: '1.0',
+                createdAt: new Date().toISOString(),
+                type: isPreReset ? 'pre-reset' : 'manual',
+                appName: 'EcoSpark Car Wash Management',
+                collections: FIRESTORE_COLLECTIONS,
+                realtimePaths: REALTIME_PATHS
+            },
+            firestore: {},
+            realtime: {}
+        };
+        
+        try {
+            const services = window.FirebaseServices;
+            let currentStep = 0;
+            
+            // Backup Firestore collections
+            for (const collName of FIRESTORE_COLLECTIONS) {
+                currentStep++;
+                setBackupProgress({ phase: `Backing up ${collName}...`, current: currentStep, total: FIRESTORE_COLLECTIONS.length + REALTIME_PATHS.length });
+                
+                try {
+                    const snapshot = await services.db.collection(collName).get();
+                    backupData.firestore[collName] = [];
+                    snapshot.forEach(doc => {
+                        backupData.firestore[collName].push({
+                            id: doc.id,
+                            data: doc.data()
+                        });
+                    });
+                } catch (e) {
+                    console.warn(`Could not backup ${collName}:`, e.message);
+                    backupData.firestore[collName] = { error: e.message };
+                }
+            }
+            
+            // Backup Realtime Database paths
+            for (const path of REALTIME_PATHS) {
+                currentStep++;
+                setBackupProgress({ phase: `Backing up ${path}...`, current: currentStep, total: FIRESTORE_COLLECTIONS.length + REALTIME_PATHS.length });
+                
+                try {
+                    const snapshot = await services.rtdb.ref(path).once('value');
+                    backupData.realtime[path] = snapshot.val();
+                } catch (e) {
+                    console.warn(`Could not backup ${path}:`, e.message);
+                    backupData.realtime[path] = { error: e.message };
+                }
+            }
+            
+            // Also backup localStorage branding
+            try {
+                const branding = localStorage.getItem('ecospark_branding');
+                if (branding) {
+                    backupData.localStorage = { branding: JSON.parse(branding) };
+                }
+            } catch (e) {
+                console.warn('Could not backup localStorage:', e);
+            }
+            
+            // Calculate stats
+            const stats = {
+                firestoreDocs: Object.values(backupData.firestore).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0),
+                realtimePaths: Object.keys(backupData.realtime).filter(k => backupData.realtime[k] !== null).length,
+                totalSize: new Blob([JSON.stringify(backupData)]).size
+            };
+            backupData.metadata.stats = stats;
+            
+            // Generate filename
+            const now = new Date();
+            const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+            const timeStr = now.toTimeString().slice(0, 5).replace(':', '');
+            const filename = `ecospark_backup_${isPreReset ? 'prereset_' : ''}${dateStr}_${timeStr}.json`;
+            
+            // Download the file
+            const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            // Save to history
+            saveBackupToHistory({
+                filename,
+                createdAt: now.toISOString(),
+                type: isPreReset ? 'pre-reset' : 'manual',
+                stats
+            });
+            
+            setBackupSuccess({
+                filename,
+                stats,
+                isPreReset
+            });
+            
+            if (isPreReset) {
+                setPreResetBackupDone(true);
+            }
+            
+        } catch (err) {
+            console.error('Backup error:', err);
+            setError('Backup failed: ' + err.message);
+        } finally {
+            setCreatingBackup(false);
+            setBackupProgress(null);
+        }
+    };
+    
+    // Handle file selection for restore
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        setSelectedFile(file);
+        setBackupPreview(null);
+        setError(null);
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                
+                // Validate backup structure
+                if (!data.metadata || !data.firestore) {
+                    setError('Invalid backup file: Missing required structure');
+                    setSelectedFile(null);
+                    return;
+                }
+                
+                // Create preview
+                setBackupPreview({
+                    metadata: data.metadata,
+                    collections: Object.keys(data.firestore || {}),
+                    realtimePaths: Object.keys(data.realtime || {}),
+                    firestoreDocs: Object.values(data.firestore || {}).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0),
+                    hasLocalStorage: !!data.localStorage,
+                    rawData: data
+                });
+            } catch (err) {
+                setError('Failed to parse backup file: ' + err.message);
+                setSelectedFile(null);
+            }
+        };
+        reader.readAsText(file);
+    };
+    
+    // Restore from backup
+    const handleRestore = async () => {
+        if (!backupPreview || !backupPreview.rawData) {
+            setError('No valid backup file selected');
+            return;
+        }
+        
+        setRestoring(true);
+        setRestoreProgress({ phase: 'Starting restore...', current: 0, total: 100 });
+        setError(null);
+        setRestoreSuccess(null);
+        
+        const data = backupPreview.rawData;
+        const results = { firestore: { restored: 0, errors: [] }, realtime: { restored: 0, errors: [] } };
+        
+        try {
+            const services = window.FirebaseServices;
+            const collections = Object.keys(data.firestore || {});
+            const paths = Object.keys(data.realtime || {});
+            const totalSteps = collections.length + paths.length;
+            let currentStep = 0;
+            
+            // Restore Firestore collections
+            for (const collName of collections) {
+                currentStep++;
+                setRestoreProgress({ phase: `Restoring ${collName}...`, current: Math.round((currentStep / totalSteps) * 100), total: 100 });
+                
+                const docs = data.firestore[collName];
+                if (!Array.isArray(docs)) continue;
+                
+                for (const doc of docs) {
+                    try {
+                        // Convert timestamps back if needed
+                        const docData = convertTimestamps(doc.data);
+                        await services.db.collection(collName).doc(doc.id).set(docData, { merge: true });
+                        results.firestore.restored++;
+                    } catch (e) {
+                        results.firestore.errors.push({ collection: collName, doc: doc.id, error: e.message });
+                    }
+                }
+            }
+            
+            // Restore Realtime Database paths
+            for (const path of paths) {
+                currentStep++;
+                setRestoreProgress({ phase: `Restoring ${path}...`, current: Math.round((currentStep / totalSteps) * 100), total: 100 });
+                
+                const pathData = data.realtime[path];
+                if (pathData === null || pathData?.error) continue;
+                
+                try {
+                    await services.rtdb.ref(path).set(pathData);
+                    results.realtime.restored++;
+                } catch (e) {
+                    results.realtime.errors.push({ path, error: e.message });
+                }
+            }
+            
+            // Restore localStorage if present
+            if (data.localStorage?.branding) {
+                try {
+                    localStorage.setItem('ecospark_branding', JSON.stringify(data.localStorage.branding));
+                } catch (e) {
+                    console.warn('Could not restore localStorage branding:', e);
+                }
+            }
+            
+            setRestoreSuccess(results);
+            setShowRestoreConfirm(false);
+            setSelectedFile(null);
+            setBackupPreview(null);
+            
+        } catch (err) {
+            console.error('Restore error:', err);
+            setError('Restore failed: ' + err.message);
+        } finally {
+            setRestoring(false);
+            setRestoreProgress(null);
+        }
+    };
+    
+    // Helper to convert date strings back to Firestore timestamps
+    const convertTimestamps = (obj) => {
+        if (!obj || typeof obj !== 'object') return obj;
+        
+        const result = Array.isArray(obj) ? [] : {};
+        
+        for (const key in obj) {
+            const value = obj[key];
+            
+            if (value && typeof value === 'object') {
+                // Check if it's a Firestore timestamp object
+                if (value.seconds !== undefined && value.nanoseconds !== undefined) {
+                    result[key] = new Date(value.seconds * 1000);
+                } else if (value._seconds !== undefined && value._nanoseconds !== undefined) {
+                    result[key] = new Date(value._seconds * 1000);
+                } else {
+                    result[key] = convertTimestamps(value);
+                }
+            } else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
+                // Check if it's an ISO date string
+                const date = new Date(value);
+                if (!isNaN(date.getTime())) {
+                    result[key] = date;
+                } else {
+                    result[key] = value;
+                }
+            } else {
+                result[key] = value;
+            }
+        }
+        
+        return result;
+    };
+    
+    // Format file size
+    const formatSize = (bytes) => {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    };
 
     const handleFactoryReset = async () => {
         if (confirmText !== CONFIRM_PHRASE) {
@@ -25845,116 +27617,571 @@ function FactoryResetTab({ theme }) {
 
     return (
         <div>
-            {/* Header Warning */}
-            <div style={{ background: '#dc2626', padding: '20px', marginBottom: '20px', color: 'white' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ fontSize: '40px' }}>⚠️</div>
-                    <div>
-                        <h2 style={{ margin: '0 0 6px', fontSize: '20px', fontWeight: '700' }}>Factory Reset - Danger Zone</h2>
-                        <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
-                            Permanently delete ALL data. <strong>Authentication will be preserved.</strong>
-                        </p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Results Banner */}
-            {results && (
-                <div style={{ background: '#dcfce7', border: '1px solid #86efac', padding: '16px', marginBottom: '20px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '20px' }}>✅</span>
-                        <strong style={{ color: '#166534' }}>Factory Reset Completed</strong>
-                    </div>
-                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '14px', color: '#166534' }}>
-                        <span>Firestore: {results.firestore.deleted} docs</span>
-                        <span>Realtime: {results.realtime.deleted} paths</span>
-                        <span>Storage: {results.storage.deleted} files</span>
-                    </div>
-                    <button onClick={() => setResults(null)} style={{ marginTop: '10px', padding: '6px 12px', background: 'transparent', border: '1px solid #166534', color: '#166534', cursor: 'pointer', fontSize: '12px' }}>Dismiss</button>
-                </div>
-            )}
-
-            {error && (
-                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{error}</span>
-                    <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#dc2626' }}>×</button>
-                </div>
-            )}
-
-            {/* Data Categories */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-                {/* Firestore */}
-                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                        <span style={{ fontSize: '20px' }}>🗄️</span>
-                        <strong style={{ color: theme.text }}>Firestore Collections</strong>
-                        <span style={{ marginLeft: 'auto', background: '#3b82f620', color: '#3b82f6', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{FIRESTORE_COLLECTIONS.length}</span>
-                    </div>
-                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
-                        {FIRESTORE_COLLECTIONS.map(c => (
-                            <div key={c} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{c}</div>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Realtime DB */}
-                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                        <span style={{ fontSize: '20px' }}>⚡</span>
-                        <strong style={{ color: theme.text }}>Realtime Database</strong>
-                        <span style={{ marginLeft: 'auto', background: '#f59e0b20', color: '#f59e0b', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{REALTIME_PATHS.length}</span>
-                    </div>
-                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
-                        {REALTIME_PATHS.map(p => (
-                            <div key={p} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{p}</div>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Storage */}
-                <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                        <span style={{ fontSize: '20px' }}>📁</span>
-                        <strong style={{ color: theme.text }}>Cloud Storage</strong>
-                        <span style={{ marginLeft: 'auto', background: '#10b98120', color: '#10b981', padding: '2px 8px', fontSize: '12px', fontWeight: '700' }}>{STORAGE_FOLDERS.length}</span>
-                    </div>
-                    <div style={{ maxHeight: '180px', overflow: 'auto' }}>
-                        {STORAGE_FOLDERS.map(f => (
-                            <div key={f} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '13px', fontFamily: 'monospace', color: theme.text }}>{f}/</div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            {/* Preserved Data Notice */}
-            <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', padding: '14px', marginBottom: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{ fontSize: '18px' }}>🔒</span>
-                    <span style={{ color: '#1e40af', fontSize: '14px' }}><strong>Preserved:</strong> User authentication accounts will NOT be deleted</span>
-                </div>
-            </div>
-
-            {/* Reset Button */}
-            <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <button
-                    onClick={() => setShowConfirmModal(true)}
-                    style={{ padding: '14px 40px', background: '#dc2626', color: 'white', border: 'none', fontSize: '16px', fontWeight: '700', cursor: 'pointer' }}
+            {/* Tab Navigation */}
+            <div style={{ display: 'flex', gap: '0', marginBottom: '20px', borderBottom: `2px solid ${theme.border}` }}>
+                <button 
+                    onClick={() => setBackupTab('backup')} 
+                    style={{ 
+                        padding: '14px 24px', 
+                        border: 'none', 
+                        background: backupTab === 'backup' ? '#10b981' : 'transparent', 
+                        color: backupTab === 'backup' ? 'white' : theme.textSecondary, 
+                        fontWeight: '600', 
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                    }}
                 >
-                    🔄 Perform Factory Reset
+                    💾 Create Backup
+                </button>
+                <button 
+                    onClick={() => setBackupTab('restore')} 
+                    style={{ 
+                        padding: '14px 24px', 
+                        border: 'none', 
+                        background: backupTab === 'restore' ? '#3b82f6' : 'transparent', 
+                        color: backupTab === 'restore' ? 'white' : theme.textSecondary, 
+                        fontWeight: '600', 
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                    }}
+                >
+                    📥 Restore Backup
+                </button>
+                <button 
+                    onClick={() => setBackupTab('reset')} 
+                    style={{ 
+                        padding: '14px 24px', 
+                        border: 'none', 
+                        background: backupTab === 'reset' ? '#dc2626' : 'transparent', 
+                        color: backupTab === 'reset' ? 'white' : theme.textSecondary, 
+                        fontWeight: '600', 
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                    }}
+                >
+                    🔄 Factory Reset
                 </button>
             </div>
+            
+            {/* Error Banner */}
+            {error && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>⚠️ {error}</span>
+                    <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#dc2626' }}>×</button>
+                </div>
+            )}
+
+            {/* ==================== BACKUP TAB ==================== */}
+            {backupTab === 'backup' && (
+                <div>
+                    {/* Backup Header */}
+                    <div style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', padding: '24px', marginBottom: '20px', color: 'white', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ fontSize: '48px' }}>💾</div>
+                            <div>
+                                <h2 style={{ margin: '0 0 6px', fontSize: '22px', fontWeight: '700' }}>Data Backup</h2>
+                                <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
+                                    Create a complete backup of all your data. Downloads as a JSON file to your device.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Backup Success */}
+                    {backupSuccess && (
+                        <div style={{ background: '#dcfce7', border: '1px solid #86efac', padding: '20px', marginBottom: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '28px' }}>✅</span>
+                                <div>
+                                    <strong style={{ color: '#166534', fontSize: '16px' }}>Backup Created Successfully!</strong>
+                                    <p style={{ margin: '4px 0 0', color: '#166534', fontSize: '13px' }}>File: {backupSuccess.filename}</p>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '14px', color: '#166534', background: '#bbf7d0', padding: '12px', borderRadius: '6px' }}>
+                                <span>📄 {backupSuccess.stats?.firestoreDocs || 0} documents</span>
+                                <span>⚡ {backupSuccess.stats?.realtimePaths || 0} database paths</span>
+                                <span>📦 {formatSize(backupSuccess.stats?.totalSize || 0)}</span>
+                            </div>
+                            <button onClick={() => setBackupSuccess(null)} style={{ marginTop: '12px', padding: '8px 16px', background: '#166534', border: 'none', color: 'white', cursor: 'pointer', fontSize: '13px', borderRadius: '4px' }}>Dismiss</button>
+                        </div>
+                    )}
+                    
+                    {/* Backup Progress */}
+                    {creatingBackup && backupProgress && (
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '24px', marginBottom: '20px', borderRadius: '8px', textAlign: 'center' }}>
+                            <div style={{ width: '60px', height: '60px', border: '4px solid #e5e7eb', borderTopColor: '#10b981', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
+                            <h3 style={{ margin: '0 0 8px', color: theme.text, fontSize: '16px' }}>Creating Backup...</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px', margin: '8px 0' }}>{backupProgress.phase}</p>
+                            <div style={{ background: theme.border, height: '8px', borderRadius: '4px', overflow: 'hidden', marginTop: '12px' }}>
+                                <div style={{ background: '#10b981', height: '100%', width: `${(backupProgress.current / backupProgress.total) * 100}%`, transition: 'width 0.3s' }}></div>
+                            </div>
+                            <p style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '8px' }}>{backupProgress.current} / {backupProgress.total}</p>
+                        </div>
+                    )}
+                    
+                    {/* What's Included */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '24px' }}>🗄️</span>
+                                <strong style={{ color: theme.text }}>Firestore Data</strong>
+                            </div>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 10px' }}>All business data including:</p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {['customers', 'vehicles', 'invoices', 'inventory', 'complaints', 'staff'].map(item => (
+                                    <span key={item} style={{ background: '#10b98115', color: '#10b981', padding: '4px 10px', fontSize: '11px', borderRadius: '12px' }}>{item}</span>
+                                ))}
+                                <span style={{ background: theme.bgSecondary, color: theme.textSecondary, padding: '4px 10px', fontSize: '11px', borderRadius: '12px' }}>+{FIRESTORE_COLLECTIONS.length - 6} more</span>
+                            </div>
+                        </div>
+                        
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '24px' }}>⚡</span>
+                                <strong style={{ color: theme.text }}>Realtime Database</strong>
+                            </div>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 10px' }}>Live data including:</p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {REALTIME_PATHS.map(item => (
+                                    <span key={item} style={{ background: '#f59e0b15', color: '#f59e0b', padding: '4px 10px', fontSize: '11px', borderRadius: '12px' }}>{item}</span>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '24px' }}>🎨</span>
+                                <strong style={{ color: theme.text }}>Settings & Branding</strong>
+                            </div>
+                            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 10px' }}>Configurations including:</p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {['branding', 'logo', 'colors', 'receipts'].map(item => (
+                                    <span key={item} style={{ background: '#3b82f615', color: '#3b82f6', padding: '4px 10px', fontSize: '11px', borderRadius: '12px' }}>{item}</span>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Create Backup Button */}
+                    <div style={{ textAlign: 'center', padding: '20px', background: theme.bgSecondary, borderRadius: '8px' }}>
+                        <button
+                            onClick={() => handleCreateBackup(false)}
+                            disabled={creatingBackup}
+                            style={{ 
+                                padding: '16px 48px', 
+                                background: creatingBackup ? theme.border : 'linear-gradient(135deg, #10b981 0%, #059669 100%)', 
+                                color: 'white', 
+                                border: 'none', 
+                                fontSize: '16px', 
+                                fontWeight: '700', 
+                                cursor: creatingBackup ? 'not-allowed' : 'pointer',
+                                borderRadius: '8px',
+                                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                            }}
+                        >
+                            {creatingBackup ? '⏳ Creating Backup...' : '💾 Create Backup Now'}
+                        </button>
+                        <p style={{ color: theme.textSecondary, fontSize: '13px', marginTop: '12px' }}>
+                            A JSON file will be downloaded to your device
+                        </p>
+                    </div>
+                    
+                    {/* Backup History */}
+                    {backupHistory.length > 0 && (
+                        <div style={{ marginTop: '24px' }}>
+                            <h3 style={{ color: theme.text, fontSize: '16px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span>📋</span> Recent Backup History
+                            </h3>
+                            <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+                                {backupHistory.slice(0, 5).map((backup, idx) => (
+                                    <div key={idx} style={{ padding: '12px 16px', borderBottom: idx < 4 ? `1px solid ${theme.border}` : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <span style={{ fontFamily: 'monospace', fontSize: '13px', color: theme.text }}>{backup.filename}</span>
+                                            <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
+                                                {new Date(backup.createdAt).toLocaleString()} • {backup.stats?.firestoreDocs || 0} docs • {formatSize(backup.stats?.totalSize || 0)}
+                                            </div>
+                                        </div>
+                                        <span style={{ 
+                                            background: backup.type === 'pre-reset' ? '#fef3c7' : '#dcfce7', 
+                                            color: backup.type === 'pre-reset' ? '#92400e' : '#166534', 
+                                            padding: '4px 10px', 
+                                            fontSize: '11px', 
+                                            borderRadius: '12px',
+                                            fontWeight: '600'
+                                        }}>
+                                            {backup.type === 'pre-reset' ? 'Pre-Reset' : 'Manual'}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ==================== RESTORE TAB ==================== */}
+            {backupTab === 'restore' && (
+                <div>
+                    {/* Restore Header */}
+                    <div style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', padding: '24px', marginBottom: '20px', color: 'white', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ fontSize: '48px' }}>📥</div>
+                            <div>
+                                <h2 style={{ margin: '0 0 6px', fontSize: '22px', fontWeight: '700' }}>Restore from Backup</h2>
+                                <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
+                                    Upload a previously downloaded backup file to restore your data.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Restore Success */}
+                    {restoreSuccess && (
+                        <div style={{ background: '#dcfce7', border: '1px solid #86efac', padding: '20px', marginBottom: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '28px' }}>✅</span>
+                                <strong style={{ color: '#166534', fontSize: '16px' }}>Data Restored Successfully!</strong>
+                            </div>
+                            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '14px', color: '#166534', background: '#bbf7d0', padding: '12px', borderRadius: '6px' }}>
+                                <span>📄 {restoreSuccess.firestore?.restored || 0} documents restored</span>
+                                <span>⚡ {restoreSuccess.realtime?.restored || 0} database paths restored</span>
+                            </div>
+                            {(restoreSuccess.firestore?.errors?.length > 0 || restoreSuccess.realtime?.errors?.length > 0) && (
+                                <p style={{ color: '#92400e', fontSize: '13px', marginTop: '10px' }}>
+                                    ⚠️ Some items had errors: {(restoreSuccess.firestore?.errors?.length || 0) + (restoreSuccess.realtime?.errors?.length || 0)} failed
+                                </p>
+                            )}
+                            <button onClick={() => setRestoreSuccess(null)} style={{ marginTop: '12px', padding: '8px 16px', background: '#166534', border: 'none', color: 'white', cursor: 'pointer', fontSize: '13px', borderRadius: '4px' }}>Dismiss</button>
+                        </div>
+                    )}
+                    
+                    {/* Restore Progress */}
+                    {restoring && restoreProgress && (
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '24px', marginBottom: '20px', borderRadius: '8px', textAlign: 'center' }}>
+                            <div style={{ width: '60px', height: '60px', border: '4px solid #e5e7eb', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
+                            <h3 style={{ margin: '0 0 8px', color: theme.text, fontSize: '16px' }}>Restoring Data...</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px', margin: '8px 0' }}>{restoreProgress.phase}</p>
+                            <div style={{ background: theme.border, height: '8px', borderRadius: '4px', overflow: 'hidden', marginTop: '12px' }}>
+                                <div style={{ background: '#3b82f6', height: '100%', width: `${restoreProgress.current}%`, transition: 'width 0.3s' }}></div>
+                            </div>
+                            <p style={{ color: theme.textSecondary, fontSize: '12px', marginTop: '8px' }}>{restoreProgress.current}%</p>
+                        </div>
+                    )}
+                    
+                    {/* File Upload Area */}
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        accept=".json" 
+                        style={{ display: 'none' }} 
+                        onChange={handleFileSelect}
+                    />
+                    
+                    {!backupPreview && !restoring && (
+                        <div 
+                            onClick={() => fileInputRef.current?.click()}
+                            style={{ 
+                                background: theme.bg, 
+                                border: `2px dashed ${theme.border}`, 
+                                padding: '60px 40px', 
+                                textAlign: 'center', 
+                                borderRadius: '12px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                            onMouseOver={e => { e.currentTarget.style.borderColor = '#3b82f6'; e.currentTarget.style.background = '#3b82f608'; }}
+                            onMouseOut={e => { e.currentTarget.style.borderColor = theme.border; e.currentTarget.style.background = theme.bg; }}
+                        >
+                            <div style={{ fontSize: '64px', marginBottom: '16px' }}>📂</div>
+                            <h3 style={{ color: theme.text, margin: '0 0 8px', fontSize: '18px' }}>Select Backup File</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px', margin: 0 }}>Click to browse or drag and drop a .json backup file</p>
+                        </div>
+                    )}
+                    
+                    {/* Backup Preview */}
+                    {backupPreview && !restoring && (
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+                            <div style={{ background: '#3b82f615', padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <span style={{ fontSize: '24px' }}>📄</span>
+                                        <div>
+                                            <strong style={{ color: theme.text }}>{selectedFile?.name}</strong>
+                                            <p style={{ margin: '2px 0 0', fontSize: '12px', color: theme.textSecondary }}>
+                                                Created: {new Date(backupPreview.metadata?.createdAt).toLocaleString()}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => { setSelectedFile(null); setBackupPreview(null); }}
+                                        style={{ background: 'transparent', border: 'none', color: theme.textSecondary, cursor: 'pointer', fontSize: '20px' }}
+                                    >×</button>
+                                </div>
+                            </div>
+                            
+                            <div style={{ padding: '20px' }}>
+                                <h4 style={{ color: theme.text, margin: '0 0 16px', fontSize: '14px' }}>Backup Contents:</h4>
+                                
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                                    <div style={{ background: theme.bgSecondary, padding: '16px', borderRadius: '8px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '28px', fontWeight: '700', color: '#10b981' }}>{backupPreview.firestoreDocs}</div>
+                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>Firestore Documents</div>
+                                    </div>
+                                    <div style={{ background: theme.bgSecondary, padding: '16px', borderRadius: '8px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '28px', fontWeight: '700', color: '#f59e0b' }}>{backupPreview.realtimePaths.length}</div>
+                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>Realtime DB Paths</div>
+                                    </div>
+                                    <div style={{ background: theme.bgSecondary, padding: '16px', borderRadius: '8px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '28px', fontWeight: '700', color: '#3b82f6' }}>{backupPreview.collections.length}</div>
+                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>Collections</div>
+                                    </div>
+                                </div>
+                                
+                                <div style={{ marginBottom: '16px' }}>
+                                    <strong style={{ color: theme.text, fontSize: '13px' }}>Collections to restore:</strong>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                                        {backupPreview.collections.map(coll => (
+                                            <span key={coll} style={{ background: '#10b98115', color: '#10b981', padding: '4px 10px', fontSize: '11px', borderRadius: '12px' }}>{coll}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                <div style={{ background: '#fef3c7', border: '1px solid #fde047', padding: '12px', borderRadius: '6px', marginBottom: '20px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#92400e', fontSize: '13px' }}>
+                                        <span>⚠️</span>
+                                        <span><strong>Warning:</strong> Restoring will merge data with existing records. Existing documents with same IDs will be overwritten.</span>
+                                    </div>
+                                </div>
+                                
+                                <div style={{ display: 'flex', gap: '12px' }}>
+                                    <button 
+                                        onClick={() => { setSelectedFile(null); setBackupPreview(null); }}
+                                        style={{ flex: 1, padding: '14px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer', borderRadius: '6px' }}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        onClick={() => setShowRestoreConfirm(true)}
+                                        style={{ flex: 2, padding: '14px', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', border: 'none', color: 'white', fontWeight: '700', cursor: 'pointer', borderRadius: '6px' }}
+                                    >
+                                        📥 Restore This Backup
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* Restore Confirmation Modal */}
+                    {showRestoreConfirm && (
+                        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowRestoreConfirm(false)}>
+                            <div style={{ background: theme.bg, width: '100%', maxWidth: '450px', margin: '20px', borderRadius: '12px', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                                <div style={{ background: '#3b82f6', padding: '24px', color: 'white', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '48px', marginBottom: '8px' }}>📥</div>
+                                    <h2 style={{ margin: '0 0 4px', fontSize: '18px' }}>Confirm Restore</h2>
+                                </div>
+                                <div style={{ padding: '24px' }}>
+                                    <p style={{ color: theme.text, fontSize: '14px', marginBottom: '20px' }}>
+                                        You are about to restore <strong>{backupPreview?.firestoreDocs} documents</strong> from backup file <strong>{selectedFile?.name}</strong>.
+                                    </p>
+                                    <p style={{ color: theme.textSecondary, fontSize: '13px', marginBottom: '20px' }}>
+                                        This will merge data with existing records. Documents with matching IDs will be overwritten.
+                                    </p>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button 
+                                            onClick={() => setShowRestoreConfirm(false)}
+                                            style={{ flex: 1, padding: '12px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer', borderRadius: '6px' }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button 
+                                            onClick={handleRestore}
+                                            style={{ flex: 1, padding: '12px', background: '#3b82f6', border: 'none', color: 'white', fontWeight: '700', cursor: 'pointer', borderRadius: '6px' }}
+                                        >
+                                            ✅ Confirm Restore
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ==================== FACTORY RESET TAB ==================== */}
+            {backupTab === 'reset' && (
+                <div>
+                    {/* Header Warning */}
+                    <div style={{ background: '#dc2626', padding: '24px', marginBottom: '20px', color: 'white', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ fontSize: '48px' }}>⚠️</div>
+                            <div>
+                                <h2 style={{ margin: '0 0 6px', fontSize: '22px', fontWeight: '700' }}>Factory Reset - Danger Zone</h2>
+                                <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
+                                    Permanently delete ALL data. <strong>Authentication will be preserved.</strong>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Results Banner */}
+                    {results && (
+                        <div style={{ background: '#dcfce7', border: '1px solid #86efac', padding: '16px', marginBottom: '20px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                                <span style={{ fontSize: '20px' }}>✅</span>
+                                <strong style={{ color: '#166534' }}>Factory Reset Completed</strong>
+                            </div>
+                            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '14px', color: '#166534' }}>
+                                <span>Firestore: {results.firestore.deleted} docs</span>
+                                <span>Realtime: {results.realtime.deleted} paths</span>
+                                <span>Storage: {results.storage.deleted} files</span>
+                            </div>
+                            <button onClick={() => setResults(null)} style={{ marginTop: '10px', padding: '6px 12px', background: 'transparent', border: '1px solid #166534', color: '#166534', cursor: 'pointer', fontSize: '12px', borderRadius: '4px' }}>Dismiss</button>
+                        </div>
+                    )}
+                    
+                    {/* Pre-Reset Backup Requirement */}
+                    <div style={{ background: '#fef3c7', border: '2px solid #fde047', padding: '20px', marginBottom: '20px', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                            <span style={{ fontSize: '24px' }}>💾</span>
+                            <div style={{ flex: 1 }}>
+                                <h3 style={{ margin: '0 0 8px', color: '#92400e', fontSize: '16px' }}>Backup Required Before Reset</h3>
+                                <p style={{ margin: '0 0 12px', color: '#92400e', fontSize: '13px' }}>
+                                    You must create a backup before performing a factory reset. This ensures you can restore your data if needed.
+                                </p>
+                                {preResetBackupDone ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#166534' }}>
+                                        <span style={{ fontSize: '20px' }}>✅</span>
+                                        <strong>Pre-reset backup completed!</strong>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => handleCreateBackup(true)}
+                                        disabled={creatingBackup}
+                                        style={{ 
+                                            padding: '12px 24px', 
+                                            background: creatingBackup ? '#d4d4d4' : '#f59e0b', 
+                                            color: 'white', 
+                                            border: 'none', 
+                                            fontWeight: '700', 
+                                            cursor: creatingBackup ? 'not-allowed' : 'pointer',
+                                            borderRadius: '6px',
+                                            fontSize: '14px'
+                                        }}
+                                    >
+                                        {creatingBackup ? '⏳ Creating Pre-Reset Backup...' : '💾 Create Pre-Reset Backup'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Data Categories */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                        {/* Firestore */}
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '20px' }}>🗄️</span>
+                                <strong style={{ color: theme.text }}>Firestore Collections</strong>
+                                <span style={{ marginLeft: 'auto', background: '#dc262620', color: '#dc2626', padding: '2px 8px', fontSize: '12px', fontWeight: '700', borderRadius: '4px' }}>{FIRESTORE_COLLECTIONS.length}</span>
+                            </div>
+                            <div style={{ maxHeight: '150px', overflow: 'auto' }}>
+                                {FIRESTORE_COLLECTIONS.map(c => (
+                                    <div key={c} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '12px', fontFamily: 'monospace', color: theme.text, borderRadius: '4px' }}>{c}</div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Realtime DB */}
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '20px' }}>⚡</span>
+                                <strong style={{ color: theme.text }}>Realtime Database</strong>
+                                <span style={{ marginLeft: 'auto', background: '#dc262620', color: '#dc2626', padding: '2px 8px', fontSize: '12px', fontWeight: '700', borderRadius: '4px' }}>{REALTIME_PATHS.length}</span>
+                            </div>
+                            <div style={{ maxHeight: '150px', overflow: 'auto' }}>
+                                {REALTIME_PATHS.map(p => (
+                                    <div key={p} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '12px', fontFamily: 'monospace', color: theme.text, borderRadius: '4px' }}>{p}</div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Storage */}
+                        <div style={{ background: theme.bg, border: `1px solid ${theme.border}`, padding: '16px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '20px' }}>📁</span>
+                                <strong style={{ color: theme.text }}>Cloud Storage</strong>
+                                <span style={{ marginLeft: 'auto', background: '#dc262620', color: '#dc2626', padding: '2px 8px', fontSize: '12px', fontWeight: '700', borderRadius: '4px' }}>{STORAGE_FOLDERS.length}</span>
+                            </div>
+                            <div style={{ maxHeight: '150px', overflow: 'auto' }}>
+                                {STORAGE_FOLDERS.map(f => (
+                                    <div key={f} style={{ padding: '6px 10px', background: theme.bgSecondary, marginBottom: '4px', fontSize: '12px', fontFamily: 'monospace', color: theme.text, borderRadius: '4px' }}>{f}/</div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Preserved Data Notice */}
+                    <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', padding: '14px', marginBottom: '20px', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '18px' }}>🔒</span>
+                            <span style={{ color: '#1e40af', fontSize: '14px' }}><strong>Preserved:</strong> User authentication accounts will NOT be deleted</span>
+                        </div>
+                    </div>
+
+                    {/* Reset Button */}
+                    <div style={{ textAlign: 'center', padding: '20px', background: theme.bgSecondary, borderRadius: '8px' }}>
+                        <button
+                            onClick={() => {
+                                if (!preResetBackupDone) {
+                                    setError('You must create a pre-reset backup before performing a factory reset');
+                                    return;
+                                }
+                                setShowConfirmModal(true);
+                            }}
+                            disabled={!preResetBackupDone}
+                            style={{ 
+                                padding: '16px 48px', 
+                                background: preResetBackupDone ? '#dc2626' : theme.border, 
+                                color: 'white', 
+                                border: 'none', 
+                                fontSize: '16px', 
+                                fontWeight: '700', 
+                                cursor: preResetBackupDone ? 'pointer' : 'not-allowed',
+                                borderRadius: '8px',
+                                opacity: preResetBackupDone ? 1 : 0.6
+                            }}
+                        >
+                            🔄 Perform Factory Reset
+                        </button>
+                        {!preResetBackupDone && (
+                            <p style={{ color: '#dc2626', fontSize: '13px', marginTop: '12px' }}>
+                                ⚠️ Create a pre-reset backup first to enable this button
+                            </p>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Confirmation Modal */}
             {showConfirmModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !resetting && setShowConfirmModal(false)}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '450px', margin: '20px' }} onClick={e => e.stopPropagation()}>
-                        <div style={{ background: '#dc2626', padding: '20px', color: 'white', textAlign: 'center' }}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '450px', margin: '20px', borderRadius: '12px', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ background: '#dc2626', padding: '24px', color: 'white', textAlign: 'center' }}>
                             <div style={{ fontSize: '48px', marginBottom: '8px' }}>⚠️</div>
                             <h2 style={{ margin: '0 0 4px', fontSize: '18px' }}>Confirm Factory Reset</h2>
                             <p style={{ margin: 0, opacity: 0.9, fontSize: '13px' }}>This action cannot be undone!</p>
                         </div>
 
-                        <div style={{ padding: '20px' }}>
+                        <div style={{ padding: '24px' }}>
                             {resetting ? (
                                 <div style={{ textAlign: 'center', padding: '20px' }}>
                                     <div style={{ width: '50px', height: '50px', border: '4px solid #e5e7eb', borderTopColor: '#dc2626', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }}></div>
@@ -25967,7 +28194,7 @@ function FactoryResetTab({ theme }) {
                                                 {progress.phase === 'storage' && '📁 Clearing Storage...'}
                                             </p>
                                             <p style={{ margin: '4px 0', fontFamily: 'monospace' }}>{progress.item} ({progress.current}/{progress.total})</p>
-                                            <div style={{ background: theme.border, height: '6px', marginTop: '10px', overflow: 'hidden' }}>
+                                            <div style={{ background: theme.border, height: '6px', marginTop: '10px', overflow: 'hidden', borderRadius: '3px' }}>
                                                 <div style={{ background: '#dc2626', height: '100%', width: `${(progress.current / progress.total) * 100}%`, transition: 'width 0.2s' }}></div>
                                             </div>
                                         </div>
@@ -25975,7 +28202,7 @@ function FactoryResetTab({ theme }) {
                                 </div>
                             ) : (
                                 <>
-                                    <div style={{ background: '#fef3c7', border: '1px solid #fde047', padding: '12px', marginBottom: '16px', fontSize: '13px', color: '#92400e' }}>
+                                    <div style={{ background: '#fef3c7', border: '1px solid #fde047', padding: '12px', marginBottom: '16px', fontSize: '13px', color: '#92400e', borderRadius: '6px' }}>
                                         <strong>You are about to delete:</strong>
                                         <ul style={{ margin: '6px 0 0', paddingLeft: '18px' }}>
                                             <li>{FIRESTORE_COLLECTIONS.length} Firestore collections</li>
@@ -25993,13 +28220,13 @@ function FactoryResetTab({ theme }) {
                                             value={confirmText}
                                             onChange={(e) => setConfirmText(e.target.value)}
                                             placeholder={CONFIRM_PHRASE}
-                                            style={{ width: '100%', padding: '10px 12px', border: `2px solid ${confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border}`, fontSize: '14px', fontFamily: 'monospace', background: theme.inputBg, color: theme.text, boxSizing: 'border-box' }}
+                                            style={{ width: '100%', padding: '10px 12px', border: `2px solid ${confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border}`, fontSize: '14px', fontFamily: 'monospace', background: theme.inputBg, color: theme.text, boxSizing: 'border-box', borderRadius: '6px' }}
                                         />
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={() => { setShowConfirmModal(false); setConfirmText(''); }} style={{ flex: 1, padding: '12px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
-                                        <button onClick={handleFactoryReset} disabled={confirmText !== CONFIRM_PHRASE} style={{ flex: 1, padding: '12px', background: confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border, border: 'none', color: 'white', fontWeight: '700', cursor: confirmText === CONFIRM_PHRASE ? 'pointer' : 'not-allowed' }}>🗑️ Delete All</button>
+                                        <button onClick={() => { setShowConfirmModal(false); setConfirmText(''); }} style={{ flex: 1, padding: '12px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.text, fontWeight: '600', cursor: 'pointer', borderRadius: '6px' }}>Cancel</button>
+                                        <button onClick={handleFactoryReset} disabled={confirmText !== CONFIRM_PHRASE} style={{ flex: 1, padding: '12px', background: confirmText === CONFIRM_PHRASE ? '#dc2626' : theme.border, border: 'none', color: 'white', fontWeight: '700', cursor: confirmText === CONFIRM_PHRASE ? 'pointer' : 'not-allowed', borderRadius: '6px' }}>🗑️ Delete All</button>
                                     </div>
                                 </>
                             )}
@@ -26585,7 +28812,10 @@ function StaffManagement() {
                 <button onClick={() => setActiveTab('staff')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'staff' ? '#3b82f6' : 'transparent', color: activeTab === 'staff' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>👷 Staff ({staffList.filter(s => s.status === 'active').length})</button>
                 <button onClick={() => setActiveTab('users')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'users' ? '#3b82f6' : 'transparent', color: activeTab === 'users' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔐 Users ({usersList.filter(u => u.isActive).length})</button>
                 <button onClick={() => setActiveTab('audit')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'audit' ? '#3b82f6' : 'transparent', color: activeTab === 'audit' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>📜 Audit Logs</button>
-                <button onClick={() => setActiveTab('factory-reset')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'factory-reset' ? '#dc2626' : 'transparent', color: activeTab === 'factory-reset' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔄 Factory Reset</button>
+                {/* Factory Reset tab - Only visible to super admin (admin@ecospark.com) */}
+                {isSuperAdmin && isSuperAdminEmail(userProfile?.email) && (
+                    <button onClick={() => setActiveTab('factory-reset')} style={{ padding: '12px 24px', border: 'none', background: activeTab === 'factory-reset' ? '#dc2626' : 'transparent', color: activeTab === 'factory-reset' ? 'white' : theme.textSecondary, fontWeight: '600', cursor: 'pointer', borderRadius: '8px 8px 0 0' }}>🔄 Factory Reset</button>
+                )}
             </div>
 
             <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -26873,7 +29103,7 @@ function StaffManagement() {
                 </div>
             )}
 
-            {activeTab === 'factory-reset' && <FactoryResetTab theme={theme} />}
+            {activeTab === 'factory-reset' && isSuperAdmin && isSuperAdminEmail(userProfile?.email) && <FactoryResetTab theme={theme} />}
 
             {showAddStaffModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowAddStaffModal(false)}>
