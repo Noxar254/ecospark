@@ -2555,30 +2555,30 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                 unsubs.push(svc.complaintsService.subscribeToComplaints((complaints) => {
                     const alerts = [];
                     // Show resolved complaints notifications
-                    complaints.filter(c => c.status === 'completed' && c.response).forEach(complaint => {
+                    complaints.filter(c => c.status === 'resolved' || c.status === 'completed').forEach(complaint => {
                         alerts.push({
                             id: `complaint-resolved-${complaint.id}`,
                             type: 'complaint',
                             icon: '✅',
-                            title: `Complaint Resolved: ${complaint.subject}`,
-                            subtitle: complaint.response?.substring(0, 50) + (complaint.response?.length > 50 ? '...' : ''),
-                            timestamp: complaint.completedAt || complaint.respondedAt || complaint.updatedAt,
-                            module: 'support',
+                            title: `Complaint Resolved: #${complaint.complaintNumber || complaint.id?.slice(0,8) || 'N/A'}`,
+                            subtitle: `${complaint.customerName || 'Customer'} - ${complaint.complaintType || 'Complaint'}${complaint.resolution ? ': ' + complaint.resolution.substring(0, 40) + (complaint.resolution.length > 40 ? '...' : '') : ''}`,
+                            timestamp: complaint.resolvedAt || complaint.updatedAt,
+                            module: 'customers',
                             color: '#22c55e',
                             priority: 'high'
                         });
                     });
-                    // Show pending complaints with responses
-                    complaints.filter(c => c.status !== 'completed' && c.response).forEach(complaint => {
+                    // Show open complaints notifications
+                    complaints.filter(c => c.status === 'open' || c.status === 'in-progress').forEach(complaint => {
                         alerts.push({
-                            id: `complaint-response-${complaint.id}`,
+                            id: `complaint-open-${complaint.id}`,
                             type: 'complaint',
-                            icon: '💬',
-                            title: `Response Added: ${complaint.subject}`,
-                            subtitle: 'A response has been added to your complaint',
-                            timestamp: complaint.respondedAt || complaint.updatedAt,
-                            module: 'support',
-                            color: '#3b82f6'
+                            icon: '⚠️',
+                            title: `Your complaint #${complaint.complaintNumber || complaint.id?.slice(0,8) || 'N/A'} has been received`,
+                            subtitle: `${complaint.complaintType || 'Complaint'} - ${complaint.priority || 'normal'} priority`,
+                            timestamp: complaint.createdAt || complaint.updatedAt,
+                            module: 'customers',
+                            color: complaint.priority === 'urgent' ? '#dc2626' : '#f59e0b'
                         });
                     });
                     updateNotifications('complaint-', alerts);
@@ -30887,11 +30887,11 @@ function SystemSettings({ initialTab = 'profile' }) {
                     if (services?.activityService?.logActivity) {
                         await services.activityService.logActivity({
                             type: 'complaint_resolved',
-                            title: `Complaint Resolved: ${complaint?.subject || 'Complaint'}`,
-                            description: `Your complaint "${complaint?.subject}" has been resolved.`,
+                            title: `Complaint Resolved: #${complaint?.complaintNumber || complaint?.id?.slice(0,8) || 'N/A'}`,
+                            description: `Complaint #${complaint?.complaintNumber || 'N/A'} for ${complaint?.customerName || 'Customer'} has been resolved.`,
                             timestamp: new Date().toISOString(),
                             complaintId: complaintId,
-                            module: 'support'
+                            module: 'customers'
                         });
                     }
                 } else {
