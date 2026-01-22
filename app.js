@@ -2355,14 +2355,33 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
             if (svc.billingService?.subscribeToInvoices) {
                 unsubs.push(svc.billingService.subscribeToInvoices((invoices) => {
                     const alerts = [];
-                    const pendingInvoices = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial');
-                    if (pendingInvoices.length > 0) {
-                        const totalPending = pendingInvoices.reduce((sum, i) => sum + (i.totalAmount || i.total || 0), 0);
+                    const today = new Date().toISOString().split('T')[0];
+                    const pendingInvoices = invoices.filter(i => i.paymentStatus === 'pending' || i.paymentStatus === 'partial' || i.paymentStatus === 'unpaid' || !i.paymentStatus);
+                    const todaysPendingInvoices = pendingInvoices.filter(i => i.createdAt?.startsWith(today));
+                    
+                    // Add individual pending invoice notifications for today
+                    todaysPendingInvoices.slice(0, 5).forEach(inv => {
                         alerts.push({
-                            id: 'billing-pending',
+                            id: `billing-pending-${inv.id}`,
+                            type: 'payment',
+                            icon: '⏳',
+                            title: `${inv.plateNumber || 'Vehicle'} - Pending Payment`,
+                            subtitle: `${inv.customerName || 'Walk-in'} • ${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
+                            timestamp: inv.createdAt || new Date().toISOString(),
+                            module: 'billing',
+                            color: '#ef4444',
+                            priority: 'high'
+                        });
+                    });
+                    
+                    // Summary notification if there are more pending
+                    if (todaysPendingInvoices.length > 5) {
+                        const totalPending = todaysPendingInvoices.reduce((sum, i) => sum + (i.totalAmount || i.total || 0), 0);
+                        alerts.push({
+                            id: 'billing-pending-summary',
                             type: 'payment',
                             icon: '💰',
-                            title: `${pendingInvoices.length} Pending Payment${pendingInvoices.length > 1 ? 's' : ''}`,
+                            title: `${todaysPendingInvoices.length} Pending Payments Today`,
                             subtitle: `Total: ${getBrandingForReceipts().currencySymbol || 'KES'} ${totalPending.toLocaleString()}`,
                             timestamp: new Date().toISOString(),
                             module: 'billing',
@@ -2370,14 +2389,16 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                         });
                     }
                     // Also add recent paid invoices as notifications
-                    const recentPaid = invoices.filter(i => i.paymentStatus === 'paid').slice(0, 3);
-                    recentPaid.forEach(inv => {
+                    const todayDate = new Date().toISOString().split('T')[0];
+                    const todaysPaidInvoices = invoices.filter(i => i.paymentStatus === 'paid' && (i.paidAt?.startsWith(todayDate) || i.updatedAt?.startsWith(todayDate) || i.createdAt?.startsWith(todayDate)));
+                    todaysPaidInvoices.slice(0, 5).forEach(inv => {
+                        const serviceInfo = inv.services?.map(s => s.name || s.service).join(', ') || inv.source || 'Service';
                         alerts.push({
                             id: `billing-paid-${inv.id}`,
                             type: 'success',
                             icon: '✅',
-                            title: `Payment Received: ${inv.customerName || 'Customer'}`,
-                            subtitle: `${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
+                            title: `${inv.plateNumber || 'Vehicle'} - Payment Received`,
+                            subtitle: `${inv.customerName || 'Walk-in'} • ${serviceInfo} • ${getBrandingForReceipts().currencySymbol || 'KES'} ${(inv.totalAmount || inv.total || 0).toLocaleString()}`,
                             timestamp: inv.paidAt || inv.updatedAt || inv.createdAt,
                             module: 'billing',
                             color: '#10b981'
@@ -3367,6 +3388,7 @@ function VehicleIntake() {
     }, [searchQuery, dateFilter, vehicles.length]);
 
     // Auto-complete vehicles when payment is confirmed
+    // FIXED: Only match invoices created AFTER the vehicle's timeIn to prevent false matches
     useEffect(() => {
         if (!invoices.length || !vehicles.length) return;
         
@@ -3376,30 +3398,47 @@ function VehicleIntake() {
         // Find vehicles that are not completed but have a paid invoice
         vehicles.forEach(async (vehicle) => {
             if (vehicle.status === 'completed') return; // Already completed
+            if (vehicle.autoCompletedByPayment) return; // Already auto-completed
             
-            // Check if there's a matching paid invoice
+            const vehicleTimeIn = new Date(vehicle.timeIn);
+            
+            // Check if there's a matching paid invoice for THIS SPECIFIC VISIT
             const matchingInvoice = invoices.find(inv => {
                 if (inv.paymentStatus !== 'paid') return false;
                 
-                // Match by record ID
+                const invoiceTime = new Date(inv.createdAt);
+                
+                // Invoice MUST be created AFTER the vehicle's timeIn (current visit started)
+                // This prevents matching invoices from PREVIOUS visits
+                if (invoiceTime < vehicleTimeIn) {
+                    return false; // Invoice is from before this visit started - skip!
+                }
+                
+                // Primary match: by record ID (most reliable)
                 if (inv.washRecordId === vehicle.id) return true;
                 
-                // Match by plateNumber + time window
+                // Secondary match: by plateNumber + visitNumber (if available)
+                if (inv.visitNumber && vehicle.visitNumber && inv.plateNumber === vehicle.plateNumber) {
+                    return inv.visitNumber === vehicle.visitNumber;
+                }
+                
+                // Fallback: plateNumber + time window (invoice must be AFTER timeIn)
                 if (inv.plateNumber === vehicle.plateNumber) {
-                    const invoiceTime = new Date(inv.createdAt);
-                    const vehicleTimeIn = new Date(vehicle.timeIn);
-                    return Math.abs(invoiceTime - vehicleTimeIn) < 3600000; // Within 1 hour
+                    // Invoice was created within 2 hours AFTER vehicle timeIn
+                    const timeDiff = invoiceTime - vehicleTimeIn;
+                    return timeDiff >= 0 && timeDiff < 7200000; // 0 to 2 hours after
                 }
                 return false;
             });
             
             if (matchingInvoice) {
-                console.log('🔄 Auto-completing vehicle due to payment:', vehicle.plateNumber);
+                console.log('🔄 Auto-completing vehicle due to payment:', vehicle.plateNumber, 'Visit #' + vehicle.visitNumber);
                 try {
                     await svc.intakeRecordsService.updateRecord(vehicle.id, {
                         status: 'completed',
                         timeOut: vehicle.timeOut || new Date().toISOString(),
-                        autoCompletedByPayment: true
+                        autoCompletedByPayment: true,
+                        matchedInvoiceId: matchingInvoice.id
                     });
                     
                     // Free bay if assigned
@@ -3672,30 +3711,44 @@ function VehicleIntake() {
 
     // Get payment status for a vehicle record
     // Uses BOTH record paymentStatus AND invoice matching (like Wash Bay History)
+    // FIXED: Only match invoices created AFTER vehicle's timeIn to prevent false matches from previous visits
     const getPaymentStatusForVehicle = (vehicle) => {
         if (!vehicle) return { isPaid: false, invoice: null };
         
-        // Check 1: Vehicle record's own paymentStatus field
+        // Check 1: Vehicle record's own paymentStatus field (most reliable)
         const isPaidFromRecord = vehicle.paymentStatus === 'paid';
         
-        // Check 2: Find matching invoice and check its payment status (like Wash Bay History)
+        // If already paid in record, return immediately
+        if (isPaidFromRecord) {
+            return { isPaid: true, invoice: null };
+        }
+        
+        // Check 2: Find matching invoice for THIS SPECIFIC VISIT only
+        const vehicleTimeIn = new Date(vehicle.timeIn);
+        
         const matchingInvoice = invoices.find(inv => {
-            // Match by washRecordId or recordId (most reliable)
+            const invoiceTime = new Date(inv.createdAt);
+            
+            // CRITICAL: Invoice MUST be created AFTER the vehicle's timeIn (current visit)
+            // This prevents matching invoices from PREVIOUS visits of returning vehicles
+            if (invoiceTime < vehicleTimeIn) {
+                return false; // Invoice is from before this visit - skip!
+            }
+            
+            // Primary match: by washRecordId or recordId (most reliable)
             if (inv.washRecordId && inv.washRecordId === vehicle.id) return true;
             if (inv.recordId && inv.recordId === vehicle.id) return true;
             
-            // Match by plate number + bay + time window (like Wash Bay History)
+            // Secondary match: by visitNumber (if available)
+            if (inv.visitNumber && vehicle.visitNumber && inv.plateNumber === vehicle.plateNumber) {
+                return inv.visitNumber === vehicle.visitNumber;
+            }
+            
+            // Fallback: plate match + time window (invoice must be AFTER timeIn)
             if (inv.plateNumber === vehicle.plateNumber) {
-                // Check source is wash
-                if (inv.source === 'wash' && inv.bayId === vehicle.assignedBay) {
-                    const invTime = new Date(inv.createdAt);
-                    const vehicleTime = new Date(vehicle.timeOut || vehicle.timeIn);
-                    if (Math.abs(invTime - vehicleTime) < 300000) return true; // 5 min window
-                }
-                // Or just plate match with close time
-                const invTime = new Date(inv.createdAt);
-                const vehicleTime = new Date(vehicle.timeOut || vehicle.timeIn || vehicle.createdAt);
-                if (Math.abs(invTime - vehicleTime) < 600000) return true; // 10 min window
+                // Invoice was created within 4 hours AFTER vehicle timeIn
+                const timeDiff = invoiceTime - vehicleTimeIn;
+                return timeDiff >= 0 && timeDiff < 14400000; // 0 to 4 hours after
             }
             return false;
         });
@@ -3703,7 +3756,7 @@ function VehicleIntake() {
         const isPaidFromInvoice = matchingInvoice?.paymentStatus === 'paid';
         
         return {
-            isPaid: isPaidFromRecord || isPaidFromInvoice,
+            isPaid: isPaidFromInvoice,
             invoice: matchingInvoice
         };
     };
@@ -4008,6 +4061,9 @@ function VehicleIntake() {
                     washedBy: washedBy,
                     assignedStaffId: selectedStaffId || null,
                     startTime: new Date().toISOString(),
+                    // Visit tracking for returning vehicles
+                    visitNumber: result.visitNumber || 1,
+                    isReturningVehicle: result.isReturning || false,
                     // Fleet account info for tracking
                     fleetAccountId: selectedVehicle.fleetAccountId || null,
                     fleetAccountNumber: selectedVehicle.fleetAccountNumber || null,
@@ -15624,9 +15680,9 @@ function WashBaysContent() {
     const VEHICLE_TYPES = ['Sedan', 'SUV', 'Truck', 'Van', 'Motorcycle', 'Bus'];
 
     const STATUS_CONFIG = {
-        available: { label: 'Available', color: '#10b981', bg: '#d1fae5' },
-        occupied: { label: 'In Progress', color: '#3b82f6', bg: '#dbeafe' },
-        maintenance: { label: 'Maintenance', color: '#f59e0b', bg: '#fef3c7' }
+        available: { label: 'Available', color: '#10b981', bg: '#d1fae5', cardBg: 'transparent', borderColor: '#10b981' },
+        occupied: { label: 'In Progress', color: '#1e40af', bg: '#dbeafe', cardBg: 'linear-gradient(145deg, #f0f9ff 0%, #e0f2fe 50%, #dbeafe 100%)', borderColor: '#60a5fa' },
+        maintenance: { label: 'Maintenance', color: '#f59e0b', bg: '#fef3c7', cardBg: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)', borderColor: '#f59e0b' }
     };
 
     // Subscribe to real-time data - STABLE VERSION
@@ -16103,7 +16159,10 @@ function WashBaysContent() {
                     services: [{ name: serviceName, price: washPrice }],
                     totalAmount: washPrice,
                     assignedTo: currentVehicle.assignedBy || '',
-                    startTime: bay.startTime || new Date().toISOString()
+                    startTime: bay.startTime || new Date().toISOString(),
+                    // Add recordId and visitNumber for reliable matching
+                    washRecordId: currentVehicle.recordId || null,
+                    visitNumber: currentVehicle.visitNumber || 1
                 });
             }
             
@@ -16475,18 +16534,20 @@ function WashBaysContent() {
 
                             return (
                                 <div key={bay.id} style={{
-                                    backgroundColor: theme.bg,
+                                    background: statusConfig.cardBg || theme.bg,
+                                    backgroundColor: statusConfig.cardBg ? undefined : theme.bg,
                                     borderRadius: '2px',
                                     overflow: 'hidden',
-                                    boxShadow: theme.cardShadow,
-                                    border: `1px solid ${theme.border}`,
-                                    transition: 'transform 0.2s, box-shadow 0.2s'
+                                    boxShadow: bay.status === 'occupied' ? '0 4px 16px rgba(96, 165, 250, 0.2)' : theme.cardShadow,
+                                    border: `2px solid ${statusConfig.borderColor || theme.border}`,
+                                    transition: 'transform 0.2s, box-shadow 0.2s',
+                                    animation: bay.status === 'occupied' ? 'pulse 3s ease-in-out infinite' : 'none'
                                 }}>
                                     {/* Bay Header */}
                                     <div style={{
                                         padding: '16px 20px',
-                                        backgroundColor: `${bayType.color}10`,
-                                        borderBottom: `1px solid ${theme.border}`,
+                                        backgroundColor: bay.status === 'occupied' ? 'rgba(96, 165, 250, 0.08)' : `${bayType.color}10`,
+                                        borderBottom: `1px solid ${bay.status === 'occupied' ? 'rgba(96, 165, 250, 0.2)' : theme.border}`,
                                         display: 'flex',
                                         justifyContent: 'space-between',
                                         alignItems: 'center'
@@ -16496,7 +16557,7 @@ function WashBaysContent() {
                                                 margin: 0, 
                                                 fontSize: '18px', 
                                                 fontWeight: '700',
-                                                color: theme.text 
+                                                color: bay.status === 'occupied' ? '#1e40af' : theme.text 
                                             }}>
                                                 {bay.name}
                                             </h3>
@@ -16539,11 +16600,11 @@ function WashBaysContent() {
                                                         width: '50px',
                                                         height: '50px',
                                                         borderRadius: '2px',
-                                                        backgroundColor: '#3b82f6',
+                                                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
                                                         display: 'flex',
                                                         alignItems: 'center',
                                                         justifyContent: 'center',
-                                                        color: 'white',
+                                                        color: '#3b82f6',
                                                         fontSize: '24px'
                                                     }}>
                                                         🚗
@@ -16552,13 +16613,13 @@ function WashBaysContent() {
                                                         <div style={{ 
                                                             fontWeight: '700', 
                                                             fontSize: '16px',
-                                                            color: theme.text 
+                                                            color: '#1e40af' 
                                                         }}>
                                                             {bay.currentVehicle.plateNumber}
                                                         </div>
                                                         <div style={{ 
                                                             fontSize: '13px', 
-                                                            color: theme.textSecondary 
+                                                            color: '#64748b' 
                                                         }}>
                                                             {bay.currentVehicle.customerName || 'Walk-in Customer'}
                                                         </div>
@@ -16573,19 +16634,21 @@ function WashBaysContent() {
                                                 }}>
                                                     <div style={{
                                                         padding: '10px',
-                                                        backgroundColor: theme.bgSecondary,
-                                                        borderRadius: '2px'
+                                                        backgroundColor: 'rgba(59, 130, 246, 0.06)',
+                                                        borderRadius: '2px',
+                                                        border: '1px solid rgba(59, 130, 246, 0.1)'
                                                     }}>
-                                                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '2px' }}>Service</div>
-                                                        <div style={{ fontSize: '13px', fontWeight: '600', color: theme.text }}>{typeof bay.currentVehicle.service === 'object' ? bay.currentVehicle.service?.name : bay.currentVehicle.service || '-'}</div>
+                                                        <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '2px' }}>Service</div>
+                                                        <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e40af' }}>{typeof bay.currentVehicle.service === 'object' ? bay.currentVehicle.service?.name : bay.currentVehicle.service || '-'}</div>
                                                     </div>
                                                     <div style={{
                                                         padding: '10px',
-                                                        backgroundColor: '#dbeafe',
-                                                        borderRadius: '2px'
+                                                        backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                                                        borderRadius: '2px',
+                                                        border: '1px solid rgba(59, 130, 246, 0.12)'
                                                     }}>
-                                                        <div style={{ fontSize: '11px', color: '#3b82f6', marginBottom: '2px' }}>Time Elapsed</div>
-                                                        <div style={{ fontSize: '16px', fontWeight: '700', color: '#3b82f6' }}>{getElapsedTime(bay.startTime)}</div>
+                                                        <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '2px' }}>Time Elapsed</div>
+                                                        <div style={{ fontSize: '16px', fontWeight: '700', color: '#2563eb' }}>{getElapsedTime(bay.startTime)}</div>
                                                     </div>
                                                 </div>
 
@@ -21048,8 +21111,12 @@ function BillingModule() {
         notes: '',
         paymentStatus: 'unpaid',
         paymentMethod: 'cash',
-        mpesaCode: ''
+        mpesaCode: '',
+        mpesaMode: 'manual', // 'stk' or 'manual'
+        cardReference: ''
     });
+    const [manualMpesaStkLoading, setManualMpesaStkLoading] = useState(false);
+    const [manualMpesaStkStatus, setManualMpesaStkStatus] = useState(null);
     
     // Plate search states for manual billing
     const [billingPlateSearchResults, setBillingPlateSearchResults] = useState([]);
@@ -21057,8 +21124,11 @@ function BillingModule() {
     const [selectedIntakeRecord, setSelectedIntakeRecord] = useState(null);
     const billingPlateSearchTimeout = React.useRef(null);
     
-    // Service packages for billing
+    // Service packages for billing (car wash services)
     const [servicePackages, setServicePackages] = useState([]);
+    
+    // Garage services for billing
+    const [garageServices, setGarageServices] = useState([]);
     
     // Revenue tracking
     const [revenueToday, setRevenueToday] = useState({ total: 0, wash: 0, garage: 0, other: 0 });
@@ -21178,12 +21248,22 @@ function BillingModule() {
                     setBillingStats(statsResult.data);
                 }
                 
-                // Load service packages
+                // Load service packages (car wash)
                 if (services.packagesService) {
                     const packagesResult = await services.packagesService.getPackages();
                     if (packagesResult.success) {
                         setServicePackages(packagesResult.data.filter(p => p.isActive !== false));
                     }
+                }
+                
+                // Load garage services
+                if (services.garageServicesService) {
+                    services.garageServicesService.subscribeToServices(
+                        (servicesData) => {
+                            setGarageServices(servicesData.filter(s => s.isActive !== false));
+                        },
+                        (err) => console.warn('Could not load garage services:', err)
+                    );
                 }
             } catch (err) {
                 console.error('Error initializing billing:', err);
@@ -22372,10 +22452,11 @@ function BillingModule() {
         });
     };
 
-    // Get selected services with details
+    // Get selected services with details (from either wash or garage services based on source)
     const getSelectedServicesDetails = () => {
+        const allServices = [...servicePackages, ...garageServices];
         return manualBillingData.selectedServices
-            .map(id => servicePackages.find(s => s.id === id))
+            .map(id => allServices.find(s => s.id === id))
             .filter(Boolean);
     };
 
@@ -22773,11 +22854,56 @@ function BillingModule() {
             {/* Tabs & Filters Bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', padding: '0', background: theme.bgSecondary, borderBottom: `2px solid ${theme.border}` }}>
                 <div style={{ display: 'flex', gap: '0', alignItems: 'center' }}>
-                    <button style={tabStyle(activeTab === 'paid')} onClick={() => setActiveTab('paid')}>
+                    <button style={{ ...tabStyle(activeTab === 'paid'), position: 'relative', display: 'flex', alignItems: 'center', gap: '8px' }} onClick={() => setActiveTab('paid')}>
                         Paid
+                        {(() => {
+                            const today = new Date().toISOString().split('T')[0];
+                            const todaysPaid = invoices.filter(inv => inv.paymentStatus === 'paid' && inv.createdAt?.startsWith(today));
+                            return todaysPaid.length > 0 && (
+                                <span style={{
+                                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                    color: 'white',
+                                    fontSize: '11px',
+                                    fontWeight: '700',
+                                    minWidth: '20px',
+                                    height: '20px',
+                                    borderRadius: '10px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0 6px',
+                                    boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)'
+                                }}>
+                                    {todaysPaid.length > 99 ? '99+' : todaysPaid.length}
+                                </span>
+                            );
+                        })()}
                     </button>
-                    <button style={tabStyle(activeTab === 'pending')} onClick={() => setActiveTab('pending')}>
-                        Pending ({pendingInvoices.length})
+                    <button style={{ ...tabStyle(activeTab === 'pending'), position: 'relative', display: 'flex', alignItems: 'center', gap: '8px' }} onClick={() => setActiveTab('pending')}>
+                        Pending
+                        {(() => {
+                            const today = new Date().toISOString().split('T')[0];
+                            const todaysPending = pendingInvoices.filter(inv => inv.createdAt?.startsWith(today));
+                            return todaysPending.length > 0 && (
+                                <span style={{
+                                    background: 'linear-gradient(135deg, #ef4444 0%, #f97316 100%)',
+                                    color: 'white',
+                                    fontSize: '11px',
+                                    fontWeight: '700',
+                                    minWidth: '20px',
+                                    height: '20px',
+                                    borderRadius: '10px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0 6px',
+                                    boxShadow: '0 2px 8px rgba(239, 68, 68, 0.5)',
+                                    animation: 'pulse 2s infinite'
+                                }}>
+                                    {todaysPending.length > 99 ? '99+' : todaysPending.length}
+                                </span>
+                            );
+                        })()}
                     </button>
                     <button style={tabStyle(activeTab === 'all')} onClick={() => setActiveTab('all')}>
                         All Invoices
@@ -23990,7 +24116,7 @@ function BillingModule() {
                             <div style={{ display: 'flex', gap: '0' }}>
                                 <button
                                     type="button"
-                                    onClick={() => handleManualBillingChange('source', 'wash')}
+                                    onClick={() => { handleManualBillingChange('source', 'wash'); handleManualBillingChange('selectedServices', []); }}
                                     style={{
                                         flex: 1,
                                         padding: '14px',
@@ -24011,7 +24137,7 @@ function BillingModule() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => handleManualBillingChange('source', 'garage')}
+                                    onClick={() => { handleManualBillingChange('source', 'garage'); handleManualBillingChange('selectedServices', []); }}
                                     style={{
                                         flex: 1,
                                         padding: '14px',
@@ -24036,49 +24162,62 @@ function BillingModule() {
 
                         {/* Services Selection */}
                         <div style={{ marginBottom: '16px' }}>
-                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Select Services</div>
-                            {servicePackages.length === 0 ? (
-                                <div style={{ padding: '20px', background: theme.bgSecondary, textAlign: 'center', color: theme.textSecondary, fontSize: '13px' }}>
-                                    No services available. Add services in Service Packages.
-                                </div>
-                            ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
-                                    {servicePackages.map(service => {
-                                        const isSelected = manualBillingData.selectedServices.includes(service.id);
-                                        return (
-                                            <button
-                                                key={service.id}
-                                                type="button"
-                                                onClick={() => toggleServiceSelection(service.id)}
-                                                style={{
-                                                    padding: '12px',
-                                                    border: `2px solid ${isSelected ? '#10b981' : theme.border}`,
-                                                    background: isSelected ? (isDark ? '#10b98120' : '#d1fae5') : theme.bg,
-                                                    cursor: 'pointer',
-                                                    textAlign: 'left',
-                                                    borderRadius: '0',
-                                                    transition: 'all 0.15s'
-                                                }}
-                                            >
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                    <div style={{ flex: 1 }}>
-                                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px', marginBottom: '2px' }}>
-                                                            {isSelected && <span style={{ color: '#10b981', marginRight: '4px' }}>✓</span>}
-                                                            {service.name}
+                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>
+                                {manualBillingData.source === 'garage' ? '🔧 Garage Services' : '🚿 Car Wash Services'}
+                            </div>
+                            {(() => {
+                                const displayServices = manualBillingData.source === 'garage' ? garageServices : servicePackages;
+                                const emptyMessage = manualBillingData.source === 'garage' 
+                                    ? 'No garage services available. Add services in Garage → Manage Services.'
+                                    : 'No car wash services available. Add services in Service Packages.';
+                                
+                                if (displayServices.length === 0) {
+                                    return (
+                                        <div style={{ padding: '20px', background: theme.bgSecondary, textAlign: 'center', color: theme.textSecondary, fontSize: '13px' }}>
+                                            {emptyMessage}
+                                        </div>
+                                    );
+                                }
+                                
+                                return (
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
+                                        {displayServices.map(service => {
+                                            const isSelected = manualBillingData.selectedServices.includes(service.id);
+                                            return (
+                                                <button
+                                                    key={service.id}
+                                                    type="button"
+                                                    onClick={() => toggleServiceSelection(service.id)}
+                                                    style={{
+                                                        padding: '12px',
+                                                        border: `2px solid ${isSelected ? '#10b981' : theme.border}`,
+                                                        background: isSelected ? (isDark ? '#10b98120' : '#d1fae5') : theme.bg,
+                                                        cursor: 'pointer',
+                                                        textAlign: 'left',
+                                                        borderRadius: '0',
+                                                        transition: 'all 0.15s'
+                                                    }}
+                                                >
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontWeight: '600', color: theme.text, fontSize: '13px', marginBottom: '2px' }}>
+                                                                {isSelected && <span style={{ color: '#10b981', marginRight: '4px' }}>✓</span>}
+                                                                {service.name}
+                                                            </div>
+                                                            {service.description && (
+                                                                <div style={{ fontSize: '10px', color: theme.textSecondary }}>{service.description}</div>
+                                                            )}
                                                         </div>
-                                                        {service.description && (
-                                                            <div style={{ fontSize: '10px', color: theme.textSecondary }}>{service.description}</div>
-                                                        )}
+                                                        <div style={{ fontWeight: '800', color: isSelected ? '#10b981' : (manualBillingData.source === 'garage' ? '#f59e0b' : '#3b82f6'), fontSize: '14px', whiteSpace: 'nowrap' }}>
+                                                            {formatCurrency(service.price)}
+                                                        </div>
                                                     </div>
-                                                    <div style={{ fontWeight: '800', color: isSelected ? '#10b981' : '#3b82f6', fontSize: '14px', whiteSpace: 'nowrap' }}>
-                                                        {formatCurrency(service.price)}
-                                                    </div>
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
                             {/* Selected services summary */}
                             {manualBillingData.selectedServices.length > 0 && (
                                 <div style={{ marginTop: '8px', padding: '8px 12px', background: isDark ? '#10b98115' : '#ecfdf5', borderLeft: '3px solid #10b981' }}>
@@ -24154,9 +24293,153 @@ function BillingModule() {
                             </div>
                         </div>
 
-                        {/* M-Pesa Code */}
+                        {/* Card Reference */}
+                        {manualBillingData.paymentStatus === 'paid' && manualBillingData.paymentMethod === 'card' && (
+                            <div style={{ marginBottom: '16px', padding: '12px', background: isDark ? '#3b82f615' : '#eff6ff', border: `1px solid ${isDark ? '#3b82f640' : '#bfdbfe'}` }}>
+                                <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: '600', marginBottom: '8px', textTransform: 'uppercase' }}>💳 Card Payment Details</div>
+                                <input 
+                                    type="text" 
+                                    value={manualBillingData.cardReference} 
+                                    onChange={(e) => handleManualBillingChange('cardReference', e.target.value.toUpperCase())} 
+                                    placeholder="Card Reference / Transaction ID" 
+                                    style={{ ...inputStyle, textTransform: 'uppercase', fontWeight: '600' }} 
+                                />
+                            </div>
+                        )}
+
+                        {/* M-Pesa Payment Options */}
                         {manualBillingData.paymentStatus === 'paid' && manualBillingData.paymentMethod === 'mpesa' && (
-                            <input type="text" value={manualBillingData.mpesaCode} onChange={(e) => handleManualBillingChange('mpesaCode', e.target.value.toUpperCase())} placeholder="M-Pesa Code (e.g., SBK7XXX)" style={{ ...inputStyle, marginBottom: '16px', textTransform: 'uppercase', fontWeight: '700' }} />
+                            <div style={{ marginBottom: '16px', padding: '12px', background: isDark ? '#00a65115' : '#f0fdf4', border: `1px solid ${isDark ? '#00a65140' : '#bbf7d0'}` }}>
+                                <div style={{ fontSize: '11px', color: '#00a651', fontWeight: '600', marginBottom: '10px', textTransform: 'uppercase' }}>📱 M-Pesa Payment</div>
+                                
+                                {/* Mode Selection */}
+                                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => { handleManualBillingChange('mpesaMode', 'stk'); setManualMpesaStkStatus(null); }}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px',
+                                            border: `2px solid ${manualBillingData.mpesaMode === 'stk' ? '#00a651' : theme.border}`,
+                                            background: manualBillingData.mpesaMode === 'stk' ? '#00a651' : theme.bg,
+                                            color: manualBillingData.mpesaMode === 'stk' ? 'white' : theme.text,
+                                            fontSize: '11px',
+                                            fontWeight: '700',
+                                            cursor: 'pointer',
+                                            borderRadius: '0'
+                                        }}
+                                    >
+                                        📲 STK Push
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { handleManualBillingChange('mpesaMode', 'manual'); setManualMpesaStkStatus(null); }}
+                                        style={{
+                                            flex: 1,
+                                            padding: '10px',
+                                            border: `2px solid ${manualBillingData.mpesaMode === 'manual' ? '#00a651' : theme.border}`,
+                                            background: manualBillingData.mpesaMode === 'manual' ? '#00a651' : theme.bg,
+                                            color: manualBillingData.mpesaMode === 'manual' ? 'white' : theme.text,
+                                            fontSize: '11px',
+                                            fontWeight: '700',
+                                            cursor: 'pointer',
+                                            borderRadius: '0'
+                                        }}
+                                    >
+                                        ✏️ Manual Code
+                                    </button>
+                                </div>
+
+                                {/* STK Push Option */}
+                                {manualBillingData.mpesaMode === 'stk' && (
+                                    <div>
+                                        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                                            <input 
+                                                type="tel" 
+                                                value={manualBillingData.customerPhone} 
+                                                onChange={(e) => handleManualBillingChange('customerPhone', e.target.value)} 
+                                                placeholder="Phone Number (07XX...)" 
+                                                style={{ ...inputStyle, flex: 1 }} 
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    if (!manualBillingData.customerPhone) {
+                                                        showAlert('Error', 'Please enter a phone number', 'error');
+                                                        return;
+                                                    }
+                                                    const total = getManualBillingTotal();
+                                                    if (total <= 0) {
+                                                        showAlert('Error', 'Please select services first', 'error');
+                                                        return;
+                                                    }
+                                                    setManualMpesaStkLoading(true);
+                                                    setManualMpesaStkStatus('sending');
+                                                    try {
+                                                        const services = window.FirebaseServices;
+                                                        if (services?.mpesaService?.initiateSTKPush) {
+                                                            const result = await services.mpesaService.initiateSTKPush(manualBillingData.customerPhone, total, `INV-${Date.now()}`);
+                                                            if (result.success) {
+                                                                setManualMpesaStkStatus('sent');
+                                                                showAlert('STK Push Sent', 'Please check the phone for M-Pesa prompt and enter PIN', 'success');
+                                                            } else {
+                                                                setManualMpesaStkStatus('failed');
+                                                                showAlert('Error', result.error || 'Failed to send STK push', 'error');
+                                                            }
+                                                        } else {
+                                                            setManualMpesaStkStatus('failed');
+                                                            showAlert('Error', 'M-Pesa service not available', 'error');
+                                                        }
+                                                    } catch (err) {
+                                                        setManualMpesaStkStatus('failed');
+                                                        showAlert('Error', err.message || 'Failed to send STK push', 'error');
+                                                    } finally {
+                                                        setManualMpesaStkLoading(false);
+                                                    }
+                                                }}
+                                                disabled={manualMpesaStkLoading}
+                                                style={{
+                                                    padding: '10px 16px',
+                                                    background: manualMpesaStkLoading ? '#6b7280' : '#00a651',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    fontWeight: '700',
+                                                    fontSize: '11px',
+                                                    cursor: manualMpesaStkLoading ? 'wait' : 'pointer',
+                                                    whiteSpace: 'nowrap'
+                                                }}
+                                            >
+                                                {manualMpesaStkLoading ? '⏳ SENDING...' : '📲 SEND PROMPT'}
+                                            </button>
+                                        </div>
+                                        {manualMpesaStkStatus === 'sent' && (
+                                            <div style={{ padding: '8px', background: '#10b98120', color: '#10b981', fontSize: '11px', fontWeight: '600', textAlign: 'center' }}>
+                                                ✓ STK Push sent! Enter the M-Pesa code after payment completes
+                                            </div>
+                                        )}
+                                        {manualMpesaStkStatus === 'sent' && (
+                                            <input 
+                                                type="text" 
+                                                value={manualBillingData.mpesaCode} 
+                                                onChange={(e) => handleManualBillingChange('mpesaCode', e.target.value.toUpperCase())} 
+                                                placeholder="M-Pesa Code (e.g., SBK7XXX)" 
+                                                style={{ ...inputStyle, marginTop: '8px', textTransform: 'uppercase', fontWeight: '700' }} 
+                                            />
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Manual Code Entry */}
+                                {manualBillingData.mpesaMode === 'manual' && (
+                                    <input 
+                                        type="text" 
+                                        value={manualBillingData.mpesaCode} 
+                                        onChange={(e) => handleManualBillingChange('mpesaCode', e.target.value.toUpperCase())} 
+                                        placeholder="M-Pesa Transaction Code (e.g., SBK7XXX)" 
+                                        style={{ ...inputStyle, textTransform: 'uppercase', fontWeight: '700' }} 
+                                    />
+                                )}
+                            </div>
                         )}
 
                         {/* Total & Submit */}

@@ -2005,9 +2005,11 @@ export const intakeRecordsService = {
           assignedTime: vehicleData.assignedTime || new Date().toISOString(),
           timeIn: vehicleData.timeIn || new Date().toISOString(),
           
-          // Reset for new visit - payment starts as pending (shows as 'Waiting')
+          // Reset for new visit - payment starts as pending (shows as 'Awaiting')
           timeOut: null,
           paymentStatus: 'pending',
+          autoCompletedByPayment: false, // CRITICAL: Reset this flag for new visit
+          matchedInvoiceId: null, // Clear any previous invoice match
           
           // Visit tracking - THIS IS KEY
           visitNumber: newVisitNumber, // 2nd visit = 2, 3rd = 3, etc.
@@ -2077,6 +2079,8 @@ export const intakeRecordsService = {
           timeIn: vehicleData.timeIn || now,
           timeOut: null,
           paymentStatus: 'pending',
+          autoCompletedByPayment: false, // Not auto-completed yet
+          matchedInvoiceId: null, // No invoice matched yet
           
           // Visit tracking - First visit
           visitNumber: 1, // First visit is always 1
