@@ -2684,7 +2684,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 padding: '0 4px',
-                                animation: unreadCount > 0 ? 'pulse 2s infinite' : 'none'
+                                boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)'
                             }}>
                                 {unreadCount > 9 ? '9+' : unreadCount}
                             </span>
@@ -2712,7 +2712,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             animation: chatHasNewMessage ? 'shake 0.5s ease-in-out' : 'none'
                         }}
                     >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={chatHasNewMessage ? '#3b82f6' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={chatHasNewMessage ? '#ef4444' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                         </svg>
                         {chatUnreadCount > 0 && (
@@ -2720,7 +2720,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 position: 'absolute',
                                 top: '2px',
                                 right: '2px',
-                                background: chatHasNewMessage ? '#ef4444' : '#3b82f6',
+                                background: '#ef4444',
                                 color: 'white',
                                 fontSize: '10px',
                                 fontWeight: '700',
@@ -2731,8 +2731,7 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 padding: '0 4px',
-                                animation: chatHasNewMessage ? 'bounce 0.5s ease-in-out' : 'pulse 2s infinite',
-                                boxShadow: chatHasNewMessage ? '0 0 10px rgba(239, 68, 68, 0.5)' : 'none'
+                                boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)'
                             }}>
                                 {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
                             </span>
