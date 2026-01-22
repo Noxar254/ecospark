@@ -2339,12 +2339,31 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
     const [chatOpen, setChatOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
     const [notifications, setNotifications] = useState([]);
+    const [profilePhoto, setProfilePhoto] = useState(userProfile?.photoURL || null);
     const [readNotifications, setReadNotifications] = useState(() => {
         try {
             const saved = localStorage.getItem('ecospark_read_notifications');
             return saved ? JSON.parse(saved) : [];
         } catch { return []; }
     });
+    
+    // Listen for profile photo updates from Settings module
+    useEffect(() => {
+        const handlePhotoUpdate = (e) => {
+            if (e.detail?.photoURL) {
+                setProfilePhoto(e.detail.photoURL);
+            }
+        };
+        window.addEventListener('userProfilePhotoUpdated', handlePhotoUpdate);
+        return () => window.removeEventListener('userProfilePhotoUpdated', handlePhotoUpdate);
+    }, []);
+    
+    // Sync with userProfile prop
+    useEffect(() => {
+        if (userProfile?.photoURL) {
+            setProfilePhoto(userProfile.photoURL);
+        }
+    }, [userProfile?.photoURL]);
 
     // Team chat unread count with notification state
     const { unreadCount: chatUnreadCount, hasNewMessage: chatHasNewMessage } = useTeamChatUnread(userProfile?.id || userProfile?.uid || 'user');
@@ -2791,21 +2810,35 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                             e.currentTarget.style.border = '1px solid transparent';
                         }}
                     >
-                        <div style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '0',
-                            background: '#3b82f6',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'white',
-                            fontSize: '14px',
-                            fontWeight: '700',
-                            letterSpacing: '0.5px'
-                        }}>
-                            {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
-                        </div>
+                        {profilePhoto ? (
+                            <img 
+                                src={profilePhoto} 
+                                alt="Profile" 
+                                style={{
+                                    width: '36px',
+                                    height: '36px',
+                                    borderRadius: '50%',
+                                    objectFit: 'cover',
+                                    border: '2px solid #3b82f6'
+                                }}
+                            />
+                        ) : (
+                            <div style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '50%',
+                                background: 'linear-gradient(135deg, #3b82f6 0%, #1e40af 100%)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'white',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                                letterSpacing: '0.5px'
+                            }}>
+                                {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                            </div>
+                        )}
                         <div style={{ textAlign: 'left', lineHeight: '1.3' }}>
                             <div style={{ 
                                 fontSize: '13px', 
@@ -2878,21 +2911,35 @@ function TopBar({ onToggleSidebar, onToggleTheme, isDarkMode, userProfile, onLog
                                 }}>
                                     
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px', position: 'relative' }}>
-                                        <div style={{
-                                            width: '60px',
-                                            height: '60px',
-                                            borderRadius: '0',
-                                            backgroundColor: 'rgba(255,255,255,0.2)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: '24px',
-                                            fontWeight: '700',
-                                            color: 'white',
-                                            border: '2px solid rgba(255,255,255,0.3)'
-                                        }}>
-                                            {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
-                                        </div>
+                                        {profilePhoto ? (
+                                            <img 
+                                                src={profilePhoto} 
+                                                alt="Profile" 
+                                                style={{
+                                                    width: '60px',
+                                                    height: '60px',
+                                                    borderRadius: '50%',
+                                                    objectFit: 'cover',
+                                                    border: '3px solid rgba(255,255,255,0.4)'
+                                                }}
+                                            />
+                                        ) : (
+                                            <div style={{
+                                                width: '60px',
+                                                height: '60px',
+                                                borderRadius: '50%',
+                                                backgroundColor: 'rgba(255,255,255,0.2)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: '24px',
+                                                fontWeight: '700',
+                                                color: 'white',
+                                                border: '2px solid rgba(255,255,255,0.3)'
+                                            }}>
+                                                {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                                            </div>
+                                        )}
                                         <div style={{ flex: 1, minWidth: 0, color: 'white' }}>
                                             <div style={{ 
                                                 fontWeight: '700', 
@@ -31567,10 +31614,17 @@ function SystemSettings({ initialTab = 'profile' }) {
     const [complaintNote, setComplaintNote] = useState('');
     const [viewingComplaintResponse, setViewingComplaintResponse] = useState(null);
     
-    // Profile image state
+    // Profile image state - sync with userProfile
     const [profileImage, setProfileImage] = useState(userProfile?.photoURL || null);
     const [uploadingImage, setUploadingImage] = useState(false);
     const fileInputRef = React.useRef(null);
+    
+    // Sync profile image when userProfile changes
+    useEffect(() => {
+        if (userProfile?.photoURL) {
+            setProfileImage(userProfile.photoURL);
+        }
+    }, [userProfile?.photoURL]);
     
     // Theme detection
     const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
@@ -31743,14 +31797,18 @@ function SystemSettings({ initialTab = 'profile' }) {
         setIsDark(!isDark);
     };
     
-    // Handle image upload
+    // Handle image upload - Clean implementation with global sync
     const handleImageUpload = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
         
+        // Reset input so same file can be selected again
+        e.target.value = '';
+        
         // Validate file type
-        if (!file.type.startsWith('image/')) {
-            setError('Please select an image file');
+        const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!validTypes.includes(file.type)) {
+            setError('Please select a valid image file (JPG, PNG, GIF, or WEBP)');
             return;
         }
         
@@ -31761,28 +31819,47 @@ function SystemSettings({ initialTab = 'profile' }) {
         }
         
         setUploadingImage(true);
+        setError('');
+        
         try {
             const services = window.FirebaseServices;
-            if (services?.storageService && currentUser) {
-                const result = await services.storageService.uploadProfileImage(currentUser.uid, file);
-                if (result.success) {
-                    setProfileImage(result.url);
-                    await services.userService.updateUserProfile(currentUser.uid, { photoURL: result.url });
-                    setSuccessMessage('Profile image updated!');
-                } else {
-                    setError(result.error || 'Failed to upload image');
-                }
-            } else {
-                // Fallback: create local preview
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    setProfileImage(reader.result);
-                    setSuccessMessage('Image preview set (save to upload)');
-                };
-                reader.readAsDataURL(file);
+            
+            if (!services?.storageService || !currentUser) {
+                throw new Error('Storage service not available');
             }
+            
+            // Upload to Firebase Storage
+            const result = await services.storageService.uploadProfileImage(currentUser.uid, file);
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Upload failed');
+            }
+            
+            const photoURL = result.url;
+            
+            // Update user profile in Firestore
+            const updateResult = await services.userService.updateUserProfile(currentUser.uid, { photoURL });
+            
+            if (!updateResult.success) {
+                throw new Error(updateResult.error || 'Failed to save photo URL');
+            }
+            
+            // Update local state
+            setProfileImage(photoURL);
+            
+            // Update global userProfile for TopBar sync
+            if (window.currentUserProfile) {
+                window.currentUserProfile = { ...window.currentUserProfile, photoURL };
+            }
+            
+            // Dispatch custom event to notify TopBar of profile update
+            window.dispatchEvent(new CustomEvent('userProfilePhotoUpdated', { detail: { photoURL } }));
+            
+            setSuccessMessage('Profile photo updated successfully!');
+            
         } catch (err) {
-            setError(err.message || 'Failed to upload image');
+            console.error('Photo upload error:', err);
+            setError(err.message || 'Failed to upload photo. Please try again.');
         } finally {
             setUploadingImage(false);
         }
@@ -32018,78 +32095,145 @@ function SystemSettings({ initialTab = 'profile' }) {
                             Profile Information
                         </h3>
                         
-                        {/* Profile Header */}
+                        {/* Profile Photo Section - Clean Design */}
                         <div style={{ 
                             display: 'flex', 
+                            flexDirection: 'column',
                             alignItems: 'center', 
-                            gap: '24px', 
-                            marginBottom: '28px',
-                            padding: '24px',
+                            marginBottom: '32px',
+                            padding: '32px 24px',
                             background: theme.bgSecondary,
-                            border: `1px solid ${theme.border}`
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '8px'
                         }}>
-                            <div style={{ position: 'relative' }}>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={handleImageUpload}
-                                    accept="image/*"
-                                    style={{ display: 'none' }}
-                                />
-                                <div 
-                                    onClick={() => fileInputRef.current?.click()}
-                                    style={{
-                                        width: '80px',
-                                        height: '80px',
-                                        background: profileImage ? `url(${profileImage}) center/cover` : 'linear-gradient(135deg, #3b82f6 0%, #1e40af 100%)',
+                            {/* Hidden file input */}
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleImageUpload}
+                                accept="image/jpeg,image/png,image/gif,image/webp"
+                                style={{ display: 'none' }}
+                            />
+                            
+                            {/* Profile Photo */}
+                            <div style={{ position: 'relative', marginBottom: '20px' }}>
+                                {profileImage ? (
+                                    <img 
+                                        src={profileImage} 
+                                        alt="Profile" 
+                                        style={{
+                                            width: '120px',
+                                            height: '120px',
+                                            borderRadius: '50%',
+                                            objectFit: 'cover',
+                                            border: `4px solid ${isDark ? '#3b82f6' : '#dbeafe'}`,
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                                        }}
+                                    />
+                                ) : (
+                                    <div style={{
+                                        width: '120px',
+                                        height: '120px',
+                                        borderRadius: '50%',
+                                        background: 'linear-gradient(135deg, #3b82f6 0%, #1e40af 100%)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         color: 'white',
-                                        fontSize: '32px',
-                                        fontWeight: '600',
-                                        cursor: 'pointer',
-                                        position: 'relative',
-                                        overflow: 'hidden'
-                                    }}
-                                >
-                                    {!profileImage && (userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                                        fontSize: '48px',
+                                        fontWeight: '700',
+                                        border: `4px solid ${isDark ? '#1e40af' : '#dbeafe'}`,
+                                        boxShadow: '0 4px 12px rgba(59,130,246,0.3)'
+                                    }}>
+                                        {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                                    </div>
+                                )}
+                                
+                                {/* Upload indicator overlay */}
+                                {uploadingImage && (
                                     <div style={{
                                         position: 'absolute',
-                                        bottom: 0,
+                                        top: 0,
                                         left: 0,
                                         right: 0,
+                                        bottom: 0,
+                                        borderRadius: '50%',
                                         background: 'rgba(0,0,0,0.6)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
                                         color: 'white',
-                                        fontSize: '10px',
-                                        padding: '4px 0',
-                                        textAlign: 'center',
-                                        fontWeight: '500'
+                                        fontSize: '14px',
+                                        fontWeight: '600'
                                     }}>
-                                        {uploadingImage ? '...' : '📷 Edit'}
+                                        Uploading...
                                     </div>
-                                </div>
+                                )}
                             </div>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text }}>
+                            
+                            {/* User Info */}
+                            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                                <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text, marginBottom: '4px' }}>
                                     {userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User'}
                                 </div>
-                                <div style={{ fontSize: '14px', color: theme.textSecondary, marginTop: '6px' }}>
+                                <div style={{ fontSize: '14px', color: theme.textSecondary, marginBottom: '12px' }}>
                                     {userProfile?.email}
                                 </div>
                                 <div style={{ 
                                     display: 'inline-block',
-                                    marginTop: '10px',
-                                    padding: '6px 14px',
+                                    padding: '6px 16px',
                                     background: '#3b82f6',
                                     color: 'white',
                                     fontSize: '11px',
                                     fontWeight: '600',
                                     textTransform: 'uppercase',
-                                    letterSpacing: '0.5px'
+                                    letterSpacing: '0.5px',
+                                    borderRadius: '20px'
                                 }}>
                                     {userProfile?.role || 'User'}
                                 </div>
+                            </div>
+                            
+                            {/* Upload Button */}
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={uploadingImage}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '10px 20px',
+                                    background: uploadingImage ? theme.bgTertiary : (isDark ? '#334155' : '#f1f5f9'),
+                                    color: uploadingImage ? theme.textSecondary : theme.text,
+                                    border: `1px solid ${theme.border}`,
+                                    borderRadius: '8px',
+                                    fontSize: '13px',
+                                    fontWeight: '500',
+                                    cursor: uploadingImage ? 'wait' : 'pointer',
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!uploadingImage) {
+                                        e.currentTarget.style.background = isDark ? '#475569' : '#e2e8f0';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    if (!uploadingImage) {
+                                        e.currentTarget.style.background = isDark ? '#334155' : '#f1f5f9';
+                                    }
+                                }}
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                {uploadingImage ? 'Uploading...' : (profileImage ? 'Change Photo' : 'Upload Photo')}
+                            </button>
+                            
+                            {/* Helper text */}
+                            <div style={{ marginTop: '12px', fontSize: '11px', color: theme.textSecondary, textAlign: 'center' }}>
+                                JPG, PNG, GIF or WEBP • Max 2MB
                             </div>
                         </div>
 

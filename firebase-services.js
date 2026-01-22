@@ -1827,7 +1827,29 @@ export const storageService = {
     }
   },
 
+  // Upload profile image - Uses base64 for instant results (no storage config needed)
   async uploadProfileImage(userId, file) {
+    try {
+      // Use base64 for instant upload (same as branding logo)
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Url = reader.result;
+          resolve({ success: true, url: base64Url });
+        };
+        reader.onerror = () => {
+          reject({ success: false, error: 'Failed to read image file' });
+        };
+        reader.readAsDataURL(file);
+      });
+    } catch (error) {
+      console.error('Error uploading profile image:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Alternative: Upload to Firebase Storage (if storage is configured)
+  async uploadProfileImageToStorage(userId, file) {
     try {
       const path = `profile-images/${userId}/${Date.now()}_${file.name}`;
       const fileRef = storageRef(storage, path);
@@ -1835,7 +1857,7 @@ export const storageService = {
       const downloadURL = await getDownloadURL(snapshot.ref);
       return { success: true, url: downloadURL, path };
     } catch (error) {
-      console.error('Error uploading profile image:', error);
+      console.error('Error uploading profile image to storage:', error);
       return { success: false, error: error.message };
     }
   },
