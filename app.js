@@ -13340,7 +13340,7 @@ function CustomerManagement() {
                     <div style={{ fontSize: '28px', fontWeight: '600', color: theme.text }}>{customers.length}</div>
                 </div>
                 <div style={{ backgroundColor: theme.bg, padding: '20px', boxShadow: theme.cardShadow, border: `1px solid ${theme.border}` }}>
-                    <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '8px' }}>Total Vehicles</div>
+                    <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '8px' }}>Wash Count</div>
                     <div style={{ fontSize: '28px', fontWeight: '600', color: theme.text }}>{customers.reduce((sum, c) => sum + (c.vehicles?.length || 0), 0)}</div>
                 </div>
                 <div style={{ backgroundColor: theme.bg, padding: '20px', boxShadow: theme.cardShadow, border: `1px solid ${theme.border}` }}>
@@ -21520,6 +21520,23 @@ function Dashboard({ onModuleClick }) {
     
     const completedToday = todayVehicles.filter(v => v.status === 'completed');
     
+    // Today's wash breakdown by category
+    const todayCars = todayVehicles.filter(v => v.category === 'vehicle' || (!v.category && !['carpet', 'motorbike', 'bicycle', 'other'].includes(v.category))).length;
+    const todayCarpets = todayVehicles.filter(v => v.category === 'carpet').length;
+    const todayMotorbikes = todayVehicles.filter(v => v.category === 'motorbike').length;
+    const todayOther = todayVehicles.filter(v => v.category === 'bicycle' || v.category === 'other').length;
+    
+    // First-time washes (items with plate numbers that only appear once in all vehicles)
+    const todayFirstTime = todayVehicles.filter(v => {
+        if (!v.plateNumber) return true; // Non-vehicle items (carpets, etc.) count as first time
+        const normalizedPlate = v.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim();
+        // Count how many times this plate appears in all vehicles
+        const visitCount = vehicles.filter(veh => 
+            veh.plateNumber && veh.plateNumber.toUpperCase().replace(/\s+/g, ' ').trim() === normalizedPlate
+        ).length;
+        return visitCount <= 1; // First time if only appears once (today's entry)
+    }).length;
+    
     // Calculate revenue from BILLING MODULE only
     const todayInvoices = invoices.filter(inv => {
         const invDate = new Date(inv.createdAt || inv.date);
@@ -21659,13 +21676,19 @@ function Dashboard({ onModuleClick }) {
     
     const stats = [
         {
-            title: 'Vehicles Today',
+            title: 'Today\'s Wash',
             value: todayVehicles.length.toString(),
+            subValues: [
+                { label: '🚗 Cars', value: todayCars, color: '#3b82f6' },
+                { label: '🧹 Carpets', value: todayCarpets, color: '#8b5cf6' },
+                { label: '🏍️ Bikes', value: todayMotorbikes, color: '#f59e0b' },
+                { label: '🆕 First Time', value: todayFirstTime, color: '#10b981' }
+            ],
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 16H9m10 0h3l-3.5-7a2 2 0 0 0-1.9-1.3H7.4a2 2 0 0 0-1.9 1.3L2 16h3m0 0a2 2 0 1 0 4 0m4 0a2 2 0 1 0 4 0"/></svg>,
             color: '#3b82f6'
         },
         {
-            title: 'Total Vehicles',
+            title: 'Wash Count',
             value: vehicles.length.toString(),
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
             color: '#6366f1'
