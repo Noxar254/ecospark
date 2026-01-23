@@ -3,7 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ecospark - Car Wash Management</title>
+    <title>Car Wash Management</title>
+    <script>
+        // Set title immediately from cache before anything renders
+        (function() {
+            try {
+                var cached = localStorage.getItem('ecospark_branding');
+                if (cached) {
+                    var b = JSON.parse(cached);
+                    if (b.companyName) document.title = b.companyName + ' - ' + (b.tagline || 'Car Wash Management');
+                }
+            } catch(e) {}
+        })();
+    </script>
     <style>
         html, body { 
             margin: 0; 
@@ -107,78 +119,60 @@
             50% { box-shadow: 0 6px 20px rgba(96, 165, 250, 0.25), inset 0 0 0 1px rgba(96, 165, 250, 0.2); }
         }
     </style>
-    <!-- Apply cached branding immediately -->
+    <!-- Read cached branding BEFORE anything renders -->
     <script>
-        (function() {
+        // Get branding from localStorage synchronously before page renders
+        window.__cachedBranding = (function() {
             try {
                 var cached = localStorage.getItem('ecospark_branding');
                 if (cached) {
                     var branding = JSON.parse(cached);
-                    if (branding.companyName) {
-                        document.title = branding.companyName + ' - ' + (branding.tagline || 'Car Wash Management');
-                    }
+                    // Apply CSS variables immediately
                     if (branding.primaryColor) {
                         document.documentElement.style.setProperty('--brand-primary', branding.primaryColor);
                     }
                     if (branding.secondaryColor) {
                         document.documentElement.style.setProperty('--brand-secondary', branding.secondaryColor);
                     }
+                    // Update document title
+                    if (branding.companyName) {
+                        document.title = branding.companyName + ' - ' + (branding.tagline || 'Car Wash Management');
+                    }
+                    return branding;
                 }
             } catch(e) { console.log('Branding cache not available'); }
+            return null;
         })();
+        
+        // Helper to get branding value or default
+        window.__getBrandValue = function(key, defaultVal) {
+            return (window.__cachedBranding && window.__cachedBranding[key]) || defaultVal;
+        };
     </script>
 </head>
 <body>
-    <!-- Fast Loading Screen -->
+    <!-- Fast Loading Screen - Uses cached branding values -->
     <div class="loading-screen" id="loadingScreen">
         <div class="loading-content">
             <div class="loading-logo" id="loadingLogo">
-                <svg id="loadingLogoSvg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5">
-                    <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9L18 10l-1.6-3.2A2 2 0 0014.6 5H9.4a2 2 0 00-1.8 1.1L6 10l-2.5.8C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/>
-                    <circle cx="7" cy="17" r="2"/>
-                    <circle cx="17" cy="17" r="2"/>
-                    <path d="M9 17h6"/>
-                </svg>
+                <script>
+                    // Inject logo immediately - either custom image or default SVG
+                    if (window.__cachedBranding && window.__cachedBranding.logoUrl) {
+                        document.write('<img src="' + window.__cachedBranding.logoUrl + '" alt="Logo" onerror="this.style.display=\'none\';document.getElementById(\'loadingLogoSvg\').style.display=\'\';">');
+                        document.write('<svg id="loadingLogoSvg" style="display:none" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9L18 10l-1.6-3.2A2 2 0 0014.6 5H9.4a2 2 0 00-1.8 1.1L6 10l-2.5.8C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 17h6"/></svg>');
+                    } else {
+                        document.write('<svg id="loadingLogoSvg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9L18 10l-1.6-3.2A2 2 0 0014.6 5H9.4a2 2 0 00-1.8 1.1L6 10l-2.5.8C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 17h6"/></svg>');
+                    }
+                </script>
             </div>
-            <div class="loading-brand" id="loadingBrand">EcoSpark</div>
-            <div class="loading-tagline" id="loadingTagline">Car Wash Management System</div>
+            <div class="loading-brand" id="loadingBrand"><script>document.write(window.__getBrandValue('companyName', 'EcoSpark'));</script></div>
+            <div class="loading-tagline" id="loadingTagline"><script>document.write(window.__getBrandValue('tagline', 'Car Wash Management System'));</script></div>
             <div class="loading-spinner-container">
                 <div class="loading-spinner"></div>
                 <div class="loading-text">Loading...</div>
             </div>
         </div>
     </div>
-    
-    <!-- Apply cached branding to loading screen -->
-    <script>
-        (function() {
-            try {
-                var cached = localStorage.getItem('ecospark_branding');
-                if (cached) {
-                    var branding = JSON.parse(cached);
-                    if (branding.companyName) {
-                        var brandEl = document.getElementById('loadingBrand');
-                        if (brandEl) brandEl.textContent = branding.companyName;
-                    }
-                    if (branding.tagline) {
-                        var taglineEl = document.getElementById('loadingTagline');
-                        if (taglineEl) taglineEl.textContent = branding.tagline;
-                    }
-                    if (branding.logoUrl) {
-                        var logoEl = document.getElementById('loadingLogo');
-                        var svgEl = document.getElementById('loadingLogoSvg');
-                        if (logoEl && svgEl) {
-                            var img = document.createElement('img');
-                            img.src = branding.logoUrl;
-                            img.alt = 'Logo';
-                            svgEl.style.display = 'none';
-                            logoEl.appendChild(img);
-                        }
-                    }
-                }
-            } catch(e) { console.log('Could not apply branding to loading screen'); }
-        })();
-    </script>
 
     <div id="root"></div>
     

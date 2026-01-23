@@ -17,8 +17,8 @@ const BrandingContext = createContext(null);
 // Try to get initial branding from localStorage for fast first paint
 const getInitialBranding = () => {
     const defaults = {
-        companyName: 'EcoSpark',
-        tagline: 'Car Wash Management System',
+        companyName: '',
+        tagline: '',
         shortName: 'ES',
         address: '',
         city: '',
@@ -49,12 +49,23 @@ const getInitialBranding = () => {
         const cached = localStorage.getItem('ecospark_branding');
         if (cached) {
             const parsed = JSON.parse(cached);
-            return { ...defaults, ...parsed };
+            // Merge cached values with defaults, cached takes priority
+            const result = { ...defaults, ...parsed };
+            // Ensure companyName and tagline have fallbacks only if truly empty
+            if (!result.companyName) result.companyName = 'EcoSpark';
+            if (!result.tagline) result.tagline = 'Car Wash Management System';
+            return result;
         }
     } catch (e) {
         // Ignore localStorage errors
     }
-    return defaults;
+    
+    // Only use hardcoded defaults if no cache exists at all
+    return {
+        ...defaults,
+        companyName: 'EcoSpark',
+        tagline: 'Car Wash Management System'
+    };
 };
 
 const DEFAULT_BRANDING = getInitialBranding();
@@ -100,14 +111,14 @@ function BrandingProvider({ children }) {
                     if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
                     // Cache to localStorage for loading screen
                     cacheBrandingToLocalStorage(newBranding);
-                    // Update document title
-                    document.title = `${result.data.companyName || 'EcoSpark'} - ${result.data.tagline || 'Car Wash Management'}`;
+                    // Update document title - use newBranding which has proper fallbacks
+                    document.title = `${newBranding.companyName} - ${newBranding.tagline}`;
                     // Update CSS variables for branding colors
-                    if (result.data.primaryColor) {
-                        document.documentElement.style.setProperty('--brand-primary', result.data.primaryColor);
+                    if (newBranding.primaryColor) {
+                        document.documentElement.style.setProperty('--brand-primary', newBranding.primaryColor);
                     }
-                    if (result.data.secondaryColor) {
-                        document.documentElement.style.setProperty('--brand-secondary', result.data.secondaryColor);
+                    if (newBranding.secondaryColor) {
+                        document.documentElement.style.setProperty('--brand-secondary', newBranding.secondaryColor);
                     }
                 }
             }
@@ -132,12 +143,13 @@ function BrandingProvider({ children }) {
                 if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
                 // Cache to localStorage for loading screen
                 cacheBrandingToLocalStorage(newBranding);
-                document.title = `${data.companyName || 'EcoSpark'} - ${data.tagline || 'Car Wash Management'}`;
-                if (data.primaryColor) {
-                    document.documentElement.style.setProperty('--brand-primary', data.primaryColor);
+                // Use newBranding which has proper fallbacks
+                document.title = `${newBranding.companyName} - ${newBranding.tagline}`;
+                if (newBranding.primaryColor) {
+                    document.documentElement.style.setProperty('--brand-primary', newBranding.primaryColor);
                 }
-                if (data.secondaryColor) {
-                    document.documentElement.style.setProperty('--brand-secondary', data.secondaryColor);
+                if (newBranding.secondaryColor) {
+                    document.documentElement.style.setProperty('--brand-secondary', newBranding.secondaryColor);
                 }
             });
         }
@@ -160,47 +172,38 @@ function BrandingProvider({ children }) {
 const getBrandingForReceipts = () => {
     // Try to get branding from Firebase services cache first
     const cached = window._cachedBranding;
-    if (cached) return cached;
+    if (cached && cached.companyName) return cached;
     
     // Fallback to localStorage
     try {
         const localCached = localStorage.getItem('ecospark_branding');
         if (localCached) {
             const parsed = JSON.parse(localCached);
-            return {
-                companyName: parsed.companyName || 'EcoSpark',
-                tagline: parsed.tagline || 'Car Wash Management System',
-                address: '',
-                city: '',
-                phone: '',
-                email: '',
-                taxPin: '',
-                receiptHeader: 'OFFICIAL RECEIPT',
-                receiptFooter: 'Thank you for choosing us!',
-                currencySymbol: 'KSh',
-                primaryColor: parsed.primaryColor || '#3b82f6',
-                secondaryColor: parsed.secondaryColor || '#10b981',
-                ...parsed
-            };
+            // Only return if we have actual cached company name
+            if (parsed.companyName) {
+                return {
+                    companyName: parsed.companyName,
+                    tagline: parsed.tagline || 'Car Wash Management System',
+                    address: parsed.address || '',
+                    city: parsed.city || '',
+                    phone: parsed.phone || '',
+                    email: parsed.email || '',
+                    taxPin: parsed.taxPin || '',
+                    receiptHeader: parsed.receiptHeader || 'OFFICIAL RECEIPT',
+                    receiptFooter: parsed.receiptFooter || 'Thank you for choosing us!',
+                    currencySymbol: parsed.currencySymbol || 'KSh',
+                    primaryColor: parsed.primaryColor || '#3b82f6',
+                    secondaryColor: parsed.secondaryColor || '#10b981',
+                    ...parsed
+                };
+            }
         }
     } catch (e) {
         console.log('Could not read branding from localStorage');
     }
     
-    return {
-        companyName: 'EcoSpark',
-        tagline: 'Car Wash Management System',
-        address: '',
-        city: '',
-        phone: '',
-        email: '',
-        taxPin: '',
-        receiptHeader: 'OFFICIAL RECEIPT',
-        receiptFooter: 'Thank you for choosing us!',
-        currencySymbol: 'KSh',
-        primaryColor: '#3b82f6',
-        secondaryColor: '#10b981'
-    };
+    // Final fallback - use DEFAULT_BRANDING which already has proper values
+    return DEFAULT_BRANDING;
 };
 
 // Update cached branding when context changes (called from BrandingProvider)
@@ -3344,6 +3347,23 @@ const DEFAULT_BAYS = [
 function VehicleIntake() {
     const { canCreate, canEdit, canDelete, hasPermission } = usePermissions();
     const canChangeStatus = hasPermission('vehicle-intake', 'change-status');
+    
+    // Dark mode detection
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    // Listen for theme changes
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        return () => observer.disconnect();
+    }, []);
+    
     // State management
     const [queue, setQueue] = useState([]);
     const [vehicles, setVehicles] = useState([]);
@@ -4943,6 +4963,44 @@ function VehicleIntake() {
         }
     };
 
+    // Revert car key issued status (undo accidental marking)
+    const handleKeyRevert = async () => {
+        if (!itemsNotesVehicle) return;
+        
+        const services = window.FirebaseServices;
+        if (!services?.intakeRecordsService) {
+            setError('Services not available');
+            return;
+        }
+        
+        // Confirm before reverting
+        showAlert(
+            '🔑 Revert Key Status?',
+            'Are you sure you want to mark the key as NOT issued? This should only be done if the key was accidentally marked as issued.',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    await services.intakeRecordsService.updateRecord(itemsNotesVehicle.id, {
+                        keyIssued: false,
+                        keyIssuedAt: null,
+                        keyRevertedAt: new Date().toISOString()
+                    });
+                    
+                    // Update local state
+                    setItemsNotesVehicle(prev => ({ ...prev, keyIssued: false, keyIssuedAt: null }));
+                    showAlert('🔑 Key Status Reverted', 'Key has been marked as NOT issued. Please ensure the key is still with staff.', 'success');
+                } catch (err) {
+                    console.error('Error reverting key status:', err);
+                    setError('Failed to revert key status: ' + err.message);
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true // showCancel
+        );
+    };
+
     // Print key tag label
     const printKeyTag = (vehicle) => {
         const printWindow = window.open('', '_blank', 'width=300,height=200');
@@ -5375,11 +5433,11 @@ function VehicleIntake() {
                 flexDirection: 'column',
                 gap: '8px',
                 zIndex: 100,
-                background: 'rgba(255,255,255,0.95)',
+                background: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255,255,255,0.95)',
                 padding: '8px',
                 borderRadius: '12px',
-                boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
-                border: '1px solid #e2e8f0'
+                boxShadow: isDark ? '0 2px 12px rgba(0,0,0,0.4)' : '0 2px 12px rgba(0,0,0,0.15)',
+                border: isDark ? '1px solid #374151' : '1px solid #e2e8f0'
             }}>
                 <button
                     onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
@@ -5388,17 +5446,17 @@ function VehicleIntake() {
                         width: '36px',
                         height: '36px',
                         borderRadius: '8px',
-                        border: '1px solid #e2e8f0',
-                        background: '#fff',
+                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
+                        background: isDark ? '#374151' : '#fff',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: '#64748b',
+                        color: isDark ? '#9ca3af' : '#64748b',
                         transition: 'all 0.2s'
                     }}
                     onMouseOver={e => { e.currentTarget.style.background = '#3b82f6'; e.currentTarget.style.color = '#fff'; }}
-                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = isDark ? '#374151' : '#fff'; e.currentTarget.style.color = isDark ? '#9ca3af' : '#64748b'; }}
                 >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 15l-6-6-6 6"/>
@@ -5411,18 +5469,18 @@ function VehicleIntake() {
                         width: '36px',
                         height: '36px',
                         borderRadius: '8px',
-                        border: '1px solid #e2e8f0',
-                        background: '#fff',
+                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
+                        background: isDark ? '#374151' : '#fff',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: '#64748b',
+                        color: isDark ? '#9ca3af' : '#64748b',
                         fontSize: '16px',
                         transition: 'all 0.2s'
                     }}
                     onMouseOver={e => { e.currentTarget.style.background = '#10b981'; e.currentTarget.style.color = '#fff'; }}
-                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = isDark ? '#374151' : '#fff'; e.currentTarget.style.color = isDark ? '#9ca3af' : '#64748b'; }}
                 >
                     📋
                 </button>
@@ -5433,17 +5491,17 @@ function VehicleIntake() {
                         width: '36px',
                         height: '36px',
                         borderRadius: '8px',
-                        border: '1px solid #e2e8f0',
-                        background: '#fff',
+                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
+                        background: isDark ? '#374151' : '#fff',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: '#64748b',
+                        color: isDark ? '#9ca3af' : '#64748b',
                         transition: 'all 0.2s'
                     }}
                     onMouseOver={e => { e.currentTarget.style.background = '#3b82f6'; e.currentTarget.style.color = '#fff'; }}
-                    onMouseOut={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#64748b'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = isDark ? '#374151' : '#fff'; e.currentTarget.style.color = isDark ? '#9ca3af' : '#64748b'; }}
                 >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6"/>
@@ -5454,8 +5512,8 @@ function VehicleIntake() {
             {/* Error Notification */}
             {error && (
                 <div className="intake-error-banner" style={{ 
-                    backgroundColor: '#fef2f2', 
-                    border: '1px solid #fecaca', 
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#fef2f2', 
+                    border: isDark ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid #fecaca', 
                     borderRadius: '8px', 
                     padding: '12px 16px', 
                     marginBottom: '16px',
@@ -5463,7 +5521,7 @@ function VehicleIntake() {
                     justifyContent: 'space-between',
                     alignItems: 'center'
                 }}>
-                    <span style={{ color: '#dc2626' }}>{error}</span>
+                    <span style={{ color: isDark ? '#f87171' : '#dc2626' }}>{error}</span>
                     <button 
                         onClick={clearError}
                         style={{ 
@@ -5487,7 +5545,7 @@ function VehicleIntake() {
                     left: 0, 
                     right: 0, 
                     bottom: 0, 
-                    backgroundColor: 'rgba(255,255,255,0.7)', 
+                    backgroundColor: isDark ? 'rgba(15, 23, 42, 0.7)' : 'rgba(255,255,255,0.7)', 
                     display: 'flex', 
                     justifyContent: 'center', 
                     alignItems: 'center', 
@@ -5496,7 +5554,7 @@ function VehicleIntake() {
                     <div style={{ 
                         width: '40px', 
                         height: '40px', 
-                        border: '3px solid #e2e8f0', 
+                        border: isDark ? '3px solid #374151' : '3px solid #e2e8f0', 
                         borderTopColor: '#3b82f6', 
                         borderRadius: '50%', 
                         animation: 'spin 0.8s linear infinite' 
@@ -5586,7 +5644,9 @@ function VehicleIntake() {
                                 style={{ 
                                     borderLeft: isOnHold ? '3px solid #f59e0b' : (isReturning ? '3px solid #16a34a' : undefined),
                                     opacity: isOnHold ? 0.75 : 1,
-                                    background: isOnHold ? '#fef3c7' : undefined
+                                    background: isOnHold 
+                                        ? (isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7') 
+                                        : (isReturning ? (isDark ? 'rgba(34, 197, 94, 0.1)' : undefined) : undefined)
                                 }}
                             >
                                 <div className="queue-card-header">
@@ -5597,8 +5657,8 @@ function VehicleIntake() {
                                                 marginLeft: '6px',
                                                 fontSize: '9px',
                                                 padding: '2px 6px',
-                                                background: '#fbbf24',
-                                                color: '#78350f',
+                                                background: isDark ? 'rgba(251, 191, 36, 0.3)' : '#fbbf24',
+                                                color: isDark ? '#fcd34d' : '#78350f',
                                                 borderRadius: '8px',
                                                 fontWeight: '600'
                                             }}>
@@ -5610,8 +5670,8 @@ function VehicleIntake() {
                                                 marginLeft: '6px',
                                                 fontSize: '9px',
                                                 padding: '2px 6px',
-                                                background: '#dcfce7',
-                                                color: '#166534',
+                                                background: isDark ? 'rgba(34, 197, 94, 0.3)' : '#dcfce7',
+                                                color: isDark ? '#4ade80' : '#166534',
                                                 borderRadius: '8px',
                                                 fontWeight: '600'
                                             }}>
@@ -5696,14 +5756,16 @@ function VehicleIntake() {
                                 style={{
                                     width: '100%',
                                     padding: '8px 12px 8px 32px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
+                                    backgroundColor: isDark ? '#1f2937' : '#fff',
+                                    color: isDark ? '#e5e7eb' : 'inherit',
                                     borderRadius: '6px',
                                     fontSize: '13px',
                                     outline: 'none'
                                 }}
                             />
                             <svg 
-                                style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}
+                                style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: isDark ? '#6b7280' : '#94a3b8' }}
                                 width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                             >
                                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -5711,7 +5773,7 @@ function VehicleIntake() {
                             {searchQuery && (
                                 <button 
                                     onClick={() => setSearchQuery('')}
-                                    style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                                    style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: isDark ? '#6b7280' : '#94a3b8', padding: '2px' }}
                                 >
                                     {Icons.x}
                                 </button>
@@ -5719,7 +5781,7 @@ function VehicleIntake() {
                         </div>
                         
                         {/* Date Filter Buttons */}
-                        <div style={{ display: 'flex', gap: '2px', backgroundColor: '#f1f5f9', borderRadius: '6px', padding: '3px' }}>
+                        <div style={{ display: 'flex', gap: '2px', backgroundColor: isDark ? 'rgba(51, 65, 85, 0.5)' : '#f1f5f9', borderRadius: '6px', padding: '3px' }}>
                             {[
                                 { id: 'all', label: 'All' },
                                 { id: 'today', label: 'Today' },
@@ -5737,8 +5799,8 @@ function VehicleIntake() {
                                         fontSize: '12px',
                                         fontWeight: '500',
                                         cursor: 'pointer',
-                                        backgroundColor: dateFilter === filter.id ? '#fff' : 'transparent',
-                                        color: dateFilter === filter.id ? '#1e293b' : '#64748b',
+                                        backgroundColor: dateFilter === filter.id ? (isDark ? '#475569' : '#fff') : 'transparent',
+                                        color: dateFilter === filter.id ? (isDark ? '#f1f5f9' : '#1e293b') : (isDark ? '#94a3b8' : '#64748b'),
                                         boxShadow: dateFilter === filter.id ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
                                     }}
                                 >
@@ -5797,7 +5859,11 @@ function VehicleIntake() {
                                 </tr>
                             ) : (
                                 paginatedVehicles.filter(v => v != null).map(vehicle => (
-                                    <tr key={vehicle.id || Math.random()} style={{ backgroundColor: vehicle.isReturningVehicle ? '#f0fdf4' : undefined }}>
+                                    <tr key={vehicle.id || Math.random()} style={{ 
+                                        backgroundColor: vehicle.isReturningVehicle 
+                                            ? (isDark ? 'rgba(34, 197, 94, 0.15)' : '#f0fdf4') 
+                                            : undefined 
+                                    }}>
                                         <td className="intake-table-plate">
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                 {INTAKE_CATEGORIES.find(c => c.id === vehicle.category)?.icon || '🚗'} {vehicle.plateNumber || 'N/A'}
@@ -5805,8 +5871,8 @@ function VehicleIntake() {
                                                     <span style={{
                                                         fontSize: '9px',
                                                         padding: '2px 6px',
-                                                        background: '#dcfce7',
-                                                        color: '#166534',
+                                                        background: isDark ? 'rgba(34, 197, 94, 0.3)' : '#dcfce7',
+                                                        color: isDark ? '#4ade80' : '#166534',
                                                         borderRadius: '8px',
                                                         fontWeight: '600'
                                                     }}>
@@ -5839,7 +5905,7 @@ function VehicleIntake() {
                                             </span>
                                         </td>
                                         <td>{vehicle.service?.name || '-'}</td>
-                                        <td style={{ color: '#10b981', fontWeight: '600' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {vehicle.service?.price || 0}</td>
+                                        <td style={{ color: isDark ? '#4ade80' : '#10b981', fontWeight: '600' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {vehicle.service?.price || 0}</td>
                                         <td>
                                             {/* Status - Dropdown for authorized users, Text badge for others */}
                                             {canChangeStatus ? (
@@ -5850,7 +5916,7 @@ function VehicleIntake() {
                                                     style={{
                                                         padding: '6px 10px',
                                                         borderRadius: '6px',
-                                                        border: '1px solid #e2e8f0',
+                                                        border: isDark ? '1px solid #475569' : '1px solid #e2e8f0',
                                                         fontSize: '12px',
                                                         fontWeight: '500',
                                                         cursor: 'pointer',
@@ -5893,8 +5959,8 @@ function VehicleIntake() {
                                                         borderRadius: '12px',
                                                         fontSize: '11px',
                                                         fontWeight: '600',
-                                                        backgroundColor: '#d1fae5',
-                                                        color: '#059669'
+                                                        backgroundColor: isDark ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5',
+                                                        color: isDark ? '#4ade80' : '#059669'
                                                     }}>
                                                         ✓ Paid
                                                     </span>
@@ -5907,8 +5973,8 @@ function VehicleIntake() {
                                                         borderRadius: '12px',
                                                         fontSize: '11px',
                                                         fontWeight: '600',
-                                                        backgroundColor: '#fef3c7',
-                                                        color: '#d97706'
+                                                        backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7',
+                                                        color: isDark ? '#fcd34d' : '#d97706'
                                                     }}>
                                                         💰 Awaiting
                                                     </span>
@@ -6020,14 +6086,14 @@ function VehicleIntake() {
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         padding: '12px 16px',
-                        borderTop: '1px solid #e2e8f0',
-                        backgroundColor: '#f8fafc',
+                        borderTop: isDark ? '1px solid #374151' : '1px solid #e2e8f0',
+                        backgroundColor: isDark ? '#1f2937' : '#f8fafc',
                         borderRadius: '0 0 8px 8px',
                         flexWrap: 'wrap',
                         gap: '12px'
                     }}>
                         {/* Left side - showing info */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: '#64748b' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: isDark ? '#9ca3af' : '#64748b' }}>
                             <span>Showing {startIndex + 1}-{Math.min(endIndex, filteredVehicles.length)} of {filteredVehicles.length}</span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span>Per page:</span>
@@ -6039,11 +6105,12 @@ function VehicleIntake() {
                                     }}
                                     style={{
                                         padding: '4px 8px',
-                                        border: '1px solid #e2e8f0',
+                                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                         borderRadius: '4px',
                                         fontSize: '13px',
                                         cursor: 'pointer',
-                                        backgroundColor: '#fff'
+                                        backgroundColor: isDark ? '#374151' : '#fff',
+                                        color: isDark ? '#e5e7eb' : 'inherit'
                                     }}
                                 >
                                     <option value={5}>5</option>
@@ -6062,10 +6129,10 @@ function VehicleIntake() {
                                 disabled={currentPage === 1}
                                 style={{
                                     padding: '6px 10px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '4px',
-                                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#fff',
-                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    backgroundColor: currentPage === 1 ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === 1 ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -6078,10 +6145,10 @@ function VehicleIntake() {
                                 disabled={currentPage === 1}
                                 style={{
                                     padding: '6px 12px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '4px',
-                                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#fff',
-                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    backgroundColor: currentPage === 1 ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === 1 ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                                     fontSize: '14px'
                                 }}
@@ -6107,10 +6174,10 @@ function VehicleIntake() {
                                             style={{
                                                 padding: '6px 12px',
                                                 border: '1px solid',
-                                                borderColor: currentPage === i ? '#3b82f6' : '#e2e8f0',
+                                                borderColor: currentPage === i ? '#3b82f6' : (isDark ? '#4b5563' : '#e2e8f0'),
                                                 borderRadius: '4px',
-                                                backgroundColor: currentPage === i ? '#3b82f6' : '#fff',
-                                                color: currentPage === i ? '#fff' : '#1e293b',
+                                                backgroundColor: currentPage === i ? '#3b82f6' : (isDark ? '#1f2937' : '#fff'),
+                                                color: currentPage === i ? '#fff' : (isDark ? '#e5e7eb' : '#1e293b'),
                                                 cursor: 'pointer',
                                                 fontSize: '13px',
                                                 fontWeight: currentPage === i ? '600' : '400',
@@ -6129,10 +6196,10 @@ function VehicleIntake() {
                                 disabled={currentPage === totalPages}
                                 style={{
                                     padding: '6px 12px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '4px',
-                                    backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#fff',
-                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    backgroundColor: currentPage === totalPages ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === totalPages ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
                                     fontSize: '14px'
                                 }}
@@ -6144,10 +6211,10 @@ function VehicleIntake() {
                                 disabled={currentPage === totalPages}
                                 style={{
                                     padding: '6px 10px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '4px',
-                                    backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#fff',
-                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    backgroundColor: currentPage === totalPages ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === totalPages ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -7080,74 +7147,74 @@ function VehicleIntake() {
                         <div className="modal-body">
                             {/* Summary Stats */}
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-                                <div style={{ background: '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#0284c7' }}>{selectedVehicleHistory.totalVisits || 0}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Visits</div>
+                                <div style={{ background: isDark ? 'rgba(14, 165, 233, 0.15)' : '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: isDark ? '#38bdf8' : '#0284c7' }}>{selectedVehicleHistory.totalVisits || 0}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Total Visits</div>
                                 </div>
-                                <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(selectedVehicleHistory.totalSpent || 0).toLocaleString()}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Spent</div>
+                                <div style={{ background: isDark ? 'rgba(34, 197, 94, 0.15)' : '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: isDark ? '#4ade80' : '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(selectedVehicleHistory.totalSpent || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Total Spent</div>
                                 </div>
-                                <div style={{ background: '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#7c3aed' }}>{selectedVehicleHistory.lastVisit ? new Date(selectedVehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Last Visit</div>
+                                <div style={{ background: isDark ? 'rgba(139, 92, 246, 0.15)' : '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#a78bfa' : '#7c3aed' }}>{selectedVehicleHistory.lastVisit ? new Date(selectedVehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Last Visit</div>
                                 </div>
                             </div>
 
                             {/* Customer Info */}
                             {(selectedVehicleHistory.customerName || selectedVehicleHistory.customerPhone) && (
-                                <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                                <div style={{ background: isDark ? '#374151' : '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
                                     <div style={{ display: 'flex', gap: '20px', fontSize: '13px' }}>
                                         {selectedVehicleHistory.customerName && (
-                                            <div><span style={{ color: '#64748b' }}>Customer:</span> <strong>{selectedVehicleHistory.customerName}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Customer:</span> <strong>{selectedVehicleHistory.customerName}</strong></div>
                                         )}
                                         {selectedVehicleHistory.customerPhone && (
-                                            <div><span style={{ color: '#64748b' }}>Phone:</span> <strong>{selectedVehicleHistory.customerPhone}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Phone:</span> <strong>{selectedVehicleHistory.customerPhone}</strong></div>
                                         )}
                                         {selectedVehicleHistory.vehicleType && (
-                                            <div><span style={{ color: '#64748b' }}>Type:</span> <strong>{selectedVehicleHistory.vehicleType}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Type:</span> <strong>{selectedVehicleHistory.vehicleType}</strong></div>
                                         )}
                                     </div>
                                 </div>
                             )}
 
                             {/* Visit History Table */}
-                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', marginBottom: '8px' }}>Visit History</div>
-                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#e5e7eb' : '#1e293b', marginBottom: '8px' }}>Visit History</div>
+                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', borderRadius: '8px' }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                                    <thead style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                                    <thead style={{ background: isDark ? '#374151' : '#f8fafc', position: 'sticky', top: 0 }}>
                                         <tr>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Date</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Time</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Service</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Bay</th>
-                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Amount</th>
-                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Status</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Date</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Time</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Service</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Bay</th>
+                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Amount</th>
+                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {(selectedVehicleHistory.visitHistory || []).length === 0 ? (
                                             <tr>
-                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>
+                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: isDark ? '#9ca3af' : '#64748b' }}>
                                                     No visit history recorded yet
                                                 </td>
                                             </tr>
                                         ) : (
                                             (selectedVehicleHistory.visitHistory || []).map((visit, index) => (
-                                                <tr key={visit.id || index} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                <tr key={visit.id || index} style={{ borderBottom: isDark ? '1px solid #374151' : '1px solid #f1f5f9' }}>
                                                     <td style={{ padding: '10px' }}>{visit.date ? new Date(visit.date).toLocaleDateString() : '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.timeIn ? new Date(visit.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.service?.name || '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.bay || '-'}</td>
-                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(visit.amount || 0).toLocaleString()}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: isDark ? '#4ade80' : '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KSH'} {(visit.amount || 0).toLocaleString()}</td>
                                                     <td style={{ padding: '10px', textAlign: 'center' }}>
                                                         <span style={{
                                                             padding: '2px 8px',
                                                             borderRadius: '10px',
                                                             fontSize: '11px',
                                                             fontWeight: '500',
-                                                            background: visit.status === 'completed' ? '#dcfce7' : visit.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
-                                                            color: visit.status === 'completed' ? '#166534' : visit.status === 'in-progress' ? '#1e40af' : '#92400e'
+                                                            background: visit.status === 'completed' ? (isDark ? 'rgba(34, 197, 94, 0.2)' : '#dcfce7') : visit.status === 'in-progress' ? (isDark ? 'rgba(59, 130, 246, 0.2)' : '#dbeafe') : (isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7'),
+                                                            color: visit.status === 'completed' ? (isDark ? '#4ade80' : '#166534') : visit.status === 'in-progress' ? (isDark ? '#60a5fa' : '#1e40af') : (isDark ? '#fcd34d' : '#92400e')
                                                         }}>
                                                             {visit.status || 'unknown'}
                                                         </span>
@@ -7405,16 +7472,38 @@ function VehicleIntake() {
                                         <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>Car Key</span>
                                     </div>
                                     {itemsNotesVehicle.keyIssued ? (
-                                        <span style={{
-                                            padding: '4px 10px',
-                                            background: '#d1fae5',
-                                            color: '#059669',
-                                            borderRadius: '6px',
-                                            fontSize: '11px',
-                                            fontWeight: '600'
-                                        }}>
-                                            ✅ Issued
-                                        </span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{
+                                                padding: '4px 10px',
+                                                background: '#d1fae5',
+                                                color: '#059669',
+                                                borderRadius: '6px',
+                                                fontSize: '11px',
+                                                fontWeight: '600'
+                                            }}>
+                                                ✅ Issued
+                                            </span>
+                                            <button
+                                                onClick={handleKeyRevert}
+                                                disabled={actionLoading}
+                                                title="Undo - Mark key as NOT issued"
+                                                style={{
+                                                    padding: '4px 8px',
+                                                    background: '#fef2f2',
+                                                    color: '#dc2626',
+                                                    border: '1px solid #fecaca',
+                                                    borderRadius: '6px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '600',
+                                                    cursor: 'pointer',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px'
+                                                }}
+                                            >
+                                                ↩️ Undo
+                                            </button>
+                                        </div>
                                     ) : (
                                         <button
                                             onClick={handleKeyIssued}
@@ -7739,6 +7828,22 @@ function VehicleIntakeAll({ onBackClick }) {
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [dateFilter, setDateFilter] = useState('all');
+    
+    // Dark mode detection
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    // Listen for theme changes
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        return () => observer.disconnect();
+    }, []);
     
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1);
@@ -8120,14 +8225,16 @@ function VehicleIntakeAll({ onBackClick }) {
                             style={{
                                 width: '100%',
                                 padding: '10px 14px 10px 36px',
-                                border: '1px solid #e2e8f0',
+                                border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
+                                backgroundColor: isDark ? '#1f2937' : '#fff',
+                                color: isDark ? '#e5e7eb' : 'inherit',
                                 borderRadius: '8px',
                                 fontSize: '13px',
                                 outline: 'none'
                             }}
                         />
                         <svg 
-                            style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}
+                            style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: isDark ? '#6b7280' : '#94a3b8' }}
                             width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                         >
                             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -8135,7 +8242,7 @@ function VehicleIntakeAll({ onBackClick }) {
                     </div>
                     
                     {/* Date Filter */}
-                    <div style={{ display: 'flex', gap: '2px', backgroundColor: '#f1f5f9', borderRadius: '6px', padding: '3px' }}>
+                    <div style={{ display: 'flex', gap: '2px', backgroundColor: isDark ? 'rgba(51, 65, 85, 0.5)' : '#f1f5f9', borderRadius: '6px', padding: '3px' }}>
                         {[
                             { id: 'all', label: 'All' },
                             { id: 'today', label: 'Today' },
@@ -8152,8 +8259,8 @@ function VehicleIntakeAll({ onBackClick }) {
                                     fontSize: '12px',
                                     fontWeight: '500',
                                     cursor: 'pointer',
-                                    backgroundColor: dateFilter === filter.id ? '#fff' : 'transparent',
-                                    color: dateFilter === filter.id ? '#1e293b' : '#64748b',
+                                    backgroundColor: dateFilter === filter.id ? (isDark ? '#475569' : '#fff') : 'transparent',
+                                    color: dateFilter === filter.id ? (isDark ? '#f1f5f9' : '#1e293b') : (isDark ? '#94a3b8' : '#64748b'),
                                     boxShadow: dateFilter === filter.id ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
                                 }}
                             >
@@ -8167,23 +8274,23 @@ function VehicleIntakeAll({ onBackClick }) {
             {/* Scrollable Table */}
             <div style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
                 <div style={{
-                    background: '#fff',
+                    background: isDark ? '#1f2937' : '#fff',
                     borderRadius: '12px',
-                    border: '1px solid #e2e8f0',
+                    border: isDark ? '1px solid #374151' : '1px solid #e2e8f0',
                     overflow: 'hidden'
                 }}>
                     <table className="intake-table" style={{ margin: 0, width: '100%' }}>
-                        <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 10 }}>
+                        <thead style={{ position: 'sticky', top: 0, background: isDark ? '#1f2937' : '#f8fafc', zIndex: 10 }}>
                             <tr>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>ID / Plate</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Type</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Visit #</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Service</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Price</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Status</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Payment</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Time In</th>
-                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: '#475569', borderBottom: '2px solid #e2e8f0' }}>Actions</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>ID / Plate</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Type</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Visit #</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Service</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Price</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Status</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Payment</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Time In</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', color: isDark ? '#9ca3af' : '#475569', borderBottom: isDark ? '2px solid #374151' : '2px solid #e2e8f0' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -8191,8 +8298,8 @@ function VehicleIntakeAll({ onBackClick }) {
                                 const isPaid = getPaymentStatus(vehicle);
                                 return (
                                     <tr key={vehicle.id} style={{ 
-                                        background: index % 2 === 0 ? '#fff' : '#fafafa',
-                                        borderBottom: '1px solid #f1f5f9'
+                                        background: index % 2 === 0 ? (isDark ? '#1f2937' : '#fff') : (isDark ? '#263445' : '#fafafa'),
+                                        borderBottom: isDark ? '1px solid #374151' : '1px solid #f1f5f9'
                                     }}>
                                         <td style={{ padding: '14px 16px' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -8202,8 +8309,8 @@ function VehicleIntakeAll({ onBackClick }) {
                                                 {vehicle.isReturningVehicle && (
                                                     <span style={{
                                                         padding: '2px 6px',
-                                                        background: '#dbeafe',
-                                                        color: '#1e40af',
+                                                        background: isDark ? 'rgba(59, 130, 246, 0.3)' : '#dbeafe',
+                                                        color: isDark ? '#93c5fd' : '#1e40af',
                                                         borderRadius: '4px',
                                                         fontSize: '9px',
                                                         fontWeight: '700'
@@ -8213,7 +8320,7 @@ function VehicleIntakeAll({ onBackClick }) {
                                                 )}
                                             </div>
                                         </td>
-                                        <td style={{ padding: '14px 16px', color: '#64748b' }}>{vehicle.itemType || vehicle.vehicleType || '-'}</td>
+                                        <td style={{ padding: '14px 16px', color: isDark ? '#9ca3af' : '#64748b' }}>{vehicle.itemType || vehicle.vehicleType || '-'}</td>
                                         <td style={{ padding: '14px 16px' }}>
                                             <span style={{
                                                 display: 'inline-flex',
@@ -8232,7 +8339,7 @@ function VehicleIntakeAll({ onBackClick }) {
                                             </span>
                                         </td>
                                         <td style={{ padding: '14px 16px', fontWeight: '500' }}>{vehicle.service?.name || '-'}</td>
-                                        <td style={{ padding: '14px 16px', color: '#10b981', fontWeight: '600' }}>
+                                        <td style={{ padding: '14px 16px', color: isDark ? '#4ade80' : '#10b981', fontWeight: '600' }}>
                                             KSH {vehicle.service?.price || 0}
                                         </td>
                                         <td style={{ padding: '14px 16px' }}>
@@ -8258,8 +8365,8 @@ function VehicleIntakeAll({ onBackClick }) {
                                                     borderRadius: '12px',
                                                     fontSize: '11px',
                                                     fontWeight: '600',
-                                                    backgroundColor: '#d1fae5',
-                                                    color: '#059669'
+                                                    backgroundColor: isDark ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5',
+                                                    color: isDark ? '#4ade80' : '#059669'
                                                 }}>
                                                     ✓ Paid
                                                 </span>
@@ -8272,14 +8379,14 @@ function VehicleIntakeAll({ onBackClick }) {
                                                     borderRadius: '12px',
                                                     fontSize: '11px',
                                                     fontWeight: '600',
-                                                    backgroundColor: '#fef3c7',
-                                                    color: '#d97706'
+                                                    backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7',
+                                                    color: isDark ? '#fcd34d' : '#d97706'
                                                 }}>
                                                     💰 Awaiting
                                                 </span>
                                             )}
                                         </td>
-                                        <td style={{ padding: '14px 16px', fontSize: '12px', color: '#64748b' }}>{formatTime(vehicle.timeIn)}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>{formatTime(vehicle.timeIn)}</td>
                                         <td>
                                             <div className="intake-table-actions">
                                                 <button 
@@ -8340,10 +8447,10 @@ function VehicleIntakeAll({ onBackClick }) {
                         <div style={{ 
                             textAlign: 'center', 
                             padding: '80px 20px', 
-                            color: '#64748b' 
+                            color: isDark ? '#9ca3af' : '#64748b' 
                         }}>
                             <div style={{ fontSize: '64px', marginBottom: '20px' }}>📭</div>
-                            <h3 style={{ margin: '0 0 8px', color: '#1e293b' }}>No Records Found</h3>
+                            <h3 style={{ margin: '0 0 8px', color: isDark ? '#e5e7eb' : '#1e293b' }}>No Records Found</h3>
                             <p style={{ margin: 0 }}>Try adjusting your search or filters</p>
                         </div>
                     )}
@@ -8356,14 +8463,14 @@ function VehicleIntakeAll({ onBackClick }) {
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         padding: '16px 20px',
-                        background: '#f8fafc',
-                        borderTop: '1px solid #e2e8f0',
+                        background: isDark ? '#1f2937' : '#f8fafc',
+                        borderTop: isDark ? '1px solid #374151' : '1px solid #e2e8f0',
                         borderRadius: '0 0 12px 12px',
                         flexWrap: 'wrap',
                         gap: '12px'
                     }}>
                         {/* Left side - showing info */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: '#64748b' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: isDark ? '#9ca3af' : '#64748b' }}>
                             <span>Showing {startIndex + 1}-{Math.min(endIndex, filteredVehicles.length)} of {filteredVehicles.length.toLocaleString()} records</span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span>Per page:</span>
@@ -8375,11 +8482,12 @@ function VehicleIntakeAll({ onBackClick }) {
                                     }}
                                     style={{
                                         padding: '4px 8px',
-                                        border: '1px solid #e2e8f0',
+                                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                         borderRadius: '4px',
                                         fontSize: '13px',
                                         cursor: 'pointer',
-                                        backgroundColor: '#fff'
+                                        backgroundColor: isDark ? '#374151' : '#fff',
+                                        color: isDark ? '#e5e7eb' : 'inherit'
                                     }}
                                 >
                                     <option value={10}>10</option>
@@ -8398,10 +8506,10 @@ function VehicleIntakeAll({ onBackClick }) {
                                 disabled={currentPage === 1}
                                 style={{
                                     padding: '6px 10px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '6px',
-                                    background: currentPage === 1 ? '#f1f5f9' : '#fff',
-                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    background: currentPage === 1 ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === 1 ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -8414,10 +8522,10 @@ function VehicleIntakeAll({ onBackClick }) {
                                 disabled={currentPage === 1}
                                 style={{
                                     padding: '6px 12px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '6px',
-                                    background: currentPage === 1 ? '#f1f5f9' : '#fff',
-                                    color: currentPage === 1 ? '#94a3b8' : '#1e293b',
+                                    background: currentPage === 1 ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === 1 ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -8427,7 +8535,7 @@ function VehicleIntakeAll({ onBackClick }) {
                             </button>
                             
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 8px' }}>
-                                <span style={{ fontSize: '13px', color: '#64748b' }}>Page</span>
+                                <span style={{ fontSize: '13px', color: isDark ? '#9ca3af' : '#64748b' }}>Page</span>
                                 <input
                                     type="number"
                                     min={1}
@@ -8442,13 +8550,15 @@ function VehicleIntakeAll({ onBackClick }) {
                                     style={{
                                         width: '50px',
                                         padding: '4px 6px',
-                                        border: '1px solid #e2e8f0',
+                                        border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                         borderRadius: '4px',
                                         fontSize: '13px',
-                                        textAlign: 'center'
+                                        textAlign: 'center',
+                                        backgroundColor: isDark ? '#374151' : '#fff',
+                                        color: isDark ? '#e5e7eb' : 'inherit'
                                     }}
                                 />
-                                <span style={{ fontSize: '13px', color: '#64748b' }}>of {totalPages.toLocaleString()}</span>
+                                <span style={{ fontSize: '13px', color: isDark ? '#9ca3af' : '#64748b' }}>of {totalPages.toLocaleString()}</span>
                             </div>
                             
                             <button
@@ -8456,10 +8566,10 @@ function VehicleIntakeAll({ onBackClick }) {
                                 disabled={currentPage === totalPages}
                                 style={{
                                     padding: '6px 12px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '6px',
-                                    background: currentPage === totalPages ? '#f1f5f9' : '#fff',
-                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    background: currentPage === totalPages ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === totalPages ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -8472,10 +8582,10 @@ function VehicleIntakeAll({ onBackClick }) {
                                 disabled={currentPage === totalPages}
                                 style={{
                                     padding: '6px 10px',
-                                    border: '1px solid #e2e8f0',
+                                    border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0',
                                     borderRadius: '6px',
-                                    background: currentPage === totalPages ? '#f1f5f9' : '#fff',
-                                    color: currentPage === totalPages ? '#94a3b8' : '#1e293b',
+                                    background: currentPage === totalPages ? (isDark ? '#374151' : '#f1f5f9') : (isDark ? '#1f2937' : '#fff'),
+                                    color: currentPage === totalPages ? (isDark ? '#6b7280' : '#94a3b8') : (isDark ? '#e5e7eb' : '#1e293b'),
                                     cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
                                     fontSize: '12px',
                                     fontWeight: '500'
@@ -8615,74 +8725,74 @@ function VehicleIntakeAll({ onBackClick }) {
                         <div className="modal-body">
                             {/* Summary Stats */}
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
-                                <div style={{ background: '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#0284c7' }}>{vehicleHistory.totalVisits || 0}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Visits</div>
+                                <div style={{ background: isDark ? 'rgba(14, 165, 233, 0.15)' : '#f0f9ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: isDark ? '#38bdf8' : '#0284c7' }}>{vehicleHistory.totalVisits || 0}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Total Visits</div>
                                 </div>
-                                <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a' }}>KSH {(vehicleHistory.totalSpent || 0).toLocaleString()}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Total Spent</div>
+                                <div style={{ background: isDark ? 'rgba(34, 197, 94, 0.15)' : '#f0fdf4', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: isDark ? '#4ade80' : '#16a34a' }}>KSH {(vehicleHistory.totalSpent || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Total Spent</div>
                                 </div>
-                                <div style={{ background: '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#7c3aed' }}>{vehicleHistory.lastVisit ? new Date(vehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
-                                    <div style={{ fontSize: '12px', color: '#64748b' }}>Last Visit</div>
+                                <div style={{ background: isDark ? 'rgba(139, 92, 246, 0.15)' : '#faf5ff', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#a78bfa' : '#7c3aed' }}>{vehicleHistory.lastVisit ? new Date(vehicleHistory.lastVisit).toLocaleDateString() : '-'}</div>
+                                    <div style={{ fontSize: '12px', color: isDark ? '#9ca3af' : '#64748b' }}>Last Visit</div>
                                 </div>
                             </div>
 
                             {/* Customer Info */}
                             {(vehicleHistory.customerName || vehicleHistory.customerPhone) && (
-                                <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                                <div style={{ background: isDark ? '#374151' : '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
                                     <div style={{ display: 'flex', gap: '20px', fontSize: '13px' }}>
                                         {vehicleHistory.customerName && (
-                                            <div><span style={{ color: '#64748b' }}>Customer:</span> <strong>{vehicleHistory.customerName}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Customer:</span> <strong>{vehicleHistory.customerName}</strong></div>
                                         )}
                                         {vehicleHistory.customerPhone && (
-                                            <div><span style={{ color: '#64748b' }}>Phone:</span> <strong>{vehicleHistory.customerPhone}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Phone:</span> <strong>{vehicleHistory.customerPhone}</strong></div>
                                         )}
                                         {vehicleHistory.vehicleType && (
-                                            <div><span style={{ color: '#64748b' }}>Type:</span> <strong>{vehicleHistory.vehicleType}</strong></div>
+                                            <div><span style={{ color: isDark ? '#9ca3af' : '#64748b' }}>Type:</span> <strong>{vehicleHistory.vehicleType}</strong></div>
                                         )}
                                     </div>
                                 </div>
                             )}
 
                             {/* Visit History Table */}
-                            <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', marginBottom: '8px' }}>Visit History</div>
-                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#e5e7eb' : '#1e293b', marginBottom: '8px' }}>Visit History</div>
+                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', borderRadius: '8px' }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                                    <thead style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                                    <thead style={{ background: isDark ? '#374151' : '#f8fafc', position: 'sticky', top: 0 }}>
                                         <tr>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Date</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Time</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Service</th>
-                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Bay</th>
-                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Amount</th>
-                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Status</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Date</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Time</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Service</th>
+                                            <th style={{ padding: '10px', textAlign: 'left', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Bay</th>
+                                            <th style={{ padding: '10px', textAlign: 'right', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Amount</th>
+                                            <th style={{ padding: '10px', textAlign: 'center', borderBottom: isDark ? '1px solid #4b5563' : '1px solid #e2e8f0', color: isDark ? '#9ca3af' : 'inherit' }}>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {(vehicleHistory.visitHistory || []).length === 0 ? (
                                             <tr>
-                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>
+                                                <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: isDark ? '#9ca3af' : '#64748b' }}>
                                                     No visit history recorded yet
                                                 </td>
                                             </tr>
                                         ) : (
                                             (vehicleHistory.visitHistory || []).map((visit, index) => (
-                                                <tr key={visit.id || index} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                <tr key={visit.id || index} style={{ borderBottom: isDark ? '1px solid #374151' : '1px solid #f1f5f9' }}>
                                                     <td style={{ padding: '10px' }}>{visit.date ? new Date(visit.date).toLocaleDateString() : '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.timeIn ? new Date(visit.timeIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.service?.name || '-'}</td>
                                                     <td style={{ padding: '10px' }}>{visit.bay || '-'}</td>
-                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: '#10b981' }}>KSH {(visit.amount || 0).toLocaleString()}</td>
+                                                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: '600', color: isDark ? '#4ade80' : '#10b981' }}>KSH {(visit.amount || 0).toLocaleString()}</td>
                                                     <td style={{ padding: '10px', textAlign: 'center' }}>
                                                         <span style={{
                                                             padding: '2px 8px',
                                                             borderRadius: '10px',
                                                             fontSize: '11px',
                                                             fontWeight: '500',
-                                                            background: visit.status === 'completed' ? '#dcfce7' : visit.status === 'in-progress' ? '#dbeafe' : '#fef3c7',
-                                                            color: visit.status === 'completed' ? '#166534' : visit.status === 'in-progress' ? '#1e40af' : '#92400e'
+                                                            background: visit.status === 'completed' ? (isDark ? 'rgba(34, 197, 94, 0.2)' : '#dcfce7') : visit.status === 'in-progress' ? (isDark ? 'rgba(59, 130, 246, 0.2)' : '#dbeafe') : (isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7'),
+                                                            color: visit.status === 'completed' ? (isDark ? '#4ade80' : '#166534') : visit.status === 'in-progress' ? (isDark ? '#60a5fa' : '#1e40af') : (isDark ? '#fcd34d' : '#92400e')
                                                         }}>
                                                             {visit.status || 'unknown'}
                                                         </span>

@@ -5346,12 +5346,28 @@ export const teamChatService = {
 
 // ==================== BRANDING SERVICE ====================
 export const brandingService = {
-  // Default branding configuration
+  // Default branding configuration - prioritizes localStorage cache
   getDefaultBranding() {
+    // Try to get cached branding from localStorage first
+    let cachedCompanyName = '';
+    let cachedTagline = '';
+    let cachedPrimaryColor = '#3b82f6';
+    let cachedSecondaryColor = '#10b981';
+    try {
+      const cached = localStorage.getItem('ecospark_branding');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        cachedCompanyName = parsed.companyName || '';
+        cachedTagline = parsed.tagline || '';
+        cachedPrimaryColor = parsed.primaryColor || '#3b82f6';
+        cachedSecondaryColor = parsed.secondaryColor || '#10b981';
+      }
+    } catch (e) {}
+    
     return {
-      // Company Identity
-      companyName: 'EcoSpark',
-      tagline: 'Car Wash Management System',
+      // Company Identity - use cached values if available
+      companyName: cachedCompanyName || 'EcoSpark',
+      tagline: cachedTagline || 'Car Wash Management System',
       shortName: 'ES',
       
       // Contact Information
@@ -5365,9 +5381,9 @@ export const brandingService = {
       taxPin: '',
       businessReg: '',
       
-      // Brand Colors
-      primaryColor: '#3b82f6',
-      secondaryColor: '#10b981',
+      // Brand Colors - use cached if available
+      primaryColor: cachedPrimaryColor,
+      secondaryColor: cachedSecondaryColor,
       accentColor: '#f59e0b',
       
       // Receipt Settings

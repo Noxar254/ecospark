@@ -1306,7 +1306,7 @@ body {
 .table-action-complete:hover {
     color: #10b981;
     border-color: #10b981;
-    background-color: #f0fdf4;
+    background-color: rgba(16, 185, 129, 0.1);
 }
 
 /* Modal Styles */
