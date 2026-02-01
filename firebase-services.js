@@ -4220,7 +4220,7 @@ const inventoryService = {
   },
 
   // Record usage (for consumables)
-  async recordUsage(id, amount, notes = '') {
+  async recordUsage(id, amount, notes = '', releasedBy = null) {
     try {
       const docRef = doc(db, 'inventory', id);
       const docSnap = await getDoc(docRef);
@@ -4237,7 +4237,8 @@ const inventoryService = {
         amount: usageAmount,
         date: new Date().toISOString(),
         notes,
-        remainingQty: newQty
+        remainingQty: newQty,
+        releasedBy: releasedBy || { name: 'Unknown', id: null }
       });
       
       // Keep only last 30 records
@@ -5482,6 +5483,500 @@ export const brandingService = {
   }
 };
 
+// ==================== PARKING SERVICE ====================
+export const parkingService = {
+  // Get parking settings (fee rates and spaces)
+  async getSettings() {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      if (snapshot.exists()) {
+        return { success: true, data: snapshot.data() };
+      }
+      // Return default settings
+      return { 
+        success: true, 
+        data: {
+          enabled: true,
+          rates: [
+            { id: 'hourly', name: 'Hourly Rate', amount: 100, type: 'hourly', minHours: 1 },
+            { id: 'daily', name: 'Daily Rate', amount: 500, type: 'daily' },
+            { id: 'overnight', name: 'Overnight', amount: 300, type: 'flat' }
+          ],
+          gracePeriod: 15,
+          defaultRate: 'hourly',
+          parkingSpaces: []
+        }
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Save parking settings
+  async saveSettings(settings) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      await setDoc(settingsRef, { ...settings, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to parking settings
+  subscribeToSettings(callback) {
+    const settingsRef = doc(db, 'settings', 'parking');
+    return onSnapshot(settingsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        callback(snapshot.data());
+      } else {
+        callback({
+          enabled: true,
+          rates: [{ id: 'hourly', name: 'Hourly Rate', amount: 100, type: 'hourly', minHours: 1 }],
+          gracePeriod: 15,
+          defaultRate: 'hourly',
+          parkingSpaces: []
+        });
+      }
+    });
+  },
+
+  // ==================== PARKING SPACES MANAGEMENT ====================
+  
+  // Add a new parking space
+  async addParkingSpace(spaceData) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      const currentSettings = snapshot.exists() ? snapshot.data() : { parkingSpaces: [] };
+      const spaces = currentSettings.parkingSpaces || [];
+      
+      const newSpace = {
+        id: `space_${Date.now()}`,
+        name: spaceData.name,
+        zone: spaceData.zone || 'A',
+        type: spaceData.type || 'standard', // standard, vip, disabled, reserved
+        status: 'available', // available, occupied, maintenance
+        currentVehicle: null,
+        createdAt: new Date().toISOString()
+      };
+      
+      spaces.push(newSpace);
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true, id: newSpace.id };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update parking space
+  async updateParkingSpace(spaceId, updates) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      if (!snapshot.exists()) return { success: false, error: 'Settings not found' };
+      
+      const currentSettings = snapshot.data();
+      const spaces = currentSettings.parkingSpaces || [];
+      const index = spaces.findIndex(s => s.id === spaceId);
+      
+      if (index === -1) return { success: false, error: 'Space not found' };
+      
+      spaces[index] = { ...spaces[index], ...updates, updatedAt: new Date().toISOString() };
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete parking space
+  async deleteParkingSpace(spaceId) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      if (!snapshot.exists()) return { success: false, error: 'Settings not found' };
+      
+      const currentSettings = snapshot.data();
+      const spaces = (currentSettings.parkingSpaces || []).filter(s => s.id !== spaceId);
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Bulk add parking spaces (e.g., A1-A10)
+  async bulkAddParkingSpaces(zone, prefix, startNum, endNum, type = 'standard') {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      const currentSettings = snapshot.exists() ? snapshot.data() : { parkingSpaces: [] };
+      const spaces = currentSettings.parkingSpaces || [];
+      
+      for (let i = startNum; i <= endNum; i++) {
+        const name = `${prefix}${i}`;
+        // Check if space already exists
+        if (!spaces.find(s => s.name === name)) {
+          spaces.push({
+            id: `space_${Date.now()}_${i}`,
+            name: name,
+            zone: zone,
+            type: type,
+            status: 'available',
+            currentVehicle: null,
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+      
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true, count: endNum - startNum + 1 };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Assign vehicle to parking space
+  async assignToSpace(spaceId, vehicleData) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      if (!snapshot.exists()) return { success: false, error: 'Settings not found' };
+      
+      const currentSettings = snapshot.data();
+      const spaces = currentSettings.parkingSpaces || [];
+      const index = spaces.findIndex(s => s.id === spaceId);
+      
+      if (index === -1) return { success: false, error: 'Space not found' };
+      if (spaces[index].status === 'occupied') return { success: false, error: 'Space is already occupied' };
+      
+      spaces[index].status = 'occupied';
+      spaces[index].currentVehicle = vehicleData;
+      spaces[index].occupiedAt = new Date().toISOString();
+      
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Release parking space
+  async releaseSpace(spaceId) {
+    try {
+      const settingsRef = doc(db, 'settings', 'parking');
+      const snapshot = await getDoc(settingsRef);
+      if (!snapshot.exists()) return { success: false, error: 'Settings not found' };
+      
+      const currentSettings = snapshot.data();
+      const spaces = currentSettings.parkingSpaces || [];
+      const index = spaces.findIndex(s => s.id === spaceId);
+      
+      if (index === -1) return { success: false, error: 'Space not found' };
+      
+      spaces[index].status = 'available';
+      spaces[index].currentVehicle = null;
+      spaces[index].occupiedAt = null;
+      
+      await setDoc(settingsRef, { ...currentSettings, parkingSpaces: spaces, updatedAt: new Date().toISOString() }, { merge: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // ==================== PARKED VEHICLES MANAGEMENT ====================
+
+  // Add vehicle to parking
+  async addToParking(vehicleData) {
+    try {
+      console.log('📍 Adding to parking:', vehicleData);
+      const parkingRef = collection(db, 'parking');
+      const currentUser = window.currentUserProfile;
+      const data = {
+        ...vehicleData,
+        status: 'parked',
+        parkedAt: new Date().toISOString(),
+        parkedBy: currentUser ? { name: currentUser.name || currentUser.displayName || 'Unknown', id: currentUser.id || currentUser.uid } : { name: 'Unknown', id: null },
+        parkingFee: 0,
+        isPaid: false,
+        createdAt: new Date().toISOString()
+      };
+      
+      // If a parking space is assigned, update the space status
+      if (vehicleData.parkingSpaceId) {
+        await this.assignToSpace(vehicleData.parkingSpaceId, {
+          plateNumber: vehicleData.plateNumber,
+          vehicleType: vehicleData.vehicleType,
+          customerName: vehicleData.customerName
+        });
+      }
+      
+      const docRef = await addDoc(parkingRef, data);
+      console.log('📍 Vehicle added to parking with ID:', docRef.id);
+      return { success: true, id: docRef.id };
+    } catch (error) {
+      console.error('📍 Failed to add to parking:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get all parked vehicles
+  async getParkedVehicles() {
+    try {
+      const parkingRef = collection(db, 'parking');
+      const q = query(parkingRef, where('status', '==', 'parked'), orderBy('parkedAt', 'desc'));
+      const snapshot = await getDocs(q);
+      const vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      return { success: true, data: vehicles };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Subscribe to parked vehicles
+  subscribeToParking(callback, errorCallback) {
+    try {
+      const parkingRef = collection(db, 'parking');
+      // Use simpler query first (without orderBy to avoid index requirement)
+      const q = query(parkingRef, where('status', '==', 'parked'));
+      return onSnapshot(q, (snapshot) => {
+        const vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Sort in JavaScript instead
+        vehicles.sort((a, b) => {
+          const dateA = a.parkedAt ? new Date(a.parkedAt) : new Date(0);
+          const dateB = b.parkedAt ? new Date(b.parkedAt) : new Date(0);
+          return dateB - dateA;
+        });
+        callback(vehicles);
+      }, (error) => {
+        console.error('Parking subscription error:', error);
+        // If query fails, try without any conditions
+        if (error.code === 'failed-precondition' || error.message?.includes('index')) {
+          console.log('Index not ready, using fallback query...');
+          const fallbackQuery = query(parkingRef);
+          return onSnapshot(fallbackQuery, (snapshot) => {
+            const vehicles = snapshot.docs
+              .map(doc => ({ id: doc.id, ...doc.data() }))
+              .filter(v => v.status === 'parked')
+              .sort((a, b) => new Date(b.parkedAt || 0) - new Date(a.parkedAt || 0));
+            callback(vehicles);
+          });
+        }
+        if (errorCallback) errorCallback(error);
+      });
+    } catch (error) {
+      console.error('Parking subscribe error:', error);
+      return () => {};
+    }
+  },
+
+  // Subscribe to parking history (released vehicles)
+  subscribeToParkingHistory(callback, limitCount = 100) {
+    try {
+      const parkingRef = collection(db, 'parking');
+      // Use simpler query (without orderBy to avoid index requirement)
+      const q = query(parkingRef, where('status', '==', 'released'));
+      return onSnapshot(q, (snapshot) => {
+        const vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Sort in JavaScript and limit
+        vehicles.sort((a, b) => {
+          const dateA = a.releasedAt ? new Date(a.releasedAt) : new Date(0);
+          const dateB = b.releasedAt ? new Date(b.releasedAt) : new Date(0);
+          return dateB - dateA;
+        });
+        callback(vehicles.slice(0, limitCount));
+      }, (error) => {
+        console.error('Parking history subscription error:', error);
+        // Fallback to fetching all and filtering
+        if (error.code === 'failed-precondition' || error.message?.includes('index')) {
+          const fallbackQuery = query(parkingRef);
+          return onSnapshot(fallbackQuery, (snapshot) => {
+            const vehicles = snapshot.docs
+              .map(doc => ({ id: doc.id, ...doc.data() }))
+              .filter(v => v.status === 'released')
+              .sort((a, b) => new Date(b.releasedAt || 0) - new Date(a.releasedAt || 0))
+              .slice(0, limitCount);
+            callback(vehicles);
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Parking history subscribe error:', error);
+      return () => {};
+    }
+  },
+
+  // Calculate parking fee
+  calculateFee(parkedAt, rates, selectedRateId = null) {
+    const now = new Date();
+    const parkedTime = new Date(parkedAt);
+    const diffMs = now - parkedTime;
+    const diffHours = diffMs / (1000 * 60 * 60);
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+    
+    if (!rates || rates.length === 0) {
+      return { fee: Math.ceil(diffHours) * 100, duration: `${Math.ceil(diffHours)} hours`, rateUsed: 'Default', hours: Math.ceil(diffHours) };
+    }
+
+    // If specific rate selected, use it
+    if (selectedRateId) {
+      const rate = rates.find(r => r.id === selectedRateId || r.name === selectedRateId);
+      if (rate) {
+        let units = 1;
+        if (rate.type === 'hourly') units = Math.max(1, Math.ceil(diffHours));
+        else if (rate.type === 'daily') units = Math.max(1, Math.ceil(diffDays));
+        else units = 1;
+        return { fee: units * (rate.amount || rate.price || 0), duration: `${units} ${rate.type === 'hourly' ? 'hour' : rate.type === 'daily' ? 'day' : 'unit'}(s)`, rateUsed: rate.name, hours: Math.ceil(diffHours) };
+      }
+    }
+
+    // Auto-select default or first rate
+    const defaultRate = rates.find(r => r.isDefault) || rates[0];
+    let units = 1;
+    if (defaultRate.type === 'hourly') units = Math.max(1, Math.ceil(diffHours));
+    else if (defaultRate.type === 'daily') units = Math.max(1, Math.ceil(diffDays));
+    
+    return { fee: units * (defaultRate.amount || defaultRate.price || 0), duration: `${units} ${defaultRate.type === 'hourly' ? 'hour' : defaultRate.type === 'daily' ? 'day' : 'unit'}(s)`, rateUsed: defaultRate.name, hours: Math.ceil(diffHours) };
+  },
+
+  // Apply parking fee
+  async applyFee(parkingId, fee, rateUsed) {
+    try {
+      const parkingRef = doc(db, 'parking', parkingId);
+      await updateDoc(parkingRef, {
+        parkingFee: fee,
+        feeAppliedAt: new Date().toISOString(),
+        rateUsed: rateUsed,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Release vehicle from parking
+  async releaseVehicle(parkingId, paymentMethod = 'cash') {
+    try {
+      const currentUser = window.currentUserProfile;
+      const parkingRef = doc(db, 'parking', parkingId);
+      
+      // Get the parking record to check for parking space
+      const parkingDoc = await getDoc(parkingRef);
+      if (parkingDoc.exists()) {
+        const parkingData = parkingDoc.data();
+        // If vehicle was in a parking space, release the space
+        if (parkingData.parkingSpaceId) {
+          await this.releaseSpace(parkingData.parkingSpaceId);
+        }
+      }
+      
+      await updateDoc(parkingRef, {
+        status: 'released',
+        isPaid: true,
+        paymentMethod,
+        releasedAt: new Date().toISOString(),
+        releasedBy: currentUser ? { name: currentUser.name || currentUser.displayName || 'Unknown', id: currentUser.id || currentUser.uid } : { name: 'Unknown', id: null },
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update parking record
+  async updateParking(parkingId, data) {
+    try {
+      const parkingRef = doc(db, 'parking', parkingId);
+      await updateDoc(parkingRef, { ...data, updatedAt: new Date().toISOString() });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Delete parking record
+  async deleteParking(parkingId) {
+    try {
+      await deleteDoc(doc(db, 'parking', parkingId));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get parking stats
+  async getStats() {
+    try {
+      const parkingRef = collection(db, 'parking');
+      const parkedQuery = query(parkingRef, where('status', '==', 'parked'));
+      const parkedSnapshot = await getDocs(parkedQuery);
+      
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const releasedQuery = query(parkingRef, where('status', '==', 'released'));
+      const releasedSnapshot = await getDocs(releasedQuery);
+      
+      // Get paid parking invoices to calculate cleared revenue only
+      const invoicesRef = collection(db, 'invoices');
+      const paidInvoicesQuery = query(invoicesRef, where('source', '==', 'parking'), where('paymentStatus', '==', 'paid'));
+      const paidInvoicesSnapshot = await getDocs(paidInvoicesQuery);
+      
+      // Create a set of cleared parking record IDs with their payment dates
+      const clearedRecords = new Map();
+      paidInvoicesSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.parkingRecordId) {
+          clearedRecords.set(data.parkingRecordId, {
+            paidAt: data.paidAt || data.updatedAt || data.createdAt
+          });
+        }
+      });
+      
+      let todayRevenue = 0;
+      let totalRevenue = 0;
+      let todayReleased = 0;
+      releasedSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const isCleared = clearedRecords.has(doc.id);
+        
+        // Only count revenue from cleared/paid vehicles
+        if (isCleared) {
+          totalRevenue += data.parkingFee || 0;
+          
+          // Check if paid today (based on release date for consistency)
+          if (data.releasedAt && new Date(data.releasedAt) >= todayStart) {
+            todayRevenue += data.parkingFee || 0;
+          }
+        }
+        
+        // Count all released today regardless of payment status
+        if (data.releasedAt && new Date(data.releasedAt) >= todayStart) {
+          todayReleased++;
+        }
+      });
+
+      return {
+        success: true,
+        data: {
+          currentlyParked: parkedSnapshot.size,
+          todayRevenue,
+          totalRevenue,
+          totalReleased: releasedSnapshot.size,
+          todayReleased
+        }
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+};
+
 // ==================== COMPLAINTS SERVICE ====================
 export const complaintsService = {
   // Add complaint
@@ -5580,6 +6075,7 @@ export const settingsService = {
 // Attach to window for use in non-module scripts (React via Babel)
 if (typeof window !== 'undefined') {
   window.FirebaseServices = {
+    parkingService,
     inventoryService,
     expensesService,
     fleetService,

@@ -946,6 +946,7 @@ const menuGroups = [
         items: [
             { id: 'garage-management', label: 'Garage Management', icon: Icons.building },
             { id: 'wash-bays', label: 'Wash Bays', icon: Icons.droplet },
+            { id: 'parking', label: 'Parking Management', icon: Icons.calendar },
             { id: 'equipment', label: 'Equipment Management', icon: Icons.tool }
         ]
     },
@@ -9282,6 +9283,1985 @@ function ServicePackages() {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+
+// ==================== PARKING MANAGEMENT MODULE ====================
+function ParkingManagement() {
+    const [parkedVehicles, setParkedVehicles] = useState([]);
+    const [parkingHistory, setParkingHistory] = useState([]);
+    const [parkingSettings, setParkingSettings] = useState({ rates: [], gracePeriod: 15, defaultRate: '', parkingSpaces: [] });
+    const [loading, setLoading] = useState(false); // Start with false for instant render
+    const [spacesLoaded, setSpacesLoaded] = useState(false); // Track when spaces data arrives
+    const [activeTab, setActiveTab] = useState('spaces'); // 'spaces', 'parked', 'history', 'settings'
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [showApplyFeeModal, setShowApplyFeeModal] = useState(false);
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showAddSpaceModal, setShowAddSpaceModal] = useState(false);
+    const [showBulkAddModal, setShowBulkAddModal] = useState(false);
+    const [selectedVehicle, setSelectedVehicle] = useState(null);
+    const [selectedSpace, setSelectedSpace] = useState(null);
+    const [selectedRate, setSelectedRate] = useState('');
+    const [actionLoading, setActionLoading] = useState(false);
+    const [stats, setStats] = useState({ currentlyParked: 0, todayRevenue: 0, todayReleased: 0 });
+    const [searchQuery, setSearchQuery] = useState('');
+    const [selectedZone, setSelectedZone] = useState('all');
+    const [historySearch, setHistorySearch] = useState('');
+    const [historyDateFilter, setHistoryDateFilter] = useState('all'); // 'all', 'today', 'yesterday', 'week', 'month'
+    const [parkingInvoices, setParkingInvoices] = useState([]); // For tracking payment status
+    
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
+    const ITEMS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+    
+    // Alert modal state
+    const [alertModal, setAlertModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info',
+        onConfirm: null,
+        showCancel: false
+    });
+    
+    const showAlert = (title, message, type = 'info', onConfirm = null, showCancel = false) => {
+        setAlertModal({ isOpen: true, title, message, type, onConfirm, showCancel });
+    };
+    
+    const closeAlert = () => {
+        setAlertModal(prev => ({ ...prev, isOpen: false }));
+    };
+    
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    // Intake records for vehicle search
+    const [intakeRecords, setIntakeRecords] = useState([]);
+    const [intakeSearch, setIntakeSearch] = useState('');
+    const [showIntakeResults, setShowIntakeResults] = useState(false);
+    
+    const [parkingForm, setParkingForm] = useState({
+        plateNumber: '',
+        vehicleType: 'Sedan',
+        customerName: '',
+        customerPhone: '',
+        notes: '',
+        parkingSpaceId: ''
+    });
+
+    const [spaceForm, setSpaceForm] = useState({
+        name: '',
+        zone: 'A',
+        type: 'standard'
+    });
+
+    const [bulkForm, setBulkForm] = useState({
+        zone: 'A',
+        prefix: 'A',
+        startNum: 1,
+        endNum: 10,
+        type: 'standard'
+    });
+
+    // Theme detection
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : 'white',
+        bgSecondary: isDark ? '#0f172a' : '#f8fafc',
+        text: isDark ? '#f1f5f9' : '#1e293b',
+        textSecondary: isDark ? '#94a3b8' : '#64748b',
+        border: isDark ? '#334155' : '#e2e8f0',
+        cardShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
+        inputBg: isDark ? '#0f172a' : 'white',
+    };
+
+    // Styles
+    const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' };
+    const modalContent = { background: isDark ? '#1e293b' : 'white', borderRadius: '2px', padding: '24px', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' };
+    const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${theme.border}`, borderRadius: '2px', background: theme.inputBg, color: theme.text, fontSize: '14px', boxSizing: 'border-box', outline: 'none' };
+    const selectStyle = { ...inputStyle, cursor: 'pointer' };
+    const labelStyle = { display: 'block', fontSize: '13px', fontWeight: '500', color: theme.textSecondary, marginBottom: '6px' };
+    const btnPrimary = { background: '#3b82f6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '2px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' };
+    const btnSecondary = { background: isDark ? '#334155' : '#e2e8f0', color: theme.text, border: 'none', padding: '10px 16px', borderRadius: '2px', cursor: 'pointer', fontSize: '14px' };
+
+    const VEHICLE_TYPES = ['Sedan', 'SUV', 'Pickup', 'Van', 'Motorcycle', 'Truck', 'Bus', 'Other'];
+    const SPACE_TYPES = [
+        { id: 'standard', name: 'Standard', color: '#3b82f6' },
+        { id: 'vip', name: 'VIP', color: '#8b5cf6' },
+        { id: 'disabled', name: 'Disabled', color: '#f59e0b' },
+        { id: 'reserved', name: 'Reserved', color: '#ef4444' }
+    ];
+    const ZONES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+    // Subscribe to data - optimized for fast loading
+    useEffect(() => {
+        let mounted = true;
+        const services = window.FirebaseServices;
+        
+        if (!services || !services.parkingService) {
+            return;
+        }
+
+        // Critical subscriptions - load immediately
+        const unsubParking = services.parkingService.subscribeToParking((data) => {
+            if (mounted) setParkedVehicles(data || []);
+        }, (error) => {
+            console.error('Parking subscription error:', error);
+        });
+
+        const unsubSettings = services.parkingService.subscribeToSettings((data) => {
+            if (mounted) {
+                setParkingSettings(data || { rates: [], gracePeriod: 15, defaultRate: '', parkingSpaces: [] });
+                setSpacesLoaded(true); // Mark spaces as loaded
+            }
+        });
+
+        // Defer non-critical subscriptions for faster initial load
+        let unsubHistory, unsubInvoices, unsubIntake;
+        const deferredLoad = setTimeout(() => {
+            if (!mounted) return;
+            
+            unsubHistory = services.parkingService.subscribeToParkingHistory((data) => {
+                if (mounted) setParkingHistory(data || []);
+            });
+
+            if (services.billingService) {
+                unsubInvoices = services.billingService.subscribeToInvoices((data) => {
+                    const parkingInvs = (data || []).filter(inv => inv.source === 'parking');
+                    if (mounted) setParkingInvoices(parkingInvs);
+                });
+            }
+            
+            // Subscribe to intake records for vehicle search
+            if (services.intakeRecordsService?.subscribeToRecords) {
+                unsubIntake = services.intakeRecordsService.subscribeToRecords((data) => {
+                    if (mounted) setIntakeRecords(data || []);
+                });
+            }
+
+            // Get stats in background
+            services.parkingService.getStats().then(result => {
+                if (mounted && result.success) setStats(result.data);
+            });
+        }, 100); // Small delay to let UI render first
+
+        return () => {
+            mounted = false;
+            clearTimeout(deferredLoad);
+            if (unsubParking) unsubParking();
+            if (unsubSettings) unsubSettings();
+            if (unsubHistory) unsubHistory();
+            if (unsubInvoices) unsubInvoices();
+            if (unsubIntake) unsubIntake();
+        };
+    }, []);
+
+    // Refresh stats when vehicles change
+    useEffect(() => {
+        const services = window.FirebaseServices;
+        if (services?.parkingService) {
+            services.parkingService.getStats().then(result => {
+                if (result.success) setStats(result.data);
+            });
+        }
+    }, [parkedVehicles, parkingHistory]);
+
+    // Get currency from branding
+    const getCurrency = () => getBrandingForReceipts().currencySymbol || 'KES';
+
+    // Get payment status for a parking history record
+    const getPaymentStatus = (recordId) => {
+        const invoice = parkingInvoices.find(inv => inv.parkingRecordId === recordId);
+        if (!invoice) return { status: 'pending', invoice: null };
+        return {
+            status: invoice.paymentStatus === 'paid' ? 'cleared' : 'pending',
+            invoice: invoice
+        };
+    };
+
+    // Print gate pass receipt
+    const printGatePass = (record) => {
+        const paymentInfo = getPaymentStatus(record.id);
+        const branding = getBrandingForReceipts();
+        const currency = branding.currencySymbol || 'KES';
+        const isPaid = paymentInfo.status === 'cleared';
+        
+        const printContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gate Pass - ${record.plateNumber}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Courier New', monospace; 
+            padding: 8px;
+            max-width: 280px;
+            margin: 0 auto;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .header { text-align: center; padding-bottom: 8px; border-bottom: 1px dashed #000; }
+        .logo { font-size: 14px; font-weight: bold; }
+        .subtitle { font-size: 10px; }
+        .plate { 
+            font-size: 20px; 
+            font-weight: bold; 
+            text-align: center; 
+            padding: 8px 0;
+            letter-spacing: 1px;
+            border-bottom: 1px dashed #000;
+        }
+        .status {
+            text-align: center;
+            padding: 6px 0;
+            font-weight: bold;
+            font-size: 11px;
+            background: ${isPaid ? '#000' : '#fff'};
+            color: ${isPaid ? '#fff' : '#000'};
+            border: 1px solid #000;
+            margin: 6px 0;
+        }
+        .row { display: flex; justify-content: space-between; padding: 2px 0; }
+        .row .label { }
+        .row .value { font-weight: bold; text-align: right; }
+        .divider { border-top: 1px dashed #000; margin: 6px 0; }
+        .amount { 
+            font-size: 16px; 
+            font-weight: bold; 
+            text-align: center;
+            padding: 6px 0;
+        }
+        .footer { 
+            text-align: center; 
+            padding-top: 6px; 
+            border-top: 1px dashed #000;
+            font-size: 10px;
+        }
+        @media print {
+            body { padding: 4px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">${branding.companyName || 'EcoSpark'}</div>
+        <div class="subtitle">PARKING GATE PASS</div>
+    </div>
+    
+    <div class="plate">${record.plateNumber}</div>
+    
+    <div class="status">${isPaid ? '*** CLEARED ***' : '-- PENDING PAYMENT --'}</div>
+    
+    <div class="row"><span class="label">Type:</span><span class="value">${record.vehicleType || 'Vehicle'}</span></div>
+    <div class="row"><span class="label">Customer:</span><span class="value">${record.customerName || 'Walk-in'}</span></div>
+    ${record.customerPhone ? `<div class="row"><span class="label">Phone:</span><span class="value">${record.customerPhone}</span></div>` : ''}
+    
+    <div class="divider"></div>
+    
+    <div class="row"><span class="label">In:</span><span class="value">${record.parkedAt ? new Date(record.parkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</span></div>
+    <div class="row"><span class="label">Out:</span><span class="value">${record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</span></div>
+    ${record.parkingSpaceName ? `<div class="row"><span class="label">Space:</span><span class="value">${record.parkingSpaceName}</span></div>` : ''}
+    <div class="row"><span class="label">Rate:</span><span class="value">${record.rateApplied || 'Standard'}</span></div>
+    
+    <div class="divider"></div>
+    
+    <div class="amount">${currency} ${(record.parkingFee || 0).toLocaleString()}</div>
+    
+    ${paymentInfo.invoice ? `
+    <div class="row"><span class="label">Invoice:</span><span class="value">${paymentInfo.invoice.invoiceNumber || '-'}</span></div>
+    ${isPaid && paymentInfo.invoice.paymentMethod ? `<div class="row"><span class="label">Paid via:</span><span class="value">${paymentInfo.invoice.paymentMethod.toUpperCase()}</span></div>` : ''}
+    ${isPaid && paymentInfo.invoice.paidAt ? `<div class="row"><span class="label">Paid:</span><span class="value">${new Date(paymentInfo.invoice.paidAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>` : ''}
+    ` : ''}
+    
+    <div class="divider"></div>
+    
+    <div class="row"><span class="label">Released by:</span><span class="value">${record.releasedBy?.name || record.releasedBy?.email?.split('@')[0] || 'Staff'}</span></div>
+    ${paymentInfo.invoice?.paidBy ? `<div class="row"><span class="label">Billed by:</span><span class="value">${paymentInfo.invoice.paidBy?.name || paymentInfo.invoice.paidBy?.email?.split('@')[0] || 'Staff'}</span></div>` : ''}
+    <div class="row"><span class="label">Printed:</span><span class="value">${new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
+    
+    <div class="footer">
+        <div>Present this pass at the gate</div>
+        ${branding.phone ? `<div>${branding.phone}</div>` : ''}
+    </div>
+</body>
+</html>`;
+        
+        const printWindow = window.open('', '_blank', 'width=320,height=500');
+        if (printWindow) {
+            printWindow.document.write(printContent);
+            printWindow.document.close();
+            setTimeout(() => {
+                printWindow.print();
+            }, 250);
+        } else {
+            showAlert('Print Blocked', 'Please allow popups to print the gate pass.', 'warning');
+        }
+    };
+
+    // Get filter label for exports
+    const getFilterLabel = () => {
+        const labels = { all: 'All Time', today: 'Today', yesterday: 'Yesterday', week: 'This Week', month: 'This Month' };
+        return labels[historyDateFilter] || 'All';
+    };
+
+    // Export parking history to Excel
+    const exportHistoryToExcel = () => {
+        const branding = getBrandingForReceipts();
+        const currency = branding.currencySymbol || 'KES';
+        const data = filteredHistory;
+        
+        if (data.length === 0) {
+            showAlert('No Data', 'No records to export for the selected filter.', 'info');
+            return;
+        }
+        
+        let html = '<html><head><meta charset="UTF-8"></head><body>';
+        html += `<h2>${branding.companyName || 'EcoSpark'} - Parking History Report</h2>`;
+        html += `<p>Period: ${getFilterLabel()} | Exported: ${new Date().toLocaleString()}</p>`;
+        html += `<table border="1" style="border-collapse: collapse;">`;
+        html += `<tr style="background:#f0f0f0;"><th>Plate Number</th><th>Vehicle Type</th><th>Customer</th><th>Phone</th><th>Parked At</th><th>Released At</th><th>Space</th><th>Rate</th><th>Fee (${currency})</th><th>Status</th><th>Released By</th></tr>`;
+        
+        let totalFee = 0;
+        let clearedFee = 0;
+        
+        data.forEach(record => {
+            const paymentInfo = getPaymentStatus(record.id);
+            const isCleared = paymentInfo.status === 'cleared';
+            totalFee += record.parkingFee || 0;
+            if (isCleared) clearedFee += record.parkingFee || 0;
+            
+            html += `<tr>`;
+            html += `<td>${record.plateNumber || '-'}</td>`;
+            html += `<td>${record.vehicleType || '-'}</td>`;
+            html += `<td>${record.customerName || 'Walk-in'}</td>`;
+            html += `<td>${record.customerPhone || '-'}</td>`;
+            html += `<td>${record.parkedAt ? new Date(record.parkedAt).toLocaleString() : '-'}</td>`;
+            html += `<td>${record.releasedAt ? new Date(record.releasedAt).toLocaleString() : '-'}</td>`;
+            html += `<td>${record.parkingSpaceName || '-'}</td>`;
+            html += `<td>${record.rateApplied || 'Standard'}</td>`;
+            html += `<td style="text-align:right;">${(record.parkingFee || 0).toLocaleString()}</td>`;
+            html += `<td>${isCleared ? 'Cleared' : 'Pending'}</td>`;
+            html += `<td>${record.releasedBy?.name || '-'}</td>`;
+            html += `</tr>`;
+        });
+        
+        html += `<tr style="background:#f0f0f0; font-weight:bold;"><td colspan="8" style="text-align:right;">Total:</td><td style="text-align:right;">${totalFee.toLocaleString()}</td><td colspan="2"></td></tr>`;
+        html += `<tr style="background:#dcfce7; font-weight:bold;"><td colspan="8" style="text-align:right;">Cleared Revenue:</td><td style="text-align:right;">${clearedFee.toLocaleString()}</td><td colspan="2"></td></tr>`;
+        html += '</table></body></html>';
+        
+        const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `parking_history_${historyDateFilter}_${new Date().toISOString().split('T')[0]}.xls`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // Export parking history to PDF
+    const exportHistoryToPDF = () => {
+        const branding = getBrandingForReceipts();
+        const currency = branding.currencySymbol || 'KES';
+        const data = filteredHistory;
+        
+        if (data.length === 0) {
+            showAlert('No Data', 'No records to export for the selected filter.', 'info');
+            return;
+        }
+        
+        let totalFee = 0;
+        let clearedFee = 0;
+        let clearedCount = 0;
+        
+        data.forEach(record => {
+            const paymentInfo = getPaymentStatus(record.id);
+            totalFee += record.parkingFee || 0;
+            if (paymentInfo.status === 'cleared') {
+                clearedFee += record.parkingFee || 0;
+                clearedCount++;
+            }
+        });
+        
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+            showAlert('Print Blocked', 'Please allow popups to generate the PDF.', 'warning');
+            return;
+        }
+        
+        let html = `<!DOCTYPE html><html><head><title>Parking History Report</title><style>
+            body { font-family: Arial, sans-serif; padding: 20px; font-size: 12px; }
+            h1 { color: #1f2937; margin-bottom: 5px; font-size: 20px; }
+            .subtitle { color: #6b7280; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+            th { background: #f3f4f6; font-weight: 600; font-size: 11px; }
+            .text-right { text-align: right; }
+            .text-center { text-align: center; }
+            .cleared { background: #dcfce7; color: #166534; }
+            .pending { background: #fef3c7; color: #92400e; }
+            .stats { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }
+            .stat-box { padding: 12px 16px; border: 1px solid #e5e7eb; background: #f9fafb; }
+            .stat-box strong { display: block; font-size: 18px; color: #1f2937; }
+            .stat-box span { font-size: 11px; color: #6b7280; }
+            .total-row { font-weight: bold; background: #f3f4f6; }
+            .footer { margin-top: 20px; text-align: center; font-size: 10px; color: #9ca3af; }
+            @media print { body { padding: 10px; } }
+        </style></head><body>`;
+        
+        html += `<h1>${branding.companyName || 'EcoSpark'}</h1>`;
+        html += `<div class="subtitle">Parking History Report • ${getFilterLabel()} • Generated: ${new Date().toLocaleString()}</div>`;
+        
+        html += `<div class="stats">`;
+        html += `<div class="stat-box"><strong>${data.length}</strong><span>Total Vehicles</span></div>`;
+        html += `<div class="stat-box"><strong>${clearedCount}</strong><span>Cleared</span></div>`;
+        html += `<div class="stat-box"><strong>${data.length - clearedCount}</strong><span>Pending</span></div>`;
+        html += `<div class="stat-box"><strong>${currency} ${totalFee.toLocaleString()}</strong><span>Total Fees</span></div>`;
+        html += `<div class="stat-box"><strong>${currency} ${clearedFee.toLocaleString()}</strong><span>Cleared Revenue</span></div>`;
+        html += `</div>`;
+        
+        html += `<table><thead><tr>`;
+        html += `<th>Plate</th><th>Type</th><th>Customer</th><th>Phone</th><th>Parked</th><th>Released</th><th class="text-right">Fee</th><th class="text-center">Status</th></tr></thead><tbody>`;
+        
+        data.forEach(record => {
+            const paymentInfo = getPaymentStatus(record.id);
+            const isCleared = paymentInfo.status === 'cleared';
+            
+            html += `<tr>`;
+            html += `<td><strong>${record.plateNumber || '-'}</strong></td>`;
+            html += `<td>${record.vehicleType || '-'}</td>`;
+            html += `<td>${record.customerName || 'Walk-in'}</td>`;
+            html += `<td>${record.customerPhone || '-'}</td>`;
+            html += `<td>${record.parkedAt ? new Date(record.parkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</td>`;
+            html += `<td>${record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</td>`;
+            html += `<td class="text-right">${currency} ${(record.parkingFee || 0).toLocaleString()}</td>`;
+            html += `<td class="text-center ${isCleared ? 'cleared' : 'pending'}">${isCleared ? 'Cleared' : 'Pending'}</td>`;
+            html += `</tr>`;
+        });
+        
+        html += `<tr class="total-row"><td colspan="6" class="text-right">Total:</td><td class="text-right">${currency} ${totalFee.toLocaleString()}</td><td></td></tr>`;
+        html += `</tbody></table>`;
+        
+        html += `<div class="footer">`;
+        if (branding.address) html += `<div>${branding.address}</div>`;
+        if (branding.phone) html += `<div>${branding.phone}</div>`;
+        html += `</div>`;
+        
+        html += `</body></html>`;
+        
+        printWindow.document.write(html);
+        printWindow.document.close();
+        setTimeout(() => printWindow.print(), 300);
+    };
+
+    // Get available spaces (not occupied)
+    const getAvailableSpaces = () => {
+        return (parkingSettings.parkingSpaces || []).filter(s => s.status === 'available');
+    };
+
+    // Get zones from spaces
+    const getZones = () => {
+        const zones = [...new Set((parkingSettings.parkingSpaces || []).map(s => s.zone))];
+        return zones.sort();
+    };
+
+    // Handle add vehicle to parking
+    const handleAddVehicle = async () => {
+        if (!parkingForm.plateNumber.trim()) {
+            showAlert('Error', 'Plate number is required', 'error');
+            return;
+        }
+        if (!parkingForm.parkingSpaceId) {
+            showAlert('Error', 'Please select a parking space', 'error');
+            return;
+        }
+        if (!parkingForm.customerPhone.trim()) {
+            showAlert('Error', 'Phone number is required', 'error');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.parkingService.addToParking({
+                plateNumber: parkingForm.plateNumber.toUpperCase(),
+                vehicleType: parkingForm.vehicleType,
+                customerName: parkingForm.customerName,
+                customerPhone: parkingForm.customerPhone,
+                notes: parkingForm.notes,
+                parkingSpaceId: parkingForm.parkingSpaceId || null,
+                parkingSpaceName: parkingForm.parkingSpaceId ? 
+                    (parkingSettings.parkingSpaces || []).find(s => s.id === parkingForm.parkingSpaceId)?.name : null,
+                source: 'manual'
+            });
+            
+            if (result.success) {
+                showAlert('Success', 'Vehicle added to parking successfully', 'success');
+                setParkingForm({ plateNumber: '', vehicleType: 'Sedan', customerName: '', customerPhone: '', notes: '', parkingSpaceId: '' });
+                setShowAddModal(false);
+                setSelectedSpace(null);
+            } else {
+                showAlert('Error', result.error || 'Failed to add vehicle', 'error');
+            }
+        } catch (err) {
+            showAlert('Error', 'Failed to add vehicle: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle add parking space
+    const handleAddSpace = async () => {
+        if (!spaceForm.name.trim()) {
+            showAlert('Error', 'Space name is required', 'error');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.parkingService.addParkingSpace(spaceForm);
+            
+            if (result.success) {
+                showAlert('Success', 'Parking space added successfully', 'success');
+                setSpaceForm({ name: '', zone: 'A', type: 'standard' });
+                setShowAddSpaceModal(false);
+            } else {
+                showAlert('Error', result.error || 'Failed to add space', 'error');
+            }
+        } catch (err) {
+            showAlert('Error', 'Failed to add space: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle bulk add parking spaces
+    const handleBulkAddSpaces = async () => {
+        if (bulkForm.startNum >= bulkForm.endNum) {
+            showAlert('Error', 'End number must be greater than start number', 'error');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const result = await services.parkingService.bulkAddParkingSpaces(
+                bulkForm.zone,
+                bulkForm.prefix,
+                bulkForm.startNum,
+                bulkForm.endNum,
+                bulkForm.type
+            );
+            
+            if (result.success) {
+                showAlert('Success', `${result.count} parking spaces added successfully`, 'success');
+                setBulkForm({ zone: 'A', prefix: 'A', startNum: 1, endNum: 10, type: 'standard' });
+                setShowBulkAddModal(false);
+            } else {
+                showAlert('Error', result.error || 'Failed to add spaces', 'error');
+            }
+        } catch (err) {
+            showAlert('Error', 'Failed to add spaces: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Handle delete parking space
+    const handleDeleteSpace = async (spaceId) => {
+        showAlert(
+            'Delete Space',
+            'Are you sure you want to delete this parking space?',
+            'warning',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    const result = await services.parkingService.deleteParkingSpace(spaceId);
+                    
+                    if (result.success) {
+                        showAlert('Success', 'Parking space deleted successfully', 'success');
+                    } else {
+                        showAlert('Error', result.error || 'Failed to delete space', 'error');
+                    }
+                } catch (err) {
+                    showAlert('Error', 'Failed to delete space: ' + err.message, 'error');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
+    };
+
+    // Handle clicking on a parking space
+    const handleSpaceClick = (space) => {
+        if (space.status === 'occupied') {
+            // Find the parked vehicle
+            const vehicle = parkedVehicles.find(v => v.parkingSpaceId === space.id);
+            if (vehicle) {
+                setSelectedVehicle(vehicle);
+                setSelectedRate('');
+                setShowApplyFeeModal(true);
+            }
+        } else if (space.status === 'available') {
+            // Open add vehicle modal with space pre-selected
+            setSelectedSpace(space);
+            setParkingForm({ ...parkingForm, parkingSpaceId: space.id });
+            setShowAddModal(true);
+        }
+    };
+
+    // Handle apply fee and release
+    const handleApplyFeeAndRelease = async () => {
+        if (!selectedVehicle || !selectedRate) {
+            showAlert('Error', 'Please select a rate', 'error');
+            return;
+        }
+        
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            const rate = parkingSettings.rates?.find(r => r.name === selectedRate || r.id === selectedRate);
+            
+            if (!rate) {
+                showAlert('Error', 'Rate not found', 'error');
+                setActionLoading(false);
+                return;
+            }
+            
+            // Calculate fee
+            const feeCalc = services.parkingService.calculateFee(selectedVehicle.parkedAt, parkingSettings.rates, selectedRate);
+            
+            // Create invoice in billing module FIRST (as pending/unpaid)
+            if (services.billingService && feeCalc.fee > 0) {
+                const invoiceResult = await services.billingService.createInvoice({
+                    source: 'parking',
+                    parkingRecordId: selectedVehicle.id,
+                    plateNumber: selectedVehicle.plateNumber,
+                    vehicleType: selectedVehicle.vehicleType || 'Vehicle',
+                    customerName: selectedVehicle.customerName || 'Walk-in',
+                    customerPhone: selectedVehicle.customerPhone || '',
+                    services: [{ name: `Parking Fee (${rate.name})`, price: feeCalc.fee, duration: feeCalc.duration }],
+                    totalAmount: feeCalc.fee,
+                    notes: `Parking: ${feeCalc.duration} | Rate: ${rate.name}`,
+                    parkingSpaceName: selectedVehicle.parkingSpaceName || null,
+                    parkedAt: selectedVehicle.parkedAt,
+                    releasedAt: new Date().toISOString(),
+                    paymentStatus: 'unpaid'
+                });
+                
+                if (!invoiceResult.success) {
+                    showAlert('Error', 'Failed to create billing invoice: ' + (invoiceResult.error || 'Unknown error'), 'error');
+                    setActionLoading(false);
+                    return;
+                }
+                
+                console.log('✅ Parking invoice created:', invoiceResult.invoiceNumber);
+            }
+            
+            // Apply fee and release vehicle to history
+            await services.parkingService.applyFee(selectedVehicle.id, feeCalc.fee, rate.name);
+            await services.parkingService.releaseVehicle(selectedVehicle.id, 'pending'); // Mark as pending payment
+            
+            showAlert('Invoice Sent to Billing', `${selectedVehicle.plateNumber} released.\nFee: ${getCurrency()} ${feeCalc.fee.toLocaleString()}\n\nInvoice sent to Billing for payment processing.`, 'success');
+            setShowApplyFeeModal(false);
+            setSelectedVehicle(null);
+            setSelectedRate('');
+        } catch (err) {
+            showAlert('Error', 'Failed to release vehicle: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Quick release with auto-calculated fee
+    const handleQuickRelease = async (vehicle) => {
+        const services = window.FirebaseServices;
+        const feeCalc = services.parkingService.calculateFee(vehicle.parkedAt, parkingSettings.rates);
+        
+        showAlert(
+            'Release Vehicle',
+            `Release ${vehicle.plateNumber}?\n\nFee: ${getCurrency()} ${feeCalc.fee.toLocaleString()}\nDuration: ${feeCalc.duration}\nRate: ${feeCalc.rateUsed}\n\nInvoice will be sent to Billing for payment.`,
+            'info',
+            async () => {
+                setActionLoading(true);
+                try {
+                    // Create invoice in billing module FIRST (as pending/unpaid)
+                    if (services.billingService && feeCalc.fee > 0) {
+                        const invoiceResult = await services.billingService.createInvoice({
+                            source: 'parking',
+                            parkingRecordId: vehicle.id,
+                            plateNumber: vehicle.plateNumber,
+                            vehicleType: vehicle.vehicleType || 'Vehicle',
+                            customerName: vehicle.customerName || 'Walk-in',
+                            customerPhone: vehicle.customerPhone || '',
+                            services: [{ name: `Parking Fee (${feeCalc.rateUsed})`, price: feeCalc.fee, duration: feeCalc.duration }],
+                            totalAmount: feeCalc.fee,
+                            notes: `Parking: ${feeCalc.duration} | Rate: ${feeCalc.rateUsed}`,
+                            parkingSpaceName: vehicle.parkingSpaceName || null,
+                            parkedAt: vehicle.parkedAt,
+                            releasedAt: new Date().toISOString(),
+                            paymentStatus: 'unpaid'
+                        });
+                        
+                        if (!invoiceResult.success) {
+                            showAlert('Error', 'Failed to create billing invoice: ' + (invoiceResult.error || 'Unknown error'), 'error');
+                            setActionLoading(false);
+                            return;
+                        }
+                        
+                        console.log('✅ Parking invoice created:', invoiceResult.invoiceNumber);
+                    }
+                    
+                    // Apply fee and release vehicle to history
+                    await services.parkingService.applyFee(vehicle.id, feeCalc.fee, feeCalc.rateUsed);
+                    await services.parkingService.releaseVehicle(vehicle.id, 'pending'); // Mark as pending payment
+                    
+                    showAlert('Invoice Sent to Billing', `${vehicle.plateNumber} released.\nFee: ${getCurrency()} ${feeCalc.fee.toLocaleString()}\n\nInvoice sent to Billing for payment.`, 'success');
+                } catch (err) {
+                    showAlert('Error', 'Failed to release vehicle: ' + err.message, 'error');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
+    };
+
+    // Save settings
+    const handleSaveSettings = async () => {
+        setActionLoading(true);
+        try {
+            const services = window.FirebaseServices;
+            await services.parkingService.saveSettings(parkingSettings);
+            showAlert('Success', 'Settings saved successfully', 'success');
+            setShowSettingsModal(false);
+        } catch (err) {
+            showAlert('Error', 'Failed to save settings: ' + err.message, 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    // Filter vehicles by search
+    const filteredVehicles = parkedVehicles.filter(v => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return v.plateNumber?.toLowerCase().includes(q) || 
+               v.customerName?.toLowerCase().includes(q) ||
+               v.vehicleType?.toLowerCase().includes(q);
+    });
+
+    // Memoize history filter for better performance
+    const filteredHistory = React.useMemo(() => {
+        return parkingHistory.filter(v => {
+            // Date filter
+            if (historyDateFilter !== 'all') {
+                const recordDate = v.releasedAt ? new Date(v.releasedAt) : null;
+                if (!recordDate) return false;
+                
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                const weekAgo = new Date(today);
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                const monthAgo = new Date(today);
+                monthAgo.setMonth(monthAgo.getMonth() - 1);
+                
+                if (historyDateFilter === 'today' && recordDate < today) return false;
+                if (historyDateFilter === 'yesterday' && (recordDate < yesterday || recordDate >= today)) return false;
+                if (historyDateFilter === 'week' && recordDate < weekAgo) return false;
+                if (historyDateFilter === 'month' && recordDate < monthAgo) return false;
+            }
+            
+            // Search filter
+            if (!historySearch) return true;
+            const q = historySearch.toLowerCase();
+            return v.plateNumber?.toLowerCase().includes(q) || 
+                   v.customerName?.toLowerCase().includes(q);
+        });
+    }, [parkingHistory, historyDateFilter, historySearch]);
+
+    // Pagination calculations - memoized for performance
+    const paginationData = React.useMemo(() => {
+        const totalItems = filteredHistory.length;
+        const totalPages = Math.ceil(totalItems / itemsPerPage);
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        const paginatedItems = filteredHistory.slice(startIndex, endIndex);
+        
+        // Calculate page range for pagination controls (show max 7 pages)
+        let startPage = Math.max(1, currentPage - 3);
+        let endPage = Math.min(totalPages, startPage + 6);
+        if (endPage - startPage < 6) {
+            startPage = Math.max(1, endPage - 6);
+        }
+        const pageNumbers = [];
+        for (let i = startPage; i <= endPage; i++) {
+            pageNumbers.push(i);
+        }
+        
+        return {
+            totalItems,
+            totalPages,
+            startIndex,
+            endIndex: Math.min(endIndex, totalItems),
+            paginatedItems,
+            pageNumbers,
+            hasNext: currentPage < totalPages,
+            hasPrev: currentPage > 1
+        };
+    }, [filteredHistory, currentPage, itemsPerPage]);
+
+    // Reset to page 1 when filters change
+    React.useEffect(() => {
+        setCurrentPage(1);
+    }, [historyDateFilter, historySearch, itemsPerPage]);
+
+    // Filter spaces by zone - memoized
+    const filteredSpaces = React.useMemo(() => {
+        return (parkingSettings.parkingSpaces || []).filter(s => {
+            if (selectedZone === 'all') return true;
+            return s.zone === selectedZone;
+        });
+    }, [parkingSettings.parkingSpaces, selectedZone]);
+
+    // Get space stats - memoized
+    const spaceStats = React.useMemo(() => {
+        const spaces = parkingSettings.parkingSpaces || [];
+        return {
+            total: spaces.length,
+            available: spaces.filter(s => s.status === 'available').length,
+            occupied: spaces.filter(s => s.status === 'occupied').length,
+            maintenance: spaces.filter(s => s.status === 'maintenance').length
+        };
+    }, [parkingSettings.parkingSpaces]);
+
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>🅿️</div>
+                    <p style={{ color: theme.textSecondary }}>Loading parking data...</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ padding: '24px' }}>
+            {/* Stats Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', padding: '20px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '48px', height: '48px', borderRadius: '2px', backgroundColor: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>🅿️</div>
+                        <div>
+                            <div style={{ fontSize: '28px', fontWeight: '700', color: theme.text }}>{spaceStats.total}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>Total Spaces</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', padding: '20px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '48px', height: '48px', borderRadius: '2px', backgroundColor: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>✅</div>
+                        <div>
+                            <div style={{ fontSize: '28px', fontWeight: '700', color: '#10b981' }}>{spaceStats.available}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>Available</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', padding: '20px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '48px', height: '48px', borderRadius: '2px', backgroundColor: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>🚗</div>
+                        <div>
+                            <div style={{ fontSize: '28px', fontWeight: '700', color: '#f59e0b' }}>{spaceStats.occupied}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>Occupied</div>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', padding: '20px', border: `1px solid ${theme.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '48px', height: '48px', borderRadius: '2px', backgroundColor: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>💰</div>
+                        <div>
+                            <div style={{ fontSize: '28px', fontWeight: '700', color: '#059669' }}>{getCurrency()} {(stats.todayRevenue || 0).toLocaleString()}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>Today's Revenue</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Tabs & Actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {['spaces', 'parked', 'history'].map(tab => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            style={{
+                                padding: '10px 20px',
+                                borderRadius: '2px',
+                                border: 'none',
+                                backgroundColor: activeTab === tab ? '#3b82f6' : theme.bgSecondary,
+                                color: activeTab === tab ? 'white' : theme.text,
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                position: 'relative'
+                            }}
+                        >
+                            {tab === 'spaces' ? `🅿️ Parking Area (${spaceStats.total})` : tab === 'parked' ? `🚗 Parked (${parkedVehicles.length})` : '📋 History'}
+                        </button>
+                    ))}
+                </div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {activeTab === 'spaces' && (
+                        <>
+                            <select value={selectedZone} onChange={(e) => setSelectedZone(e.target.value)} style={{ ...selectStyle, width: '120px' }}>
+                                <option value="all">All Zones</option>
+                                {getZones().map(z => <option key={z} value={z}>Zone {z}</option>)}
+                            </select>
+                            <button onClick={() => setShowBulkAddModal(true)} style={{ ...btnSecondary, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                📦 Bulk Add
+                            </button>
+                            <button onClick={() => setShowAddSpaceModal(true)} style={{ ...btnSecondary, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                ➕ Add Space
+                            </button>
+                        </>
+                    )}
+                    <button onClick={() => setShowSettingsModal(true)} style={{ ...btnSecondary, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        ⚙️ Settings
+                    </button>
+                    <button onClick={() => { setParkingForm({ plateNumber: '', vehicleType: 'Sedan', customerName: '', customerPhone: '', notes: '', parkingSpaceId: '' }); setSelectedSpace(null); setShowAddModal(true); }} style={{ ...btnPrimary, backgroundColor: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        + Add Vehicle
+                    </button>
+                </div>
+            </div>
+
+            {/* Parking Spaces Grid View */}
+            {activeTab === 'spaces' && (
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', border: `1px solid ${theme.border}`, padding: '20px' }}>
+                    {!spacesLoaded ? (
+                        /* Fast skeleton loading - shows instantly */
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '12px' }}>
+                            {[...Array(12)].map((_, i) => (
+                                <div key={i} style={{
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '2px solid #e2e8f0',
+                                    backgroundColor: isDark ? '#334155' : '#f1f5f9',
+                                    minHeight: '80px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    animation: 'pulse 1.5s ease-in-out infinite'
+                                }}>
+                                    <div style={{ width: '40px', height: '16px', backgroundColor: isDark ? '#475569' : '#e2e8f0', borderRadius: '4px', marginBottom: '8px' }}></div>
+                                    <div style={{ width: '60px', height: '10px', backgroundColor: isDark ? '#475569' : '#e2e8f0', borderRadius: '4px' }}></div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : filteredSpaces.length === 0 ? (
+                        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🅿️</div>
+                            <h3 style={{ color: theme.text, marginBottom: '8px' }}>No Parking Spaces Configured</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px', marginBottom: '20px' }}>Add parking spaces to visualize your parking area</p>
+                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                                <button onClick={() => setShowBulkAddModal(true)} style={{ ...btnPrimary, backgroundColor: '#3b82f6' }}>📦 Bulk Add Spaces</button>
+                                <button onClick={() => setShowAddSpaceModal(true)} style={btnSecondary}>➕ Add Single Space</button>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {/* Legend */}
+                            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ width: '20px', height: '20px', backgroundColor: '#d1fae5', border: '2px solid #10b981', borderRadius: '4px' }}></div>
+                                    <span style={{ fontSize: '13px', color: theme.textSecondary }}>Available</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ width: '20px', height: '20px', backgroundColor: '#fee2e2', border: '2px solid #ef4444', borderRadius: '4px' }}></div>
+                                    <span style={{ fontSize: '13px', color: theme.textSecondary }}>Occupied</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ width: '20px', height: '20px', backgroundColor: '#fef3c7', border: '2px solid #f59e0b', borderRadius: '4px' }}></div>
+                                    <span style={{ fontSize: '13px', color: theme.textSecondary }}>Maintenance</span>
+                                </div>
+                            </div>
+                            
+                            {/* Parking Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '12px' }}>
+                                {filteredSpaces.map(space => {
+                                    const isOccupied = space.status === 'occupied';
+                                    const isMaintenance = space.status === 'maintenance';
+                                    const vehicle = isOccupied ? parkedVehicles.find(v => v.parkingSpaceId === space.id) : null;
+                                    const typeInfo = SPACE_TYPES.find(t => t.id === space.type) || SPACE_TYPES[0];
+                                    
+                                    return (
+                                        <div
+                                            key={space.id}
+                                            onClick={() => handleSpaceClick(space)}
+                                            style={{
+                                                padding: '12px',
+                                                borderRadius: '8px',
+                                                border: `2px solid ${isOccupied ? '#ef4444' : isMaintenance ? '#f59e0b' : '#10b981'}`,
+                                                backgroundColor: isOccupied ? '#fee2e2' : isMaintenance ? '#fef3c7' : '#d1fae5',
+                                                cursor: isMaintenance ? 'not-allowed' : 'pointer',
+                                                transition: 'all 0.2s',
+                                                minHeight: '80px',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                justifyContent: 'center',
+                                                alignItems: 'center',
+                                                position: 'relative'
+                                            }}
+                                        >
+                                            {/* Space Type Badge */}
+                                            {space.type !== 'standard' && (
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    top: '4px',
+                                                    right: '4px',
+                                                    fontSize: '10px',
+                                                    padding: '2px 6px',
+                                                    borderRadius: '10px',
+                                                    backgroundColor: typeInfo.color,
+                                                    color: 'white',
+                                                    fontWeight: '600'
+                                                }}>
+                                                    {typeInfo.name}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Space Name */}
+                                            <div style={{ fontSize: '18px', fontWeight: '700', color: isOccupied ? '#dc2626' : isMaintenance ? '#d97706' : '#059669' }}>
+                                                {space.name}
+                                            </div>
+                                            
+                                            {/* Vehicle Info or Status */}
+                                            {isOccupied && vehicle ? (
+                                                <div style={{ fontSize: '11px', color: '#7f1d1d', marginTop: '4px', textAlign: 'center' }}>
+                                                    <div style={{ fontWeight: '600' }}>{vehicle.plateNumber}</div>
+                                                    <div>{vehicle.vehicleType}</div>
+                                                </div>
+                                            ) : isOccupied && space.currentVehicle ? (
+                                                <div style={{ fontSize: '11px', color: '#7f1d1d', marginTop: '4px', textAlign: 'center' }}>
+                                                    <div style={{ fontWeight: '600' }}>{space.currentVehicle.plateNumber}</div>
+                                                </div>
+                                            ) : (
+                                                <div style={{ fontSize: '11px', color: isMaintenance ? '#92400e' : '#047857', marginTop: '4px' }}>
+                                                    {isMaintenance ? 'Under Maintenance' : 'Available'}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Delete button (only for available spaces) */}
+                                            {!isOccupied && !isMaintenance && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDeleteSpace(space.id); }}
+                                                    style={{
+                                                        position: 'absolute',
+                                                        bottom: '4px',
+                                                        right: '4px',
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        fontSize: '12px',
+                                                        cursor: 'pointer',
+                                                        color: '#dc2626',
+                                                        opacity: 0.6
+                                                    }}
+                                                    title="Delete space"
+                                                >
+                                                    🗑️
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
+
+            {/* Parked Vehicles Tab */}
+            {activeTab === 'parked' && (
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    {/* Search bar */}
+                    <div style={{ padding: '16px', borderBottom: `1px solid ${theme.border}` }}>
+                        <input
+                            type="text"
+                            placeholder="Search by plate number, customer..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{ ...inputStyle, maxWidth: '300px' }}
+                        />
+                    </div>
+                    {filteredVehicles.length === 0 ? (
+                        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🅿️</div>
+                            <h3 style={{ color: theme.text, marginBottom: '8px' }}>No Vehicles Parked</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px' }}>Click "Add Vehicle" to add a vehicle to parking</p>
+                        </div>
+                    ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: theme.bgSecondary }}>
+                                    <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Vehicle</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Space</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Customer</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked At</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Est. Fee</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredVehicles.map(vehicle => {
+                                    const services = window.FirebaseServices;
+                                    const feeCalc = services.parkingService.calculateFee(vehicle.parkedAt, parkingSettings.rates);
+                                    const parkedTime = new Date(vehicle.parkedAt);
+                                    const now = new Date();
+                                    const diffMs = now - parkedTime;
+                                    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+                                    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                                    return (
+                                        <tr key={vehicle.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '14px 16px' }}>
+                                                <div style={{ fontWeight: '600', color: theme.text, fontSize: '15px' }}>{vehicle.plateNumber}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{vehicle.vehicleType}</div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                {vehicle.parkingSpaceName ? (
+                                                    <span style={{ padding: '4px 10px', backgroundColor: '#dbeafe', color: '#1d4ed8', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                                                        {vehicle.parkingSpaceName}
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ color: theme.textSecondary, fontSize: '12px' }}>—</span>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '14px 16px' }}>
+                                                <div style={{ fontWeight: '500', color: theme.text }}>{vehicle.customerName || 'Walk-in'}</div>
+                                                {vehicle.customerPhone && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{vehicle.customerPhone}</div>}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.text }}>
+                                                {parkedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{parkedTime.toLocaleDateString()}</div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <span style={{ fontWeight: '600', color: hours >= 24 ? '#dc2626' : hours >= 6 ? '#f59e0b' : '#10b981', fontSize: '14px' }}>
+                                                    {hours > 0 ? `${hours}h ` : ''}{mins}m
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                                                <div style={{ fontWeight: '600', color: '#059669', fontSize: '15px' }}>{getCurrency()} {feeCalc.fee.toLocaleString()}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{feeCalc.rateUsed}</div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                                    <button
+                                                        onClick={() => { setSelectedVehicle(vehicle); setSelectedRate(''); setShowApplyFeeModal(true); }}
+                                                        style={{ padding: '6px 12px', borderRadius: '2px', border: 'none', backgroundColor: '#dbeafe', color: '#1d4ed8', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                                                    >
+                                                        Apply Fee
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleQuickRelease(vehicle)}
+                                                        disabled={actionLoading}
+                                                        style={{ padding: '6px 12px', borderRadius: '2px', border: 'none', backgroundColor: '#d1fae5', color: '#059669', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                                                    >
+                                                        Release
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+            )}
+
+            {/* History Tab */}
+            {activeTab === 'history' && (
+                <div style={{ backgroundColor: theme.bg, borderRadius: '2px', border: `1px solid ${theme.border}`, overflow: 'hidden' }}>
+                    {/* Search and Filter Bar */}
+                    <div style={{ padding: '16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {[{ id: 'all', label: 'All' }, { id: 'today', label: 'Today' }, { id: 'yesterday', label: 'Yesterday' }, { id: 'week', label: 'This Week' }, { id: 'month', label: 'This Month' }].map(filter => (
+                                <button
+                                    key={filter.id}
+                                    onClick={() => setHistoryDateFilter(filter.id)}
+                                    style={{
+                                        padding: '6px 14px',
+                                        borderRadius: '20px',
+                                        border: 'none',
+                                        backgroundColor: historyDateFilter === filter.id ? '#3b82f6' : (isDark ? '#334155' : '#e2e8f0'),
+                                        color: historyDateFilter === filter.id ? 'white' : theme.text,
+                                        fontSize: '13px',
+                                        fontWeight: '500',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {filter.label}
+                                </button>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <input
+                                type="text"
+                                placeholder="Search plate, customer..."
+                                value={historySearch}
+                                onChange={(e) => setHistorySearch(e.target.value)}
+                                style={{ ...inputStyle, width: '200px', padding: '8px 12px' }}
+                            />
+                            {historySearch && (
+                                <button onClick={() => setHistorySearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSecondary, fontSize: '16px' }}>×</button>
+                            )}
+                            <div style={{ borderLeft: `1px solid ${theme.border}`, height: '24px', margin: '0 4px' }}></div>
+                            <button
+                                onClick={exportHistoryToExcel}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.bg,
+                                    color: theme.text,
+                                    fontSize: '12px',
+                                    fontWeight: '500',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                }}
+                                title="Export to Excel"
+                            >
+                                📊 Excel
+                            </button>
+                            <button
+                                onClick={exportHistoryToPDF}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    backgroundColor: theme.bg,
+                                    color: theme.text,
+                                    fontSize: '12px',
+                                    fontWeight: '500',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                }}
+                                title="Export to PDF"
+                            >
+                                📄 PDF
+                            </button>
+                        </div>
+                    </div>
+                    {/* Results count with pagination info */}
+                    <div style={{ padding: '10px 16px', backgroundColor: theme.bgSecondary, fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <span>
+                            Showing {paginationData.totalItems > 0 ? paginationData.startIndex + 1 : 0}-{paginationData.endIndex} of {paginationData.totalItems.toLocaleString()} records
+                            {historyDateFilter !== 'all' && ` • Filter: ${historyDateFilter === 'today' ? 'Today' : historyDateFilter === 'yesterday' ? 'Yesterday' : historyDateFilter === 'week' ? 'This Week' : 'This Month'}`}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span>Per page:</span>
+                            <select 
+                                value={itemsPerPage} 
+                                onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                                style={{ padding: '4px 8px', borderRadius: '4px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.text, fontSize: '13px', cursor: 'pointer' }}
+                            >
+                                {ITEMS_PER_PAGE_OPTIONS.map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                    {paginationData.totalItems === 0 ? (
+                        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                            <h3 style={{ color: theme.text, marginBottom: '8px' }}>No Parking History</h3>
+                            <p style={{ color: theme.textSecondary, fontSize: '14px' }}>Released vehicles will appear here</p>
+                        </div>
+                    ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: theme.bgSecondary }}>
+                                    <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Vehicle</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Customer</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Phone</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Released</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Fee</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {paginationData.paginatedItems.map(record => {
+                                    const paymentInfo = getPaymentStatus(record.id);
+                                    const isCleared = paymentInfo.status === 'cleared';
+                                    return (
+                                        <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '14px 16px' }}>
+                                                <div style={{ fontWeight: '600', color: theme.text }}>{record.plateNumber}</div>
+                                                <div style={{ fontSize: '12px', color: theme.textSecondary }}>{record.vehicleType}</div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', color: theme.text }}>{record.customerName || 'Walk-in'}</td>
+                                            <td style={{ padding: '14px 16px', color: theme.text, fontSize: '13px' }}>
+                                                {record.customerPhone ? (
+                                                    <a href={`tel:${record.customerPhone}`} style={{ color: '#3b82f6', textDecoration: 'none' }}>{record.customerPhone}</a>
+                                                ) : (
+                                                    <span style={{ color: theme.textSecondary }}>-</span>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.text }}>
+                                                {record.parkedAt ? new Date(record.parkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.text }}>
+                                                {record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>
+                                                {getCurrency()} {(record.parkingFee || 0).toLocaleString()}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    padding: '4px 12px',
+                                                    borderRadius: '20px',
+                                                    fontSize: '12px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: isCleared ? '#dcfce7' : '#fef3c7',
+                                                    color: isCleared ? '#166534' : '#92400e'
+                                                }}>
+                                                    {isCleared ? '✓ Cleared' : '⏳ Pending'}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                {isCleared ? (
+                                                    <button
+                                                        onClick={() => printGatePass(record)}
+                                                        style={{
+                                                            padding: '6px 12px',
+                                                            borderRadius: '4px',
+                                                            border: 'none',
+                                                            backgroundColor: '#3b82f6',
+                                                            color: 'white',
+                                                            fontSize: '12px',
+                                                            fontWeight: '500',
+                                                            cursor: 'pointer',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '4px'
+                                                        }}
+                                                        title="Print Gate Pass"
+                                                    >
+                                                        🖨️ Gate Pass
+                                                    </button>
+                                                ) : (
+                                                    <span style={{ fontSize: '12px', color: theme.textSecondary }}>Awaiting payment</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+                    
+                    {/* Pagination Controls */}
+                    {paginationData.totalPages > 1 && (
+                        <div style={{ 
+                            padding: '16px', 
+                            borderTop: `1px solid ${theme.border}`, 
+                            display: 'flex', 
+                            justifyContent: 'center', 
+                            alignItems: 'center', 
+                            gap: '4px',
+                            flexWrap: 'wrap'
+                        }}>
+                            {/* First & Previous */}
+                            <button
+                                onClick={() => setCurrentPage(1)}
+                                disabled={!paginationData.hasPrev}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.bg,
+                                    color: paginationData.hasPrev ? theme.text : theme.textSecondary,
+                                    cursor: paginationData.hasPrev ? 'pointer' : 'not-allowed',
+                                    fontSize: '13px',
+                                    opacity: paginationData.hasPrev ? 1 : 0.5
+                                }}
+                                title="First page"
+                            >
+                                ⟨⟨
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={!paginationData.hasPrev}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.bg,
+                                    color: paginationData.hasPrev ? theme.text : theme.textSecondary,
+                                    cursor: paginationData.hasPrev ? 'pointer' : 'not-allowed',
+                                    fontSize: '13px',
+                                    opacity: paginationData.hasPrev ? 1 : 0.5
+                                }}
+                                title="Previous page"
+                            >
+                                ⟨ Prev
+                            </button>
+                            
+                            {/* Page Numbers */}
+                            {paginationData.pageNumbers[0] > 1 && (
+                                <span style={{ padding: '8px 4px', color: theme.textSecondary }}>...</span>
+                            )}
+                            {paginationData.pageNumbers.map(pageNum => (
+                                <button
+                                    key={pageNum}
+                                    onClick={() => setCurrentPage(pageNum)}
+                                    style={{
+                                        padding: '8px 14px',
+                                        borderRadius: '4px',
+                                        border: pageNum === currentPage ? 'none' : `1px solid ${theme.border}`,
+                                        background: pageNum === currentPage ? '#3b82f6' : theme.bg,
+                                        color: pageNum === currentPage ? 'white' : theme.text,
+                                        cursor: 'pointer',
+                                        fontSize: '13px',
+                                        fontWeight: pageNum === currentPage ? '600' : '400',
+                                        minWidth: '40px'
+                                    }}
+                                >
+                                    {pageNum.toLocaleString()}
+                                </button>
+                            ))}
+                            {paginationData.pageNumbers[paginationData.pageNumbers.length - 1] < paginationData.totalPages && (
+                                <span style={{ padding: '8px 4px', color: theme.textSecondary }}>...</span>
+                            )}
+                            
+                            {/* Next & Last */}
+                            <button
+                                onClick={() => setCurrentPage(p => Math.min(paginationData.totalPages, p + 1))}
+                                disabled={!paginationData.hasNext}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.bg,
+                                    color: paginationData.hasNext ? theme.text : theme.textSecondary,
+                                    cursor: paginationData.hasNext ? 'pointer' : 'not-allowed',
+                                    fontSize: '13px',
+                                    opacity: paginationData.hasNext ? 1 : 0.5
+                                }}
+                                title="Next page"
+                            >
+                                Next ⟩
+                            </button>
+                            <button
+                                onClick={() => setCurrentPage(paginationData.totalPages)}
+                                disabled={!paginationData.hasNext}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.bg,
+                                    color: paginationData.hasNext ? theme.text : theme.textSecondary,
+                                    cursor: paginationData.hasNext ? 'pointer' : 'not-allowed',
+                                    fontSize: '13px',
+                                    opacity: paginationData.hasNext ? 1 : 0.5
+                                }}
+                                title="Last page"
+                            >
+                                ⟩⟩
+                            </button>
+                            
+                            {/* Jump to page */}
+                            <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '13px', color: theme.textSecondary }}>Go to:</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max={paginationData.totalPages}
+                                    placeholder={currentPage.toString()}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            const page = parseInt(e.target.value);
+                                            if (page >= 1 && page <= paginationData.totalPages) {
+                                                setCurrentPage(page);
+                                                e.target.value = '';
+                                            }
+                                        }
+                                    }}
+                                    style={{
+                                        width: '70px',
+                                        padding: '6px 10px',
+                                        borderRadius: '4px',
+                                        border: `1px solid ${theme.border}`,
+                                        background: theme.inputBg,
+                                        color: theme.text,
+                                        fontSize: '13px',
+                                        textAlign: 'center'
+                                    }}
+                                />
+                                <span style={{ fontSize: '13px', color: theme.textSecondary }}>of {paginationData.totalPages.toLocaleString()}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Add Vehicle Modal */}
+            {showAddModal && (
+                <div style={modalOverlay} onClick={() => setShowAddModal(false)}>
+                    <div style={{ ...modalContent, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Add Vehicle to Parking</h2>
+                            <button onClick={() => setShowAddModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+                        
+                        {/* Search from Intake Records Section */}
+                        <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: isDark ? '#0f172a' : '#f0f9ff', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#bae6fd'}` }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                                <span style={{ fontSize: '18px' }}>🔍</span>
+                                <span style={{ fontSize: '14px', fontWeight: '600', color: theme.text }}>Search from Intake Records</span>
+                            </div>
+                            <div style={{ position: 'relative' }}>
+                                <input
+                                    type="text"
+                                    value={intakeSearch}
+                                    onChange={(e) => {
+                                        setIntakeSearch(e.target.value);
+                                        setShowIntakeResults(e.target.value.length >= 2);
+                                    }}
+                                    placeholder="Search by plate number or customer name..."
+                                    style={{ ...inputStyle, paddingRight: '40px' }}
+                                />
+                                {intakeSearch && (
+                                    <button
+                                        onClick={() => { setIntakeSearch(''); setShowIntakeResults(false); }}
+                                        style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: theme.textSecondary }}
+                                    >×</button>
+                                )}
+                            </div>
+                            
+                            {/* Search Results Dropdown */}
+                            {showIntakeResults && intakeSearch.length >= 2 && (
+                                <div style={{ 
+                                    marginTop: '8px', 
+                                    maxHeight: '200px', 
+                                    overflowY: 'auto', 
+                                    backgroundColor: theme.bg, 
+                                    border: `1px solid ${theme.border}`, 
+                                    borderRadius: '6px',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                                }}>
+                                    {(() => {
+                                        const searchLower = intakeSearch.toLowerCase();
+                                        const filtered = intakeRecords.filter(r => 
+                                            r.plateNumber?.toLowerCase().includes(searchLower) ||
+                                            r.customerName?.toLowerCase().includes(searchLower) ||
+                                            r.customerPhone?.includes(intakeSearch)
+                                        ).slice(0, 10);
+                                        
+                                        if (filtered.length === 0) {
+                                            return (
+                                                <div style={{ padding: '16px', textAlign: 'center', color: theme.textSecondary, fontSize: '13px' }}>
+                                                    No vehicles found in intake records
+                                                </div>
+                                            );
+                                        }
+                                        
+                                        return filtered.map(record => (
+                                            <div
+                                                key={record.id}
+                                                onClick={() => {
+                                                    setParkingForm({
+                                                        ...parkingForm,
+                                                        plateNumber: record.plateNumber || '',
+                                                        vehicleType: record.vehicleType || record.category || 'Sedan',
+                                                        customerName: record.customerName || record.ownerName || '',
+                                                        customerPhone: record.customerPhone || record.ownerPhone || '',
+                                                        notes: record.notes || ''
+                                                    });
+                                                    setIntakeSearch('');
+                                                    setShowIntakeResults(false);
+                                                }}
+                                                style={{
+                                                    padding: '12px 16px',
+                                                    borderBottom: `1px solid ${theme.border}`,
+                                                    cursor: 'pointer',
+                                                    transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = isDark ? '#334155' : '#f1f5f9'}
+                                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                            >
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div>
+                                                        <div style={{ fontWeight: '600', color: theme.text, fontSize: '14px' }}>{record.plateNumber}</div>
+                                                        <div style={{ fontSize: '12px', color: theme.textSecondary }}>
+                                                            {record.customerName || record.ownerName || 'Unknown'}
+                                                            {record.customerPhone && ` • ${record.customerPhone}`}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ fontSize: '12px', color: '#3b82f6', fontWeight: '500' }}>
+                                                        {record.vehicleType || record.category || 'Vehicle'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            )}
+                            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
+                                💡 Search to auto-fill from existing vehicle records
+                            </div>
+                        </div>
+                        
+                        <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '16px', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', color: theme.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Or Enter Manually</span>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Plate Number *</label>
+                            <input type="text" value={parkingForm.plateNumber} onChange={(e) => setParkingForm({...parkingForm, plateNumber: e.target.value.toUpperCase()})} placeholder="e.g. KAA 123X" style={inputStyle} required />
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Parking Space *</label>
+                            <select value={parkingForm.parkingSpaceId} onChange={(e) => setParkingForm({...parkingForm, parkingSpaceId: e.target.value})} style={selectStyle}>
+                                <option value="">Select a parking space...</option>
+                                {getAvailableSpaces().map(space => (
+                                    <option key={space.id} value={space.id}>{space.name} ({space.zone}) - {space.type}</option>
+                                ))}
+                            </select>
+                            {selectedSpace && (
+                                <div style={{ marginTop: '8px', padding: '8px 12px', backgroundColor: '#dbeafe', borderRadius: '4px', fontSize: '13px', color: '#1d4ed8' }}>
+                                    Pre-selected: <strong>{selectedSpace.name}</strong>
+                                </div>
+                            )}
+                            {getAvailableSpaces().length === 0 && parkingSettings.parkingSpaces?.length > 0 && (
+                                <div style={{ marginTop: '8px', fontSize: '12px', color: '#f59e0b' }}>All parking spaces are occupied</div>
+                            )}
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Vehicle Type</label>
+                            <select value={parkingForm.vehicleType} onChange={(e) => setParkingForm({...parkingForm, vehicleType: e.target.value})} style={selectStyle}>
+                                {VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Customer Name</label>
+                            <input type="text" value={parkingForm.customerName} onChange={(e) => setParkingForm({...parkingForm, customerName: e.target.value})} placeholder="Optional" style={inputStyle} />
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Phone Number *</label>
+                            <input type="tel" value={parkingForm.customerPhone} onChange={(e) => setParkingForm({...parkingForm, customerPhone: e.target.value})} placeholder="e.g. 0712345678" style={inputStyle} required />
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Notes</label>
+                            <textarea value={parkingForm.notes} onChange={(e) => setParkingForm({...parkingForm, notes: e.target.value})} placeholder="Any special notes..." style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }} />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowAddModal(false)}>Cancel</button>
+                            <button style={{ ...btnPrimary, backgroundColor: '#10b981' }} onClick={handleAddVehicle} disabled={actionLoading || !parkingForm.plateNumber || !parkingForm.parkingSpaceId || !parkingForm.customerPhone}>
+                                {actionLoading ? 'Adding...' : 'Add to Parking'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Apply Fee Modal */}
+            {showApplyFeeModal && selectedVehicle && (
+                <div style={modalOverlay} onClick={() => { setShowApplyFeeModal(false); setSelectedVehicle(null); }}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Apply Parking Fee</h2>
+                            <button onClick={() => { setShowApplyFeeModal(false); setSelectedVehicle(null); }} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ padding: '16px', backgroundColor: isDark ? '#0f172a' : '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: `1px solid ${isDark ? '#334155' : '#bae6fd'}` }}>
+                            <div style={{ fontSize: '24px', fontWeight: 'bold', color: theme.text, letterSpacing: '1px' }}>{selectedVehicle.plateNumber}</div>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '4px' }}>
+                                {selectedVehicle.vehicleType} • Parked: {new Date(selectedVehicle.parkedAt).toLocaleString()}
+                            </div>
+                            {(() => {
+                                const now = new Date();
+                                const entry = new Date(selectedVehicle.parkedAt);
+                                const diffMs = now - entry;
+                                const hours = Math.floor(diffMs / (1000 * 60 * 60));
+                                const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                                return (
+                                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#3b82f6', marginTop: '8px' }}>
+                                        Duration: {hours}h {minutes}m
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Select Parking Rate *</label>
+                            <select value={selectedRate} onChange={(e) => setSelectedRate(e.target.value)} style={selectStyle}>
+                                <option value="">Choose a rate...</option>
+                                {parkingSettings.rates?.map((rate, index) => (
+                                    <option key={index} value={rate.name || rate.id}>{rate.name} - {getCurrency()} {rate.amount} ({rate.type})</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {selectedRate && (() => {
+                            const rate = parkingSettings.rates?.find(r => r.name === selectedRate || r.id === selectedRate);
+                            if (rate) {
+                                const services = window.FirebaseServices;
+                                const feeCalc = services.parkingService.calculateFee(selectedVehicle.parkedAt, parkingSettings.rates, selectedRate);
+                                return (
+                                    <div style={{ padding: '20px', backgroundColor: isDark ? '#064e3b' : '#ecfdf5', borderRadius: '8px', marginBottom: '20px', textAlign: 'center', border: `1px solid ${isDark ? '#065f46' : '#a7f3d0'}` }}>
+                                        <div style={{ fontSize: '13px', color: isDark ? '#a7f3d0' : '#065f46', marginBottom: '4px' }}>Calculated Fee</div>
+                                        <div style={{ fontSize: '32px', fontWeight: 'bold', color: isDark ? '#10b981' : '#059669' }}>
+                                            {getCurrency()} {feeCalc.fee.toLocaleString()}
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: isDark ? '#6ee7b7' : '#047857', marginTop: '4px' }}>{feeCalc.duration}</div>
+                                    </div>
+                                );
+                            }
+                            return null;
+                        })()}
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => { setShowApplyFeeModal(false); setSelectedVehicle(null); }}>Cancel</button>
+                            <button style={{ ...btnPrimary, backgroundColor: '#10b981' }} onClick={handleApplyFeeAndRelease} disabled={actionLoading || !selectedRate}>
+                                {actionLoading ? 'Processing...' : 'Apply Fee & Release'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Fee Settings Modal */}
+            {showSettingsModal && (
+                <div style={modalOverlay} onClick={() => setShowSettingsModal(false)}>
+                    <div style={{ ...modalContent, maxWidth: '600px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Parking Fee Settings</h2>
+                            <button onClick={() => setShowSettingsModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ marginBottom: '24px' }}>
+                            <h3 style={{ fontSize: '14px', fontWeight: '600', color: theme.text, marginBottom: '16px' }}>Fee Rates</h3>
+                            
+                            {parkingSettings.rates?.map((rate, index) => (
+                                <div key={index} style={{ padding: '16px', backgroundColor: theme.bgSecondary, borderRadius: '8px', marginBottom: '12px', border: `1px solid ${theme.border}` }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '12px', alignItems: 'end' }}>
+                                        <div>
+                                            <label style={{ ...labelStyle, fontSize: '12px' }}>Rate Name</label>
+                                            <input type="text" value={rate.name} onChange={(e) => {
+                                                const newRates = [...parkingSettings.rates];
+                                                newRates[index].name = e.target.value;
+                                                setParkingSettings({...parkingSettings, rates: newRates});
+                                            }} placeholder="e.g. Hourly" style={{ ...inputStyle, padding: '8px 12px' }} />
+                                        </div>
+                                        <div>
+                                            <label style={{ ...labelStyle, fontSize: '12px' }}>Amount ({getCurrency()})</label>
+                                            <input type="number" value={rate.amount} onChange={(e) => {
+                                                const newRates = [...parkingSettings.rates];
+                                                newRates[index].amount = parseFloat(e.target.value) || 0;
+                                                setParkingSettings({...parkingSettings, rates: newRates});
+                                            }} placeholder="0" style={{ ...inputStyle, padding: '8px 12px' }} />
+                                        </div>
+                                        <div>
+                                            <label style={{ ...labelStyle, fontSize: '12px' }}>Type</label>
+                                            <select value={rate.type} onChange={(e) => {
+                                                const newRates = [...parkingSettings.rates];
+                                                newRates[index].type = e.target.value;
+                                                setParkingSettings({...parkingSettings, rates: newRates});
+                                            }} style={{ ...selectStyle, padding: '8px 12px' }}>
+                                                <option value="hourly">Per Hour</option>
+                                                <option value="daily">Per Day</option>
+                                                <option value="flat">Flat Rate</option>
+                                                <option value="overnight">Overnight</option>
+                                                <option value="member">Member Rate</option>
+                                            </select>
+                                        </div>
+                                        <button onClick={() => {
+                                            const newRates = parkingSettings.rates.filter((_, i) => i !== index);
+                                            setParkingSettings({...parkingSettings, rates: newRates});
+                                        }} style={{ background: '#fee2e2', border: 'none', color: '#dc2626', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer', fontWeight: '500' }}>✕</button>
+                                    </div>
+                                </div>
+                            ))}
+
+                            <button onClick={() => {
+                                const newRates = [...(parkingSettings.rates || []), { id: `rate_${Date.now()}`, name: '', amount: 0, type: 'hourly' }];
+                                setParkingSettings({...parkingSettings, rates: newRates});
+                            }} style={{ width: '100%', padding: '12px', border: `2px dashed ${theme.border}`, backgroundColor: 'transparent', color: theme.textSecondary, borderRadius: '8px', cursor: 'pointer', fontWeight: '500' }}>+ Add Rate</button>
+                        </div>
+
+                        <div style={{ marginBottom: '24px' }}>
+                            <h3 style={{ fontSize: '14px', fontWeight: '600', color: theme.text, marginBottom: '16px' }}>Default Settings</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div>
+                                    <label style={labelStyle}>Grace Period (minutes)</label>
+                                    <input type="number" value={parkingSettings.gracePeriod || 15} onChange={(e) => setParkingSettings({...parkingSettings, gracePeriod: parseInt(e.target.value) || 0})} style={inputStyle} />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Default Rate</label>
+                                    <select value={parkingSettings.defaultRate || ''} onChange={(e) => setParkingSettings({...parkingSettings, defaultRate: e.target.value})} style={selectStyle}>
+                                        <option value="">Select default...</option>
+                                        {parkingSettings.rates?.map((rate, index) => (
+                                            <option key={index} value={rate.name || rate.id}>{rate.name} - {getCurrency()} {rate.amount}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowSettingsModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleSaveSettings} disabled={actionLoading}>
+                                {actionLoading ? 'Saving...' : 'Save Settings'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Single Space Modal */}
+            {showAddSpaceModal && (
+                <div style={modalOverlay} onClick={() => setShowAddSpaceModal(false)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Add Parking Space</h2>
+                            <button onClick={() => setShowAddSpaceModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Space Name *</label>
+                            <input type="text" value={spaceForm.name} onChange={(e) => setSpaceForm({...spaceForm, name: e.target.value.toUpperCase()})} placeholder="e.g. A1, B5, VIP1" style={inputStyle} required />
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Zone</label>
+                            <select value={spaceForm.zone} onChange={(e) => setSpaceForm({...spaceForm, zone: e.target.value})} style={selectStyle}>
+                                {ZONES.map(z => <option key={z} value={z}>Zone {z}</option>)}
+                            </select>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Space Type</label>
+                            <select value={spaceForm.type} onChange={(e) => setSpaceForm({...spaceForm, type: e.target.value})} style={selectStyle}>
+                                {SPACE_TYPES.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowAddSpaceModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleAddSpace} disabled={actionLoading || !spaceForm.name}>
+                                {actionLoading ? 'Adding...' : 'Add Space'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Bulk Add Spaces Modal */}
+            {showBulkAddModal && (
+                <div style={modalOverlay} onClick={() => setShowBulkAddModal(false)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Bulk Add Parking Spaces</h2>
+                            <button onClick={() => setShowBulkAddModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
+                        </div>
+
+                        <div style={{ padding: '16px', backgroundColor: isDark ? '#0f172a' : '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: `1px solid ${isDark ? '#334155' : '#bae6fd'}` }}>
+                            <div style={{ fontSize: '13px', color: theme.textSecondary }}>
+                                This will create multiple spaces automatically. For example, setting prefix "A" with numbers 1-10 will create: A1, A2, A3... A10
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Zone</label>
+                                <select value={bulkForm.zone} onChange={(e) => setBulkForm({...bulkForm, zone: e.target.value})} style={selectStyle}>
+                                    {ZONES.map(z => <option key={z} value={z}>Zone {z}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Prefix</label>
+                                <input type="text" value={bulkForm.prefix} onChange={(e) => setBulkForm({...bulkForm, prefix: e.target.value.toUpperCase()})} placeholder="e.g. A, B, VIP" style={inputStyle} />
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Start Number</label>
+                                <input type="number" min="1" value={bulkForm.startNum} onChange={(e) => setBulkForm({...bulkForm, startNum: parseInt(e.target.value) || 1})} style={inputStyle} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>End Number</label>
+                                <input type="number" min="1" value={bulkForm.endNum} onChange={(e) => setBulkForm({...bulkForm, endNum: parseInt(e.target.value) || 10})} style={inputStyle} />
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={labelStyle}>Space Type</label>
+                            <select value={bulkForm.type} onChange={(e) => setBulkForm({...bulkForm, type: e.target.value})} style={selectStyle}>
+                                {SPACE_TYPES.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                        </div>
+
+                        <div style={{ padding: '12px', backgroundColor: isDark ? '#064e3b' : '#ecfdf5', borderRadius: '8px', marginBottom: '20px', border: `1px solid ${isDark ? '#065f46' : '#a7f3d0'}` }}>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#10b981' : '#059669' }}>
+                                Preview: {bulkForm.prefix}{bulkForm.startNum} to {bulkForm.prefix}{bulkForm.endNum} ({bulkForm.endNum - bulkForm.startNum + 1} spaces)
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button style={btnSecondary} onClick={() => setShowBulkAddModal(false)}>Cancel</button>
+                            <button style={btnPrimary} onClick={handleBulkAddSpaces} disabled={actionLoading || bulkForm.startNum >= bulkForm.endNum}>
+                                {actionLoading ? 'Creating...' : `Create ${bulkForm.endNum - bulkForm.startNum + 1} Spaces`}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Alert Modal */}
+            <AlertModal
+                isOpen={alertModal.isOpen}
+                onClose={closeAlert}
+                title={alertModal.title}
+                message={alertModal.message}
+                type={alertModal.type}
+                onConfirm={alertModal.onConfirm}
+                showCancel={alertModal.showCancel}
+            />
         </div>
     );
 }
@@ -18525,6 +20505,161 @@ function WashBaysContent() {
     const [historyPage, setHistoryPage] = useState(1);
     const [historyPageSize, setHistoryPageSize] = useState(25);
     const [historyJumpPage, setHistoryJumpPage] = useState('');
+
+    // Print Wash Bay Gate Pass function
+    const printWashGatePass = (record) => {
+        const branding = getBrandingForReceipts();
+        const serviceName = record.vehicle?.service?.name || record.vehicle?.service || '-';
+        const servicePrice = record.vehicle?.servicePrice || record.vehicle?.service?.price || 0;
+        const currentUser = window.FirebaseServices?.auth?.currentUser;
+        const releasedBy = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Staff';
+        
+        const receiptContent = `
+            <html>
+            <head>
+                <title>Gate Pass - Wash Bay</title>
+                <style>
+                    @page { margin: 0; size: 80mm auto; }
+                    body { 
+                        font-family: 'Courier New', monospace; 
+                        font-size: 12px; 
+                        line-height: 1.4;
+                        padding: 10px;
+                        margin: 0;
+                        width: 80mm;
+                    }
+                    .header { text-align: center; margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+                    .title { font-size: 16px; font-weight: bold; margin: 5px 0; }
+                    .subtitle { font-size: 11px; color: #666; }
+                    .section { margin: 10px 0; padding: 8px 0; border-bottom: 1px dashed #000; }
+                    .row { display: flex; justify-content: space-between; margin: 4px 0; }
+                    .label { color: #666; }
+                    .value { font-weight: bold; text-align: right; }
+                    .gate-pass-title { 
+                        text-align: center; 
+                        font-size: 18px; 
+                        font-weight: bold; 
+                        background: #000; 
+                        color: white; 
+                        padding: 8px; 
+                        margin: 10px 0;
+                        letter-spacing: 2px;
+                    }
+                    .plate-number {
+                        text-align: center;
+                        font-size: 24px;
+                        font-weight: bold;
+                        padding: 10px;
+                        border: 2px solid #000;
+                        margin: 10px 0;
+                        letter-spacing: 3px;
+                    }
+                    .status-cleared {
+                        text-align: center;
+                        background: #d1fae5;
+                        color: #059669;
+                        padding: 8px;
+                        font-weight: bold;
+                        border-radius: 4px;
+                        margin: 10px 0;
+                    }
+                    .footer { text-align: center; margin-top: 15px; font-size: 10px; color: #666; }
+                    @media print {
+                        body { width: 80mm; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="title">${branding.companyName || 'EcoSpark'}</div>
+                    <div class="subtitle">${branding.address || ''}</div>
+                    <div class="subtitle">${branding.phone || ''}</div>
+                </div>
+                
+                <div class="gate-pass-title">🚗 GATE PASS</div>
+                
+                <div class="plate-number">${record.vehicle?.plateNumber || 'Unknown'}</div>
+                
+                <div class="status-cleared">✓ VEHICLE CLEARED TO EXIT</div>
+                
+                <div class="section">
+                    <div class="row">
+                        <span class="label">Customer:</span>
+                        <span class="value">${record.vehicle?.customerName || 'Walk-in'}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Phone:</span>
+                        <span class="value">${record.vehicle?.phone || record.vehicle?.customerPhone || '-'}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Vehicle Type:</span>
+                        <span class="value">${record.vehicle?.vehicleType || '-'}</span>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <div class="row">
+                        <span class="label">Service:</span>
+                        <span class="value">${serviceName}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Bay:</span>
+                        <span class="value">${record.bayName || record.bayId || '-'}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Amount:</span>
+                        <span class="value">${branding.currencySymbol || 'KES'} ${Number(servicePrice).toLocaleString()}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Payment:</span>
+                        <span class="value" style="color: #059669;">✓ PAID</span>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <div class="row">
+                        <span class="label">Washed By:</span>
+                        <span class="value">${record.vehicle?.washedBy || record.completedBy || '-'}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Completed:</span>
+                        <span class="value">${record.endTime ? new Date(record.endTime).toLocaleString() : '-'}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Duration:</span>
+                        <span class="value">${record.duration ? record.duration + ' min' : '-'}</span>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <div class="row">
+                        <span class="label">Released By:</span>
+                        <span class="value">${releasedBy}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Release Time:</span>
+                        <span class="value">${new Date().toLocaleString()}</span>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>Thank you for choosing ${branding.companyName || 'EcoSpark'}!</p>
+                    <p>Present this pass at the gate to exit</p>
+                    <p style="margin-top: 10px; font-size: 9px;">Receipt ID: WGP-${Date.now().toString(36).toUpperCase()}</p>
+                </div>
+            </body>
+            </html>
+        `;
+        
+        const printWindow = window.open('', '_blank', 'width=350,height=600');
+        if (printWindow) {
+            printWindow.document.write(receiptContent);
+            printWindow.document.close();
+            setTimeout(() => {
+                printWindow.print();
+            }, 250);
+        }
+    };
     
     // Debug logging on mount
     useEffect(() => {
@@ -19872,6 +22007,7 @@ function WashBaysContent() {
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Payment</th>
+                                <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Gate Pass</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -20041,6 +22177,15 @@ function WashBaysContent() {
                                                     In Progress
                                                 </span>
                                             </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                <span style={{
+                                                    fontSize: '11px',
+                                                    color: theme.textSecondary,
+                                                    fontStyle: 'italic'
+                                                }}>
+                                                    -
+                                                </span>
+                                            </td>
                                         </tr>
                                     )});
                                 }
@@ -20148,7 +22293,7 @@ function WashBaysContent() {
                                                       record.vehicle?.category?.toLowerCase() === 'carpet' ||
                                                       serviceName?.toLowerCase().includes('carpet')) 
                                                         ? '📦 Storage' 
-                                                        : '🅿️ Parking'}
+                                                        : '💰 Billing'}
                                                 </span>
                                             )}
                                         </td>
@@ -20174,6 +22319,38 @@ function WashBaysContent() {
                                                     color: '#d97706'
                                                 }}>
                                                     💰 {getBrandingForReceipts().currencySymbol || 'KES'} {servicePrice.toLocaleString()} Pending
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            {isPaid ? (
+                                                <button
+                                                    onClick={() => printWashGatePass(record)}
+                                                    style={{
+                                                        padding: '6px 12px',
+                                                        backgroundColor: '#10b981',
+                                                        color: 'white',
+                                                        border: 'none',
+                                                        borderRadius: '6px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '600',
+                                                        cursor: 'pointer',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px',
+                                                        margin: '0 auto'
+                                                    }}
+                                                    title="Print gate pass for cleared vehicle"
+                                                >
+                                                    🎫 Gate Pass
+                                                </button>
+                                            ) : (
+                                                <span style={{
+                                                    fontSize: '11px',
+                                                    color: theme.textSecondary,
+                                                    fontStyle: 'italic'
+                                                }}>
+                                                    Pay first
                                                 </span>
                                             )}
                                         </td>
@@ -21774,6 +23951,7 @@ function Dashboard({ onModuleClick }) {
     // Separate wash and garage revenue
     const washRevenueToday = todayInvoices.filter(inv => inv.source === 'wash').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
     const garageRevenueToday = todayInvoices.filter(inv => inv.source === 'garage').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
+    const parkingRevenueToday = todayInvoices.filter(inv => inv.source === 'parking').reduce((sum, inv) => sum + (inv.totalAmount || inv.total || inv.amount || 0), 0);
     
     const inProgressCount = vehicles.filter(v => v.status === 'in-progress').length;
     
@@ -21941,7 +24119,8 @@ function Dashboard({ onModuleClick }) {
                 { label: 'Paid', value: paidRevenueToday, color: '#10b981' },
                 { label: 'Pending', value: pendingRevenueToday, color: '#f59e0b' },
                 { label: 'Wash', value: washRevenueToday, color: '#3b82f6' },
-                { label: 'Garage', value: garageRevenueToday, color: '#8b5cf6' }
+                { label: 'Garage', value: garageRevenueToday, color: '#8b5cf6' },
+                { label: 'Parking', value: parkingRevenueToday, color: '#f97316' }
             ],
             icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
             color: '#10b981'
@@ -24137,7 +26316,10 @@ function BillingModule() {
     const [garageServices, setGarageServices] = useState([]);
     
     // Revenue tracking
-    const [revenueToday, setRevenueToday] = useState({ total: 0, wash: 0, garage: 0, other: 0 });
+    const [revenueToday, setRevenueToday] = useState({ total: 0, wash: 0, garage: 0, parking: 0, other: 0 });
+    
+    // Total collected by source (all time)
+    const [totalBySource, setTotalBySource] = useState({ wash: 0, garage: 0, parking: 0, other: 0 });
     
     // Expenses integration
     const [expenses, setExpenses] = useState([]);
@@ -24312,15 +26494,42 @@ function BillingModule() {
             .filter(inv => inv.source === 'garage')
             .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
         
+        const parkingRevenue = todayPaidInvoices
+            .filter(inv => inv.source === 'parking')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        
         const otherRevenue = todayPaidInvoices
-            .filter(inv => inv.source !== 'wash' && inv.source !== 'garage')
+            .filter(inv => inv.source !== 'wash' && inv.source !== 'garage' && inv.source !== 'parking')
             .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
         
         setRevenueToday({
-            total: washRevenue + garageRevenue + otherRevenue,
+            total: washRevenue + garageRevenue + parkingRevenue + otherRevenue,
             wash: washRevenue,
             garage: garageRevenue,
+            parking: parkingRevenue,
             other: otherRevenue
+        });
+        
+        // Calculate total collected by source (all time - paid invoices only)
+        const paidInvoices = invoices.filter(inv => inv.paymentStatus === 'paid');
+        const totalWash = paidInvoices
+            .filter(inv => inv.source === 'wash')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        const totalGarage = paidInvoices
+            .filter(inv => inv.source === 'garage')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        const totalParking = paidInvoices
+            .filter(inv => inv.source === 'parking')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        const totalOther = paidInvoices
+            .filter(inv => inv.source !== 'wash' && inv.source !== 'garage' && inv.source !== 'parking')
+            .reduce((sum, inv) => sum + (inv.totalAmount || inv.paidAmount || 0), 0);
+        
+        setTotalBySource({
+            wash: totalWash,
+            garage: totalGarage,
+            parking: totalParking,
+            other: totalOther
         });
     }, [invoices]);
 
@@ -26013,6 +28222,11 @@ function BillingModule() {
                                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>Garage:</span>
                                 <span style={{ fontSize: '12px', fontWeight: '700', color: '#8b5cf6' }}>{formatCurrency(revenueToday.garage)}</span>
                             </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                <span style={{ fontSize: '11px', color: theme.textSecondary }}>Parking:</span>
+                                <span style={{ fontSize: '12px', fontWeight: '700', color: '#f59e0b' }}>{formatCurrency(revenueToday.parking)}</span>
+                            </div>
                             {revenueToday.other > 0 && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                     <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#6b7280' }}></span>
@@ -26041,7 +28255,24 @@ function BillingModule() {
                     <div style={{ fontSize: '28px' }}>🏦</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '24px', fontWeight: '800', color: theme.text }}>{formatCurrency(billingStats.totalCollected)}</div>
-                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Total Collected</div>
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600', marginBottom: '8px' }}>Total Collected</div>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#3b82f6' }}></span>
+                                <span style={{ fontSize: '10px', color: theme.textSecondary }}>Wash:</span>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: '#3b82f6' }}>{formatCurrency(totalBySource.wash)}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                                <span style={{ fontSize: '10px', color: theme.textSecondary }}>Garage:</span>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: '#8b5cf6' }}>{formatCurrency(totalBySource.garage)}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                <span style={{ fontSize: '10px', color: theme.textSecondary }}>Parking:</span>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: '#f59e0b' }}>{formatCurrency(totalBySource.parking)}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -26179,6 +28410,7 @@ function BillingModule() {
                         <option value="all">All Sources</option>
                         <option value="garage">Garage</option>
                         <option value="wash">Car Wash</option>
+                        <option value="parking">Parking</option>
                         <option value="other">Other</option>
                     </select>
                     <select
@@ -29231,6 +31463,7 @@ function StaffManagement() {
         { id: 'service-packages', label: 'Service Packages', icon: '📦', category: 'Services' },
         { id: 'garage-management', label: 'Garage Management', icon: '🏢', category: 'Operations' },
         { id: 'wash-bays', label: 'Wash Bays', icon: '💧', category: 'Operations' },
+        { id: 'parking', label: 'Parking Management', icon: '🅿️', category: 'Operations' },
         { id: 'equipment', label: 'Equipment Management', icon: '🔧', category: 'Operations' },
         { id: 'customers', label: 'Customer Management', icon: '👥', category: 'Customer Relations' },
         { id: 'fleet', label: 'Fleet Accounts', icon: '🚛', category: 'Customer Relations' },
@@ -30450,7 +32683,9 @@ function InventoryModule() {
             showMessage('error', 'Please enter a valid usage amount');
             return;
         }
-        const result = await inventoryService.recordUsage(usageModal.id, Number(usageAmount), usageNotes);
+        const currentUser = window.currentUserProfile;
+        const releasedBy = currentUser ? { name: currentUser.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'Unknown', id: currentUser.id || currentUser.uid } : { name: 'Unknown', id: null };
+        const result = await inventoryService.recordUsage(usageModal.id, Number(usageAmount), usageNotes, releasedBy);
         if (result.success) {
             showMessage('success', `Recorded usage of ${usageAmount} ${usageModal.unit || 'units'}`);
             loadItems();
@@ -31063,6 +33298,7 @@ function InventoryModule() {
                                                 <thead>
                                                     <tr style={{ background: '#f9fafb' }}>
                                                         <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Date</th>
+                                                        <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Released By</th>
                                                         <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Used</th>
                                                         <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Remaining</th>
                                                         <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Notes</th>
@@ -31072,9 +33308,10 @@ function InventoryModule() {
                                                     {[...usageHistory].sort((a, b) => new Date(b.date) - new Date(a.date)).map((usage, idx) => (
                                                         <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
                                                             <td style={{ padding: '10px 12px', color: '#374151' }}>{new Date(usage.date).toLocaleDateString()}</td>
+                                                            <td style={{ padding: '10px 12px', color: '#374151', fontWeight: '500' }}>{usage.releasedBy?.name || '—'}</td>
                                                             <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#374151' }}>-{usage.amount}</td>
                                                             <td style={{ padding: '10px 12px', textAlign: 'right', color: '#6b7280' }}>{usage.remainingQty ?? '—'}</td>
-                                                            <td style={{ padding: '10px 12px', color: '#9ca3af', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usage.notes || '—'}</td>
+                                                            <td style={{ padding: '10px 12px', color: '#9ca3af', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usage.notes || '—'}</td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -31114,9 +33351,9 @@ function InventoryModule() {
                                         <div class="stat"><div class="stat-value">${analysis.daysUntilEmpty ?? '—'}</div><div class="stat-label">Days Left</div></div>
                                     </div>
                                     <p class="section-title">History</p>
-                                    <table><tr><th>Date</th><th class="right">Used</th><th class="right">Remaining</th><th>Notes</th></tr>
+                                    <table><tr><th>Date</th><th>Released By</th><th class="right">Used</th><th class="right">Remaining</th><th>Notes</th></tr>
                                     ${[...usageHistory].sort((a, b) => new Date(b.date) - new Date(a.date)).map(u => 
-                                        `<tr><td>${new Date(u.date).toLocaleDateString()}</td><td class="right">-${u.amount}</td><td class="right">${u.remainingQty ?? '—'}</td><td>${u.notes || '—'}</td></tr>`
+                                        `<tr><td>${new Date(u.date).toLocaleDateString()}</td><td>${u.releasedBy?.name || '—'}</td><td class="right">-${u.amount}</td><td class="right">${u.remainingQty ?? '—'}</td><td>${u.notes || '—'}</td></tr>`
                                     ).join('')}
                                     </table>
                                     <div class="footer">Generated ${new Date().toLocaleDateString()} • ${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
@@ -35578,6 +37815,7 @@ function ContentArea({ activeModule, onModuleClick, settingsTab }) {
                 {activeModule === 'vehicle-intake-all' && <VehicleIntakeAll onBackClick={() => onModuleClick('vehicle-intake')} />}
                 {activeModule === 'service-packages' && <ServicePackages />}
                 {activeModule === 'equipment' && <EquipmentManagement />}
+                {activeModule === 'parking' && <ParkingManagement />}
                 {activeModule === 'customers' && <CustomerManagement />}
                 {activeModule === 'fleet' && <FleetAccounts />}
                 {activeModule === 'garage-management' && <GarageManagement />}
