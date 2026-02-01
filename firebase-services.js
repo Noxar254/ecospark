@@ -5502,18 +5502,14 @@ export const parkingService = {
       if (snapshot.exists()) {
         return { success: true, data: snapshot.data() };
       }
-      // Return default settings
+      // Return default settings - empty rates so user must configure their own
       return { 
         success: true, 
         data: {
           enabled: true,
-          rates: [
-            { id: 'hourly', name: 'Hourly Rate', amount: 100, type: 'hourly', minHours: 1 },
-            { id: 'daily', name: 'Daily Rate', amount: 500, type: 'daily' },
-            { id: 'overnight', name: 'Overnight', amount: 300, type: 'flat' }
-          ],
+          rates: [],
           gracePeriod: 15,
-          defaultRate: 'hourly',
+          defaultRate: '',
           parkingSpaces: []
         }
       };
@@ -5540,11 +5536,12 @@ export const parkingService = {
       if (snapshot.exists()) {
         callback(snapshot.data());
       } else {
+        // Empty rates - user must configure their own rates in settings
         callback({
           enabled: true,
-          rates: [{ id: 'hourly', name: 'Hourly Rate', amount: 100, type: 'hourly', minHours: 1 }],
+          rates: [],
           gracePeriod: 15,
-          defaultRate: 'hourly',
+          defaultRate: '',
           parkingSpaces: []
         });
       }
@@ -5832,17 +5829,16 @@ export const parkingService = {
     const remainingMins = totalMinutes % 60;
     
     if (!rates || rates.length === 0) {
-      // Default: charge per hour + pro-rated minutes
-      const hourlyRate = 100;
-      const minuteRate = hourlyRate / 60;
-      const fee = Math.ceil(wholeHours * hourlyRate + remainingMins * minuteRate);
+      // No rates configured - return 0 fee with message to configure rates
       return { 
-        fee, 
+        fee: 0, 
         duration: `${wholeHours}h ${remainingMins}m`, 
-        rateUsed: 'Default', 
+        rateUsed: 'No Rate Configured', 
         hours: wholeHours, 
         minutes: remainingMins,
-        totalMinutes 
+        totalMinutes,
+        rateType: 'none',
+        rateAmount: 0
       };
     }
 
@@ -5886,7 +5882,8 @@ export const parkingService = {
           hours: wholeHours, 
           minutes: remainingMins,
           totalMinutes,
-          rateType: rate.type 
+          rateType: rate.type,
+          rateAmount: rateAmount
         };
       }
     }
@@ -5927,7 +5924,8 @@ export const parkingService = {
       hours: wholeHours, 
       minutes: remainingMins,
       totalMinutes,
-      rateType: defaultRate.type 
+      rateType: defaultRate.type,
+      rateAmount: rateAmount
     };
   },
 

@@ -10468,6 +10468,7 @@ function ParkingManagement() {
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked At</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Est. Fee</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
                                 </tr>
                             </thead>
@@ -10477,6 +10478,11 @@ function ParkingManagement() {
                                     // Re-calculate fee on each render (triggered by clockTick for real-time updates)
                                     const feeCalc = services.parkingService.calculateFee(vehicle.parkedAt, parkingSettings.rates);
                                     const parkedTime = new Date(vehicle.parkedAt);
+                                    // Determine fee status - applied if fee was sent to billing
+                                    const isFeeApplied = vehicle.feeAppliedAt || vehicle.parkingFee > 0;
+                                    // Check if meets minimum threshold (at least 1 hour or configured grace period)
+                                    const gracePeriodMinutes = parkingSettings.gracePeriod || 15;
+                                    const meetsThreshold = feeCalc.totalMinutes >= gracePeriodMinutes;
                                     return (
                                         <tr key={vehicle.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '14px 16px' }}>
@@ -10507,7 +10513,45 @@ function ParkingManagement() {
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                                 <div style={{ fontWeight: '600', color: '#059669', fontSize: '15px' }}>{getCurrency()} {feeCalc.fee.toLocaleString()}</div>
-                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{feeCalc.rateUsed} {feeCalc.rateType ? `(${feeCalc.rateType})` : ''}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                                    {feeCalc.rateUsed} {feeCalc.rateType ? `(${feeCalc.rateType === 'minute' ? `${getCurrency()} ${feeCalc.rateAmount}/min` : feeCalc.rateType === 'hourly' ? `${getCurrency()} ${feeCalc.rateAmount}/hr` : feeCalc.rateType === 'daily' ? `${getCurrency()} ${feeCalc.rateAmount}/day` : feeCalc.rateType})` : ''}
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                {isFeeApplied ? (
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        backgroundColor: '#d1fae5', 
+                                                        color: '#059669', 
+                                                        borderRadius: '4px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        ✓ Applied
+                                                    </span>
+                                                ) : meetsThreshold ? (
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        backgroundColor: '#fef3c7', 
+                                                        color: '#d97706', 
+                                                        borderRadius: '4px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        Pending
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        backgroundColor: isDark ? '#334155' : '#f1f5f9', 
+                                                        color: theme.textSecondary, 
+                                                        borderRadius: '4px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        Not Applied
+                                                    </span>
+                                                )}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                 <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
