@@ -10467,8 +10467,9 @@ function ParkingManagement() {
                                     <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Customer</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked At</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parking Status</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Est. Fee</th>
-                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Fee Status</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
                                 </tr>
                             </thead>
@@ -10510,6 +10511,31 @@ function ParkingManagement() {
                                                 <span style={{ fontWeight: '600', color: feeCalc.hours >= 24 ? '#dc2626' : feeCalc.hours >= 6 ? '#f59e0b' : '#10b981', fontSize: '14px' }}>
                                                     {feeCalc.duration}
                                                 </span>
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                {meetsThreshold ? (
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        backgroundColor: '#d1fae5', 
+                                                        color: '#059669', 
+                                                        borderRadius: '4px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        🟢 Active
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ 
+                                                        padding: '4px 10px', 
+                                                        backgroundColor: isDark ? '#334155' : '#f1f5f9', 
+                                                        color: theme.textSecondary, 
+                                                        borderRadius: '4px', 
+                                                        fontSize: '11px', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        ⏳ Inactive
+                                                    </span>
+                                                )}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                                 <div style={{ fontWeight: '600', color: '#059669', fontSize: '15px' }}>{getCurrency()} {feeCalc.fee.toLocaleString()}</div>
