@@ -9343,6 +9343,7 @@ function ParkingManagement() {
     const [historySearch, setHistorySearch] = useState('');
     const [historyDateFilter, setHistoryDateFilter] = useState('all'); // 'all', 'today', 'yesterday', 'week', 'month'
     const [parkingInvoices, setParkingInvoices] = useState([]); // For tracking payment status
+    const [clockTick, setClockTick] = useState(0); // For real-time fee updates
     
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1);
@@ -9510,6 +9511,14 @@ function ParkingManagement() {
             });
         }
     }, [parkedVehicles, parkingHistory]);
+
+    // Real-time clock tick for auto-updating parking fees every 30 seconds
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setClockTick(prev => prev + 1);
+        }, 30000); // Update every 30 seconds
+        return () => clearInterval(timer);
+    }, []);
 
     // Get currency from branding
     const getCurrency = () => getBrandingForReceipts().currencySymbol || 'KES';
@@ -10465,12 +10474,9 @@ function ParkingManagement() {
                             <tbody>
                                 {filteredVehicles.map(vehicle => {
                                     const services = window.FirebaseServices;
+                                    // Re-calculate fee on each render (triggered by clockTick for real-time updates)
                                     const feeCalc = services.parkingService.calculateFee(vehicle.parkedAt, parkingSettings.rates);
                                     const parkedTime = new Date(vehicle.parkedAt);
-                                    const now = new Date();
-                                    const diffMs = now - parkedTime;
-                                    const hours = Math.floor(diffMs / (1000 * 60 * 60));
-                                    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
                                     return (
                                         <tr key={vehicle.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '14px 16px' }}>
@@ -10495,13 +10501,13 @@ function ParkingManagement() {
                                                 <div style={{ fontSize: '11px', color: theme.textSecondary }}>{parkedTime.toLocaleDateString()}</div>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                <span style={{ fontWeight: '600', color: hours >= 24 ? '#dc2626' : hours >= 6 ? '#f59e0b' : '#10b981', fontSize: '14px' }}>
-                                                    {hours > 0 ? `${hours}h ` : ''}{mins}m
+                                                <span style={{ fontWeight: '600', color: feeCalc.hours >= 24 ? '#dc2626' : feeCalc.hours >= 6 ? '#f59e0b' : '#10b981', fontSize: '14px' }}>
+                                                    {feeCalc.duration}
                                                 </span>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                                 <div style={{ fontWeight: '600', color: '#059669', fontSize: '15px' }}>{getCurrency()} {feeCalc.fee.toLocaleString()}</div>
-                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{feeCalc.rateUsed}</div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>{feeCalc.rateUsed} {feeCalc.rateType ? `(${feeCalc.rateType})` : ''}</div>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                 <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
@@ -10641,6 +10647,7 @@ function ParkingManagement() {
                                     <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Phone</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Released</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Rate Applied</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Fee</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Actions</th>
@@ -10669,6 +10676,14 @@ function ParkingManagement() {
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.text }}>
                                                 {record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                                                <div style={{ fontSize: '13px', fontWeight: '500', color: theme.text }}>
+                                                    {record.rateUsed || 'Standard'}
+                                                </div>
+                                                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                                                    {getCurrency()} {(record.defaultRate || record.hourlyRate || record.parkingFee || 0).toLocaleString()}
+                                                </div>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>
                                                 {getCurrency()} {(record.parkingFee || 0).toLocaleString()}
@@ -11135,6 +11150,7 @@ function ParkingManagement() {
                                                 newRates[index].type = e.target.value;
                                                 setParkingSettings({...parkingSettings, rates: newRates});
                                             }} style={{ ...selectStyle, padding: '8px 12px' }}>
+                                                <option value="minute">Per Minute</option>
                                                 <option value="hourly">Per Hour</option>
                                                 <option value="daily">Per Day</option>
                                                 <option value="flat">Flat Rate</option>
@@ -13272,6 +13288,15 @@ function FleetAccounts() {
         
         .vehicle-row { background: #f8fafc; font-weight: 600; }
         .vehicle-row td { border-bottom: 1px solid #e2e8f0; padding: 10px; }
+        
+        /* Hide browser print headers/footers with URL */
+        @page { 
+            margin: 10mm; 
+            size: A4;
+        }
+        @page :first { margin-top: 10mm; }
+        @page :left { margin-left: 10mm; }
+        @page :right { margin-right: 10mm; }
         .wash-row td { padding-left: 24px; color: #475569; }
         .subtotal-row { background: #f8fafc; }
         .subtotal-row td { font-weight: 600; border-top: 1px solid #e2e8f0; }
@@ -13289,7 +13314,11 @@ function FleetAccounts() {
         
         .footer { margin-top: 30px; padding-top: 16px; border-top: 1px solid #e2e8f0; text-align: center; color: #64748b; font-size: 10px; }
         
-        @media print { body { padding: 10px; } }
+        @media print { 
+            body { padding: 10px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            /* This helps some browsers hide headers/footers */
+            html { margin: 0; padding: 0; }
+        }
     </style>
 </head>
 <body>
@@ -31481,10 +31510,60 @@ function StaffManagement() {
     // Check if an email is super admin
     const isSuperAdminEmail = (email) => email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
 
-    const [staffForm, setStaffForm] = useState({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
-    const [userForm, setUserForm] = useState({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+    const [staffForm, setStaffForm] = useState({ staffId: '', name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
+    const [userForm, setUserForm] = useState({ userId: '', email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
     const [editUserForm, setEditUserForm] = useState({ displayName: '', role: 'staff', phone: '', permissions: {} });
     const [userStep, setUserStep] = useState(1);
+
+    // Generate Staff ID in format SXX-YYYY (e.g., S01-2026)
+    const generateStaffId = () => {
+        const currentYear = new Date().getFullYear();
+        // Find the highest staff number from current year
+        const currentYearStaff = staffList.filter(s => {
+            if (!s.staffId) return false;
+            const match = s.staffId.match(/^S(\d+)-(\d{4})$/);
+            return match && match[2] === String(currentYear);
+        });
+        let nextNumber = 1;
+        if (currentYearStaff.length > 0) {
+            const maxNumber = Math.max(...currentYearStaff.map(s => {
+                const match = s.staffId?.match(/^S(\d+)-/);
+                const num = match ? parseInt(match[1], 10) : 0;
+                return isNaN(num) ? 0 : num;
+            }));
+            nextNumber = maxNumber + 1;
+        }
+        return `S${String(nextNumber).padStart(2, '0')}-${currentYear}`;
+    };
+
+    // Generate User ID in format UXX-YYYY (e.g., U01-2026)
+    const generateUserId = () => {
+        const currentYear = new Date().getFullYear();
+        // Find the highest user number from current year
+        const currentYearUsers = usersList.filter(u => {
+            if (!u.userId) return false;
+            const match = u.userId.match(/^U(\d+)-(\d{4})$/);
+            return match && match[2] === String(currentYear);
+        });
+        let nextNumber = 1;
+        if (currentYearUsers.length > 0) {
+            const maxNumber = Math.max(...currentYearUsers.map(u => {
+                const match = u.userId?.match(/^U(\d+)-/);
+                const num = match ? parseInt(match[1], 10) : 0;
+                return isNaN(num) ? 0 : num;
+            }));
+            nextNumber = maxNumber + 1;
+        }
+        return `U${String(nextNumber).padStart(2, '0')}-${currentYear}`;
+    };
+
+    // Auto-generate User ID when opening add user modal
+    const openAddUserModal = () => {
+        const newId = generateUserId();
+        setUserForm({ userId: newId, email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+        setUserStep(1);
+        setShowAddUserModal(true);
+    };
 
     const STAFF_ROLES = ['Washer', 'Detailer', 'Supervisor', 'Technician', 'Cleaner', 'Attendant'];
     const DEPARTMENTS = ['Operations', 'Garage', 'Administration', 'Customer Service'];
@@ -31656,7 +31735,7 @@ function StaffManagement() {
     };
 
     const filteredStaff = staffList.filter(s => {
-        const matchesSearch = s.name?.toLowerCase().includes(searchTerm.toLowerCase()) || s.role?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesSearch = s.name?.toLowerCase().includes(searchTerm.toLowerCase()) || s.role?.toLowerCase().includes(searchTerm.toLowerCase()) || s.staffId?.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesStatus = filterStatus === 'all' || s.status === filterStatus;
         return matchesSearch && matchesStatus;
     });
@@ -31691,7 +31770,7 @@ function StaffManagement() {
                 );
                 setSuccessMessage('Staff added successfully');
                 setShowAddStaffModal(false);
-                setStaffForm({ name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
+                setStaffForm({ staffId: '', name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
             } else { setError(result.error); }
         } catch (err) { setError(err.message); }
         finally { setActionLoading(false); }
@@ -31707,6 +31786,7 @@ function StaffManagement() {
             const authResult = await services.authService.signUp(userForm.email, userForm.password);
             if (authResult.success) {
                 await services.userService.createUserProfile(authResult.user.uid, { 
+                    userId: userForm.userId,
                     email: userForm.email, 
                     displayName: userForm.displayName || userForm.email.split('@')[0], 
                     role: userForm.role, 
@@ -31727,7 +31807,7 @@ function StaffManagement() {
                 setSuccessMessage('User created successfully');
                 setShowAddUserModal(false);
                 setUserStep(1);
-                setUserForm({ email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
+                setUserForm({ userId: '', email: '', password: '', displayName: '', role: 'staff', phone: '', permissions: {} });
             } else { setError(authResult.error); }
         } catch (err) { setError(err.message); }
         finally { setActionLoading(false); }
@@ -32007,8 +32087,15 @@ function StaffManagement() {
 
     const openEditStaff = (staff) => {
         setSelectedItem(staff);
-        setStaffForm({ name: staff.name || '', role: staff.role || 'Washer', phone: staff.phone || '', email: staff.email || '', department: staff.department || 'Operations', hireDate: staff.hireDate || '', hourlyRate: staff.hourlyRate || '', emergencyContact: staff.emergencyContact || '', notes: staff.notes || '' });
+        setStaffForm({ staffId: staff.staffId || '', name: staff.name || '', role: staff.role || 'Washer', phone: staff.phone || '', email: staff.email || '', department: staff.department || 'Operations', hireDate: staff.hireDate || '', hourlyRate: staff.hourlyRate || '', emergencyContact: staff.emergencyContact || '', notes: staff.notes || '' });
         setShowEditModal(true);
+    };
+
+    // Auto-generate Staff ID when opening add modal
+    const openAddStaffModal = () => {
+        const newId = generateStaffId();
+        setStaffForm({ staffId: newId, name: '', role: 'Washer', phone: '', email: '', department: 'Operations', hireDate: new Date().toISOString().split('T')[0], hourlyRate: '', emergencyContact: '', notes: '' });
+        setShowAddStaffModal(true);
     };
 
     const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${theme.border}`, fontSize: '14px', backgroundColor: theme.inputBg, color: theme.text, boxSizing: 'border-box' };
@@ -32055,20 +32142,21 @@ function StaffManagement() {
                         {showSuperAdmin ? '👁️ Visible' : '👁️‍🗨️'}
                     </button>
                 )}
-                {activeTab === 'staff' && canCreate('staff') && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add Staff</button>}
-                {activeTab === 'users' && canCreate('staff') && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add User</button>}
+                {activeTab === 'staff' && canCreate('staff') && <button onClick={openAddStaffModal} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add Staff</button>}
+                {activeTab === 'users' && canCreate('staff') && <button onClick={openAddUserModal} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>+ Add User</button>}
             </div>
 
             {activeTab === 'staff' && (
                 <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
                     {loading ? <div style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>Loading...</div> : filteredStaff.length === 0 ? (
-                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>👷</div><p style={{ color: theme.textSecondary }}>No staff found</p>{canCreate('staff') && <button onClick={() => setShowAddStaffModal(true)} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add Staff</button>}</div>
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>👷</div><p style={{ color: theme.textSecondary }}>No staff found</p>{canCreate('staff') && <button onClick={openAddStaffModal} style={{ padding: '10px 20px', background: '#3b82f6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add Staff</button>}</div>
                     ) : (
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Name</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Department</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Phone</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
+                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Staff ID</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Name</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Department</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Phone</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
                             <tbody>
                                 {filteredStaff.map(staff => (
                                     <tr key={staff.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                        <td style={{ padding: '12px 16px', color: theme.text }}><span style={{ fontFamily: 'monospace', fontWeight: '600', padding: '4px 8px', background: '#3b82f620', color: '#3b82f6', borderRadius: '4px', fontSize: '13px' }}>{staff.staffId || '-'}</span></td>
                                         <td style={{ padding: '12px 16px', color: theme.text }}><div style={{ fontWeight: '600' }}>{staff.name}</div>{staff.email && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{staff.email}</div>}</td>
                                         <td style={{ padding: '12px 16px', color: theme.text }}>{staff.role}</td>
                                         <td style={{ padding: '12px 16px', color: theme.textSecondary }}>{staff.department || '-'}</td>
@@ -32090,15 +32178,16 @@ function StaffManagement() {
             {activeTab === 'users' && (
                 <div style={{ background: theme.bg, border: `1px solid ${theme.border}` }}>
                     {filteredUsers.length === 0 ? (
-                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div><p style={{ color: theme.textSecondary }}>No users found</p>{canCreate('staff') && <button onClick={() => setShowAddUserModal(true)} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add User</button>}</div>
+                        <div style={{ padding: '60px', textAlign: 'center' }}><div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div><p style={{ color: theme.textSecondary }}>No users found</p>{canCreate('staff') && <button onClick={openAddUserModal} style={{ padding: '10px 20px', background: '#8b5cf6', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', marginTop: '12px' }}>Add User</button>}</div>
                     ) : (
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>User</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Description</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
+                            <thead><tr style={{ background: theme.bgSecondary }}><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>User ID</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>User</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Role</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Description</th><th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Status</th><th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: '600', color: theme.text, borderBottom: `1px solid ${theme.border}` }}>Actions</th></tr></thead>
                             <tbody>
                                 {filteredUsers.map(user => {
                                     const roleInfo = USER_ROLES.find(r => r.id === user.role) || { label: user.role, desc: '' };
                                     return (
                                         <tr key={user.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                                            <td style={{ padding: '12px 16px', color: theme.text }}><span style={{ fontFamily: 'monospace', fontWeight: '600', padding: '4px 8px', background: '#8b5cf620', color: '#8b5cf6', borderRadius: '4px', fontSize: '13px' }}>{user.userId || '-'}</span></td>
                                             <td style={{ padding: '12px 16px', color: theme.text }}><div style={{ fontWeight: '600' }}>{user.displayName || user.email?.split('@')[0]}</div><div style={{ fontSize: '12px', color: theme.textSecondary }}>{user.email}</div></td>
                                             <td style={{ padding: '12px 16px' }}><span style={{ padding: '4px 10px', background: user.role === 'admin' ? '#8b5cf620' : '#3b82f620', color: user.role === 'admin' ? '#8b5cf6' : '#3b82f6', fontWeight: '600', fontSize: '12px' }}>{roleInfo.label}</span></td>
                                             <td style={{ padding: '12px 16px', color: theme.textSecondary, fontSize: '13px' }}>{roleInfo.desc}</td>
@@ -32318,15 +32407,18 @@ function StaffManagement() {
 
             {showAddStaffModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowAddStaffModal(false)}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '12px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
-                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', borderRadius: '12px 12px 0 0' }}><h2 style={{ margin: 0, color: theme.text }}>Add Staff Member</h2><button onClick={() => setShowAddStaffModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button></div>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between' }}><h2 style={{ margin: 0, color: theme.text }}>Add Staff Member</h2><button onClick={() => setShowAddStaffModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button></div>
                         <form onSubmit={handleAddStaff} style={{ padding: '20px' }}>
                             <div style={{ display: 'grid', gap: '16px' }}>
-                                <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} required /></div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Role</label><select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} style={{...inputStyle, borderRadius: '8px'}}>{STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select></div><div><label style={labelStyle}>Department</label><select value={staffForm.department} onChange={e => setStaffForm({...staffForm, department: e.target.value})} style={{...inputStyle, borderRadius: '8px'}}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div></div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Phone</label><input type="tel" value={staffForm.phone} onChange={e => setStaffForm({...staffForm, phone: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} /></div><div><label style={labelStyle}>Email</label><input type="email" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} /></div></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                                    <div><label style={labelStyle}>Staff ID</label><input type="text" value={staffForm.staffId} readOnly style={{...inputStyle, background: '#3b82f620', color: '#3b82f6', fontWeight: '600', fontFamily: 'monospace', cursor: 'not-allowed'}} /></div>
+                                    <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={inputStyle} required /></div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Role</label><select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} style={inputStyle}>{STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select></div><div><label style={labelStyle}>Department</label><select value={staffForm.department} onChange={e => setStaffForm({...staffForm, department: e.target.value})} style={inputStyle}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Phone</label><input type="tel" value={staffForm.phone} onChange={e => setStaffForm({...staffForm, phone: e.target.value})} style={inputStyle} /></div><div><label style={labelStyle}>Email</label><input type="email" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} style={inputStyle} /></div></div>
                             </div>
-                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowAddStaffModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Adding...' : 'Add Staff'}</button></div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowAddStaffModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer' }}>{actionLoading ? 'Adding...' : 'Add Staff'}</button></div>
                         </form>
                     </div>
                 </div>
@@ -32334,7 +32426,7 @@ function StaffManagement() {
 
             {showAddUserModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => { setShowAddUserModal(false); setUserStep(1); }}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '800px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '800px', maxHeight: '90vh', overflow: 'auto', margin: '20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
                         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h2 style={{ margin: 0, color: theme.text, fontSize: '20px' }}>Add System User</h2>
@@ -32350,25 +32442,26 @@ function StaffManagement() {
 
                         {userStep === 1 && (
                             <div style={{ padding: '24px' }}>
-                                <div style={{ background: '#fef3c7', border: '1px solid #fbbf24', padding: '12px 16px', marginBottom: '24px', fontSize: '13px', color: '#92400e', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <div style={{ background: '#fef3c7', border: '1px solid #fbbf24', padding: '12px 16px', marginBottom: '24px', fontSize: '13px', color: '#92400e', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <span style={{ fontSize: '18px' }}>💡</span>
                                     <span><strong>Note:</strong> System users can log into the application with assigned role-based permissions.</span>
                                 </div>
                                 <div style={{ display: 'grid', gap: '20px' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                        <div><label style={labelStyle}>Email Address *</label><input type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="user@example.com" required /></div>
-                                        <div><label style={labelStyle}>Password *</label><input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="Min 6 characters" required /></div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr', gap: '16px' }}>
+                                        <div><label style={labelStyle}>User ID</label><input type="text" value={userForm.userId} readOnly style={{...inputStyle, background: '#8b5cf620', color: '#8b5cf6', fontWeight: '600', fontFamily: 'monospace', cursor: 'not-allowed'}} /></div>
+                                        <div><label style={labelStyle}>Email Address *</label><input type="email" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} style={inputStyle} placeholder="user@example.com" required /></div>
+                                        <div><label style={labelStyle}>Password *</label><input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} style={inputStyle} placeholder="Min 6 characters" required /></div>
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                        <div><label style={labelStyle}>Display Name</label><input type="text" value={userForm.displayName} onChange={e => setUserForm({...userForm, displayName: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="Full name" /></div>
-                                        <div><label style={labelStyle}>Phone Number</label><input type="tel" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} style={{...inputStyle, borderRadius: '8px'}} placeholder="+1234567890" /></div>
+                                        <div><label style={labelStyle}>Display Name</label><input type="text" value={userForm.displayName} onChange={e => setUserForm({...userForm, displayName: e.target.value})} style={inputStyle} placeholder="Full name" /></div>
+                                        <div><label style={labelStyle}>Phone Number</label><input type="tel" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} style={inputStyle} placeholder="+1234567890" /></div>
                                     </div>
                                     <div>
                                         <label style={labelStyle}>Role Preset</label>
                                         <p style={{ margin: '0 0 12px', color: theme.textSecondary, fontSize: '12px' }}>Select a role to apply default permissions (can be customized in next step)</p>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
                                             {USER_ROLES.map(r => (
-                                                <button key={r.id} type="button" onClick={() => applyRolePreset(r.id)} style={{ padding: '12px', border: `2px solid ${userForm.role === r.id ? '#8b5cf6' : theme.border}`, background: userForm.role === r.id ? '#f3e8ff' : 'transparent', borderRadius: '10px', cursor: 'pointer', textAlign: 'left' }}>
+                                                <button key={r.id} type="button" onClick={() => applyRolePreset(r.id)} style={{ padding: '12px', border: `2px solid ${userForm.role === r.id ? '#8b5cf6' : theme.border}`, background: userForm.role === r.id ? '#f3e8ff' : 'transparent', cursor: 'pointer', textAlign: 'left' }}>
                                                     <div style={{ fontWeight: '600', color: userForm.role === r.id ? '#8b5cf6' : theme.text, fontSize: '14px' }}>{r.label}</div>
                                                     <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{r.desc}</div>
                                                 </button>
@@ -32377,8 +32470,8 @@ function StaffManagement() {
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ flex: 1, padding: '14px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>Cancel</button>
-                                    <button type="button" onClick={() => { if (userForm.email && userForm.password && userForm.password.length >= 6) { if (Object.keys(userForm.permissions).length === 0) applyRolePreset(userForm.role); setUserStep(2); } else { setError('Email and password (min 6 chars) required'); } }} style={{ flex: 1, padding: '14px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: 'pointer', borderRadius: '8px' }}>Next: Set Permissions →</button>
+                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ flex: 1, padding: '14px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', fontWeight: '500' }}>Cancel</button>
+                                    <button type="button" onClick={() => { if (userForm.email && userForm.password && userForm.password.length >= 6) { if (Object.keys(userForm.permissions).length === 0) applyRolePreset(userForm.role); setUserStep(2); } else { setError('Email and password (min 6 chars) required'); } }} style={{ flex: 1, padding: '14px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Next: Set Permissions →</button>
                                 </div>
                             </div>
                         )}
@@ -32391,12 +32484,12 @@ function StaffManagement() {
                                         <p style={{ margin: '4px 0 0', color: theme.textSecondary, fontSize: '13px' }}>Configure which modules this user can access and what actions they can perform</p>
                                     </div>
                                     <div style={{ display: 'flex', gap: '8px' }}>
-                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true, 'change-status': true }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Select All</button>
-                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false, 'change-status': false }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '6px' }}>Clear All</button>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: true, create: true, edit: true, delete: true, 'change-status': true }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer' }}>Select All</button>
+                                        <button type="button" onClick={() => { const perms = {}; ALL_MODULES.forEach(m => perms[m.id] = { view: false, create: false, edit: false, delete: false, 'change-status': false }); setUserForm(prev => ({ ...prev, permissions: perms })); }} style={{ padding: '8px 12px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer' }}>Clear All</button>
                                     </div>
                                 </div>
 
-                                <div style={{ maxHeight: '400px', overflow: 'auto', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
+                                <div style={{ maxHeight: '400px', overflow: 'auto', border: `1px solid ${theme.border}` }}>
                                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                         <thead style={{ position: 'sticky', top: 0, background: theme.bgSecondary, zIndex: 1 }}>
                                             <tr>
@@ -32432,10 +32525,10 @@ function StaffManagement() {
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-                                    <button type="button" onClick={() => setUserStep(1)} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>← Back</button>
+                                    <button type="button" onClick={() => setUserStep(1)} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', fontWeight: '500' }}>← Back</button>
                                     <div style={{ flex: 1 }}></div>
-                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px', fontWeight: '500' }}>Cancel</button>
-                                    <button type="button" onClick={handleAddUser} disabled={actionLoading} style={{ padding: '14px 32px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Creating User...' : '✓ Create User'}</button>
+                                    <button type="button" onClick={() => { setShowAddUserModal(false); setUserStep(1); }} style={{ padding: '14px 24px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', fontWeight: '500' }}>Cancel</button>
+                                    <button type="button" onClick={handleAddUser} disabled={actionLoading} style={{ padding: '14px 32px', border: 'none', background: '#8b5cf6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer' }}>{actionLoading ? 'Creating User...' : '✓ Create User'}</button>
                                 </div>
                             </div>
                         )}
@@ -32446,7 +32539,7 @@ function StaffManagement() {
             {/* Edit User Modal */}
             {showEditUserModal && selectedUser && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowEditUserModal(false)}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '900px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '900px', maxHeight: '90vh', overflow: 'auto', margin: '20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
                         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h2 style={{ margin: 0, color: theme.text, fontSize: '20px' }}>Edit User: {selectedUser.displayName || selectedUser.email}</h2>
@@ -32556,15 +32649,18 @@ function StaffManagement() {
 
             {showEditModal && selectedItem && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowEditModal(false)}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', borderRadius: '12px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '500px', maxHeight: '90vh', overflow: 'auto', margin: '20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
                         <div style={{ padding: '20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between' }}><h2 style={{ margin: 0, color: theme.text }}>Edit Staff</h2><button onClick={() => setShowEditModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: theme.textSecondary }}>×</button></div>
                         <form onSubmit={handleUpdateStaff} style={{ padding: '20px' }}>
                             <div style={{ display: 'grid', gap: '16px' }}>
-                                <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={inputStyle} required /></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                                    <div><label style={labelStyle}>Staff ID</label><input type="text" value={staffForm.staffId || selectedItem.staffId || '-'} readOnly style={{...inputStyle, background: '#3b82f620', color: '#3b82f6', fontWeight: '600', fontFamily: 'monospace', cursor: 'not-allowed'}} /></div>
+                                    <div><label style={labelStyle}>Name *</label><input type="text" value={staffForm.name} onChange={e => setStaffForm({...staffForm, name: e.target.value})} style={inputStyle} required /></div>
+                                </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Role</label><select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} style={inputStyle}>{STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select></div><div><label style={labelStyle}>Department</label><select value={staffForm.department} onChange={e => setStaffForm({...staffForm, department: e.target.value})} style={inputStyle}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div></div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><label style={labelStyle}>Phone</label><input type="tel" value={staffForm.phone} onChange={e => setStaffForm({...staffForm, phone: e.target.value})} style={inputStyle} /></div><div><label style={labelStyle}>Email</label><input type="email" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} style={inputStyle} /></div></div>
                             </div>
-                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowEditModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer', borderRadius: '8px' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer', borderRadius: '8px' }}>{actionLoading ? 'Saving...' : 'Save'}</button></div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}><button type="button" onClick={() => setShowEditModal(false)} style={{ flex: 1, padding: '12px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.text, cursor: 'pointer' }}>Cancel</button><button type="submit" disabled={actionLoading} style={{ flex: 1, padding: '12px', border: 'none', background: '#3b82f6', color: 'white', fontWeight: '600', cursor: actionLoading ? 'wait' : 'pointer' }}>{actionLoading ? 'Saving...' : 'Save'}</button></div>
                         </form>
                     </div>
                 </div>
@@ -32572,7 +32668,7 @@ function StaffManagement() {
 
             {showConfirmModal && confirmAction && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }} onClick={() => { setShowConfirmModal(false); setConfirmAction(null); }}>
-                    <div style={{ background: theme.bg, width: '100%', maxWidth: '400px', margin: '20px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ background: theme.bg, width: '100%', maxWidth: '400px', margin: '20px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
                         <div style={{ padding: '24px 24px 0' }}>
                             <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: confirmAction.type === 'delete' ? '#fef2f2' : '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>{confirmAction.type === 'delete' ? '🗑️' : '⚠️'}</div>
                             <h3 style={{ margin: '0 0 8px', textAlign: 'center', color: theme.text, fontSize: '18px', fontWeight: '600' }}>{confirmAction.title}</h3>
@@ -34820,6 +34916,13 @@ function SystemSettings({ initialTab = 'profile' }) {
                             
                             {/* User Info */}
                             <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                                {userProfile?.userId && (
+                                    <div style={{ marginBottom: '8px' }}>
+                                        <span style={{ fontFamily: 'monospace', fontWeight: '700', padding: '6px 14px', background: '#8b5cf620', color: '#8b5cf6', borderRadius: '6px', fontSize: '14px', letterSpacing: '1px' }}>
+                                            ID: {userProfile.userId}
+                                        </span>
+                                    </div>
+                                )}
                                 <div style={{ fontSize: '20px', fontWeight: '700', color: theme.text, marginBottom: '4px' }}>
                                     {userProfile?.displayName || userProfile?.email?.split('@')[0] || 'User'}
                                 </div>

@@ -5818,37 +5818,117 @@ export const parkingService = {
     }
   },
 
-  // Calculate parking fee
+  // Calculate parking fee with minute-based precision
   calculateFee(parkedAt, rates, selectedRateId = null) {
     const now = new Date();
     const parkedTime = new Date(parkedAt);
     const diffMs = now - parkedTime;
+    const totalMinutes = Math.floor(diffMs / (1000 * 60));
     const diffHours = diffMs / (1000 * 60 * 60);
     const diffDays = diffMs / (1000 * 60 * 60 * 24);
     
+    // Calculate hours and minutes separately for display
+    const wholeHours = Math.floor(diffHours);
+    const remainingMins = totalMinutes % 60;
+    
     if (!rates || rates.length === 0) {
-      return { fee: Math.ceil(diffHours) * 100, duration: `${Math.ceil(diffHours)} hours`, rateUsed: 'Default', hours: Math.ceil(diffHours) };
+      // Default: charge per hour + pro-rated minutes
+      const hourlyRate = 100;
+      const minuteRate = hourlyRate / 60;
+      const fee = Math.ceil(wholeHours * hourlyRate + remainingMins * minuteRate);
+      return { 
+        fee, 
+        duration: `${wholeHours}h ${remainingMins}m`, 
+        rateUsed: 'Default', 
+        hours: wholeHours, 
+        minutes: remainingMins,
+        totalMinutes 
+      };
     }
 
     // If specific rate selected, use it
     if (selectedRateId) {
       const rate = rates.find(r => r.id === selectedRateId || r.name === selectedRateId);
       if (rate) {
-        let units = 1;
-        if (rate.type === 'hourly') units = Math.max(1, Math.ceil(diffHours));
-        else if (rate.type === 'daily') units = Math.max(1, Math.ceil(diffDays));
-        else units = 1;
-        return { fee: units * (rate.amount || rate.price || 0), duration: `${units} ${rate.type === 'hourly' ? 'hour' : rate.type === 'daily' ? 'day' : 'unit'}(s)`, rateUsed: rate.name, hours: Math.ceil(diffHours) };
+        let fee = 0;
+        let durationStr = '';
+        const rateAmount = rate.amount || rate.price || 0;
+        
+        if (rate.type === 'minute') {
+          // Calculate based on total minutes
+          fee = Math.ceil(totalMinutes * rateAmount);
+          durationStr = `${wholeHours}h ${remainingMins}m`;
+        } else if (rate.type === 'hourly') {
+          // Calculate based on hours + pro-rated minutes
+          const minuteRate = rateAmount / 60;
+          fee = Math.ceil(wholeHours * rateAmount + remainingMins * minuteRate);
+          durationStr = `${wholeHours}h ${remainingMins}m`;
+        } else if (rate.type === 'daily') {
+          const wholeDays = Math.floor(diffDays);
+          const remainingHrs = Math.floor((diffDays - wholeDays) * 24);
+          fee = Math.ceil(wholeDays * rateAmount + (remainingHrs / 24) * rateAmount);
+          durationStr = `${wholeDays}d ${remainingHrs}h`;
+        } else if (rate.type === 'flat' || rate.type === 'member' || rate.type === 'overnight') {
+          // Flat/member/overnight rate - single charge regardless of time
+          fee = rateAmount;
+          durationStr = `${wholeHours}h ${remainingMins}m`;
+        } else {
+          // Default hourly calculation
+          const minuteRate = rateAmount / 60;
+          fee = Math.ceil(wholeHours * rateAmount + remainingMins * minuteRate);
+          durationStr = `${wholeHours}h ${remainingMins}m`;
+        }
+        
+        return { 
+          fee, 
+          duration: durationStr, 
+          rateUsed: rate.name, 
+          hours: wholeHours, 
+          minutes: remainingMins,
+          totalMinutes,
+          rateType: rate.type 
+        };
       }
     }
 
     // Auto-select default or first rate
     const defaultRate = rates.find(r => r.isDefault) || rates[0];
-    let units = 1;
-    if (defaultRate.type === 'hourly') units = Math.max(1, Math.ceil(diffHours));
-    else if (defaultRate.type === 'daily') units = Math.max(1, Math.ceil(diffDays));
+    const rateAmount = defaultRate.amount || defaultRate.price || 0;
+    let fee = 0;
+    let durationStr = '';
     
-    return { fee: units * (defaultRate.amount || defaultRate.price || 0), duration: `${units} ${defaultRate.type === 'hourly' ? 'hour' : defaultRate.type === 'daily' ? 'day' : 'unit'}(s)`, rateUsed: defaultRate.name, hours: Math.ceil(diffHours) };
+    if (defaultRate.type === 'minute') {
+      // Calculate based on total minutes
+      fee = Math.ceil(totalMinutes * rateAmount);
+      durationStr = `${wholeHours}h ${remainingMins}m`;
+    } else if (defaultRate.type === 'hourly') {
+      // Calculate based on hours + pro-rated minutes
+      const minuteRate = rateAmount / 60;
+      fee = Math.ceil(wholeHours * rateAmount + remainingMins * minuteRate);
+      durationStr = `${wholeHours}h ${remainingMins}m`;
+    } else if (defaultRate.type === 'daily') {
+      const wholeDays = Math.floor(diffDays);
+      const remainingHrs = Math.floor((diffDays - wholeDays) * 24);
+      fee = Math.ceil(wholeDays * rateAmount + (remainingHrs / 24) * rateAmount);
+      durationStr = `${wholeDays}d ${remainingHrs}h`;
+    } else if (defaultRate.type === 'flat' || defaultRate.type === 'member' || defaultRate.type === 'overnight') {
+      fee = rateAmount;
+      durationStr = `${wholeHours}h ${remainingMins}m`;
+    } else {
+      const minuteRate = rateAmount / 60;
+      fee = Math.ceil(wholeHours * rateAmount + remainingMins * minuteRate);
+      durationStr = `${wholeHours}h ${remainingMins}m`;
+    }
+    
+    return { 
+      fee, 
+      duration: durationStr, 
+      rateUsed: defaultRate.name, 
+      hours: wholeHours, 
+      minutes: remainingMins,
+      totalMinutes,
+      rateType: defaultRate.type 
+    };
   },
 
   // Apply parking fee
