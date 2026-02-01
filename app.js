@@ -30340,6 +30340,7 @@ function InventoryModule() {
     const [message, setMessage] = useState({ type: '', text: '' });
     const [formData, setFormData] = useState({ name: '', category: '', quantity: '', minStock: '', unit: '', cost: '', usageAlertDays: '7' });
     const [showExportMenu, setShowExportMenu] = useState(false);
+    const [usageHistoryModal, setUsageHistoryModal] = useState(null);
     const exportMenuRef = React.useRef(null);
 
     const { inventoryService } = window.FirebaseServices;
@@ -30695,6 +30696,7 @@ function InventoryModule() {
                                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
                                                 {canEdit('inventory') && <button onClick={() => setUsageModal(item)} style={{ padding: '6px 10px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>Use</button>}
+                                                <button onClick={() => setUsageHistoryModal(item)} style={{ padding: '6px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#166534', fontWeight: '600' }}>History</button>
                                                 <button onClick={() => setViewItem(item)} style={{ padding: '6px 10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#2563eb' }}>View</button>
                                                 {canEdit('inventory') && <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '11px' }}>Edit</button>}
                                                 {canDelete('inventory') && <button onClick={() => setDeleteConfirm(item)} style={{ padding: '6px 10px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '11px' }}>Del</button>}
@@ -30943,6 +30945,191 @@ function InventoryModule() {
                     </div>
                 </div>
             )}
+
+            {/* Usage History Modal with Predictive Analysis */}
+            {usageHistoryModal && (() => {
+                const item = usageHistoryModal;
+                const usageHistory = item.usageHistory || [];
+                
+                // Calculate predictive analysis
+                const calculatePredictiveAnalysis = () => {
+                    if (usageHistory.length === 0) {
+                        return { dailyAvg: 0, monthlyAvg: 0, weeklyAvg: 0, daysUntilEmpty: null, reorderDate: null, trend: 'stable' };
+                    }
+                    
+                    const sortedHistory = [...usageHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+                    const dates = sortedHistory.map(u => new Date(u.date));
+                    const oldestDate = new Date(Math.min(...dates));
+                    const newestDate = new Date(Math.max(...dates));
+                    const daysDiff = Math.max(1, Math.ceil((newestDate - oldestDate) / (1000 * 60 * 60 * 24)));
+                    const totalUsage = usageHistory.reduce((sum, u) => sum + (u.amount || 0), 0);
+                    const dailyAvg = totalUsage / daysDiff;
+                    const weeklyAvg = dailyAvg * 7;
+                    const monthlyAvg = dailyAvg * 30;
+                    const daysUntilEmpty = dailyAvg > 0 ? Math.floor(item.quantity / dailyAvg) : null;
+                    const daysUntilMinStock = dailyAvg > 0 ? Math.floor((item.quantity - item.minStock) / dailyAvg) : null;
+                    const reorderDate = daysUntilMinStock !== null && daysUntilMinStock > 0 
+                        ? new Date(Date.now() + daysUntilMinStock * 24 * 60 * 60 * 1000).toLocaleDateString()
+                        : (item.quantity <= item.minStock ? 'Reorder Now' : null);
+                    
+                    const now = new Date();
+                    const last7Days = usageHistory.filter(u => (now - new Date(u.date)) / (1000 * 60 * 60 * 24) <= 7).reduce((sum, u) => sum + (u.amount || 0), 0);
+                    const prev7Days = usageHistory.filter(u => { const d = (now - new Date(u.date)) / (1000 * 60 * 60 * 24); return d > 7 && d <= 14; }).reduce((sum, u) => sum + (u.amount || 0), 0);
+                    let trend = 'stable';
+                    if (prev7Days > 0) {
+                        const change = ((last7Days - prev7Days) / prev7Days) * 100;
+                        if (change > 15) trend = 'increasing';
+                        else if (change < -15) trend = 'decreasing';
+                    }
+                    
+                    const monthlyUsage = {};
+                    usageHistory.forEach(u => {
+                        const date = new Date(u.date);
+                        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                        monthlyUsage[monthKey] = (monthlyUsage[monthKey] || 0) + (u.amount || 0);
+                    });
+                    
+                    return { dailyAvg, weeklyAvg, monthlyAvg, daysUntilEmpty, reorderDate, trend, monthlyUsage, totalUsage };
+                };
+                
+                const analysis = calculatePredictiveAnalysis();
+                
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+                        <div style={{ background: '#fff', width: '100%', maxWidth: '600px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.12)' }}>
+                            {/* Header */}
+                            <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>Usage History</h3>
+                                    <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#6b7280' }}>{item.name} • {item.quantity} {item.unit} in stock</p>
+                                </div>
+                                <button onClick={() => setUsageHistoryModal(null)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#9ca3af', padding: '4px' }}>×</button>
+                            </div>
+                            
+                            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+                                {/* Prediction Summary */}
+                                <div style={{ marginBottom: '24px' }}>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Predictive Analysis</p>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1px', background: '#e5e7eb', border: '1px solid #e5e7eb' }}>
+                                        <div style={{ padding: '14px 12px', background: '#fff', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>{analysis.dailyAvg.toFixed(1)}</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#6b7280' }}>Daily Avg</p>
+                                        </div>
+                                        <div style={{ padding: '14px 12px', background: '#fff', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>{analysis.monthlyAvg.toFixed(1)}</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#6b7280' }}>Monthly Avg</p>
+                                        </div>
+                                        <div style={{ padding: '14px 12px', background: '#fff', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: analysis.daysUntilEmpty && analysis.daysUntilEmpty <= 7 ? '#b91c1c' : '#1f2937' }}>{analysis.daysUntilEmpty ?? '—'}</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#6b7280' }}>Days Left</p>
+                                        </div>
+                                        <div style={{ padding: '14px 12px', background: '#fff', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#1f2937', textTransform: 'capitalize' }}>{analysis.trend}</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#6b7280' }}>Trend</p>
+                                        </div>
+                                    </div>
+                                    {analysis.reorderDate && (
+                                        <p style={{ margin: '10px 0 0', fontSize: '12px', color: analysis.reorderDate === 'Reorder Now' ? '#b91c1c' : '#6b7280' }}>
+                                            {analysis.reorderDate === 'Reorder Now' ? '⚠ Stock at or below minimum level' : `Reorder by ${analysis.reorderDate}`}
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Monthly Breakdown */}
+                                {analysis.monthlyUsage && Object.keys(analysis.monthlyUsage).length > 0 && (
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <p style={{ margin: '0 0 12px', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Monthly Breakdown</p>
+                                        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+                                            {Object.entries(analysis.monthlyUsage).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 6).map(([month, amount]) => (
+                                                <div key={month} style={{ padding: '10px 14px', background: '#f9fafb', border: '1px solid #e5e7eb', minWidth: '80px', textAlign: 'center', flexShrink: 0 }}>
+                                                    <p style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: '#1f2937' }}>{amount}</p>
+                                                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#9ca3af' }}>{new Date(month + '-01').toLocaleDateString('en', { month: 'short' })}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Usage History Table */}
+                                <div>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>History ({usageHistory.length})</p>
+                                    {usageHistory.length === 0 ? (
+                                        <div style={{ padding: '32px 20px', textAlign: 'center', background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                                            <p style={{ margin: 0, color: '#6b7280', fontSize: '13px' }}>No usage recorded yet</p>
+                                        </div>
+                                    ) : (
+                                        <div style={{ border: '1px solid #e5e7eb', maxHeight: '200px', overflowY: 'auto' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                <thead>
+                                                    <tr style={{ background: '#f9fafb' }}>
+                                                        <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Date</th>
+                                                        <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Used</th>
+                                                        <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Remaining</th>
+                                                        <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '500', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>Notes</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {[...usageHistory].sort((a, b) => new Date(b.date) - new Date(a.date)).map((usage, idx) => (
+                                                        <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                                            <td style={{ padding: '10px 12px', color: '#374151' }}>{new Date(usage.date).toLocaleDateString()}</td>
+                                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#374151' }}>-{usage.amount}</td>
+                                                            <td style={{ padding: '10px 12px', textAlign: 'right', color: '#6b7280' }}>{usage.remainingQty ?? '—'}</td>
+                                                            <td style={{ padding: '10px 12px', color: '#9ca3af', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usage.notes || '—'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            
+                            {/* Footer */}
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', gap: '12px' }}>
+                                <button onClick={() => setUsageHistoryModal(null)} style={{ ...btnSecondary, flex: 1 }}>Close</button>
+                                <button onClick={() => {
+                                    const printWindow = window.open('', '_blank');
+                                    let html = `<!DOCTYPE html><html><head><title>Usage Report - ${item.name}</title><style>
+                                        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px; max-width: 700px; margin: 0 auto; color: #1f2937; }
+                                        h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+                                        .subtitle { color: #6b7280; font-size: 13px; margin-bottom: 30px; }
+                                        .section-title { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px; }
+                                        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #e5e7eb; border: 1px solid #e5e7eb; margin-bottom: 30px; }
+                                        .stat { padding: 16px; background: #fff; text-align: center; }
+                                        .stat-value { font-size: 20px; font-weight: 600; }
+                                        .stat-label { font-size: 11px; color: #6b7280; margin-top: 4px; }
+                                        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                                        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+                                        th { background: #f9fafb; font-weight: 500; color: #6b7280; }
+                                        .right { text-align: right; }
+                                        .footer { text-align: center; margin-top: 40px; font-size: 11px; color: #9ca3af; }
+                                    </style></head><body>
+                                    <h1>Usage Report</h1>
+                                    <p class="subtitle">${item.name} • ${item.category}</p>
+                                    <p class="section-title">Summary</p>
+                                    <div class="stats">
+                                        <div class="stat"><div class="stat-value">${item.quantity}</div><div class="stat-label">Current Stock</div></div>
+                                        <div class="stat"><div class="stat-value">${analysis.dailyAvg.toFixed(1)}</div><div class="stat-label">Daily Avg</div></div>
+                                        <div class="stat"><div class="stat-value">${analysis.monthlyAvg.toFixed(1)}</div><div class="stat-label">Monthly Avg</div></div>
+                                        <div class="stat"><div class="stat-value">${analysis.daysUntilEmpty ?? '—'}</div><div class="stat-label">Days Left</div></div>
+                                    </div>
+                                    <p class="section-title">History</p>
+                                    <table><tr><th>Date</th><th class="right">Used</th><th class="right">Remaining</th><th>Notes</th></tr>
+                                    ${[...usageHistory].sort((a, b) => new Date(b.date) - new Date(a.date)).map(u => 
+                                        `<tr><td>${new Date(u.date).toLocaleDateString()}</td><td class="right">-${u.amount}</td><td class="right">${u.remainingQty ?? '—'}</td><td>${u.notes || '—'}</td></tr>`
+                                    ).join('')}
+                                    </table>
+                                    <div class="footer">Generated ${new Date().toLocaleDateString()} • ${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+                                    </body></html>`;
+                                    printWindow.document.write(html);
+                                    printWindow.document.close();
+                                    printWindow.onload = () => printWindow.print();
+                                }} style={{ ...btnPrimary, flex: 1 }}>Print Report</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     );
 }
