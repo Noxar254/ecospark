@@ -52,8 +52,8 @@ const getInitialBranding = () => {
             // Merge cached values with defaults, cached takes priority
             const result = { ...defaults, ...parsed };
             // Ensure companyName and tagline have fallbacks only if truly empty
-            if (!result.companyName) result.companyName = 'EcoSpark';
-            if (!result.tagline) result.tagline = 'Car Wash Management System';
+            if (!result.companyName) result.companyName = 'Car Wash';
+            if (!result.tagline) result.tagline = 'Management System';
             return result;
         }
     } catch (e) {
@@ -63,8 +63,8 @@ const getInitialBranding = () => {
     // Only use hardcoded defaults if no cache exists at all
     return {
         ...defaults,
-        companyName: 'EcoSpark',
-        tagline: 'Car Wash Management System'
+        companyName: 'Car Wash',
+        tagline: 'Management System'
     };
 };
 
@@ -84,15 +84,35 @@ function BrandingProvider({ children }) {
     const [branding, setBranding] = useState(DEFAULT_BRANDING);
     const [loading, setLoading] = useState(true);
 
-    // Helper to save branding to localStorage for loading screen
+    // Helper to save branding to localStorage for loading screen - cache ALL important fields
     const cacheBrandingToLocalStorage = (brandingData) => {
         try {
             localStorage.setItem('ecospark_branding', JSON.stringify({
                 companyName: brandingData.companyName,
                 tagline: brandingData.tagline,
                 logoUrl: brandingData.logoUrl,
+                logoType: brandingData.logoType,
                 primaryColor: brandingData.primaryColor,
-                secondaryColor: brandingData.secondaryColor
+                secondaryColor: brandingData.secondaryColor,
+                accentColor: brandingData.accentColor,
+                address: brandingData.address,
+                city: brandingData.city,
+                phone: brandingData.phone,
+                email: brandingData.email,
+                website: brandingData.website,
+                taxPin: brandingData.taxPin,
+                businessReg: brandingData.businessReg,
+                receiptHeader: brandingData.receiptHeader,
+                receiptFooter: brandingData.receiptFooter,
+                invoiceFooter: brandingData.invoiceFooter,
+                currency: brandingData.currency,
+                currencySymbol: brandingData.currencySymbol,
+                timezone: brandingData.timezone,
+                dateFormat: brandingData.dateFormat,
+                facebook: brandingData.facebook,
+                instagram: brandingData.instagram,
+                twitter: brandingData.twitter,
+                shortName: brandingData.shortName
             }));
         } catch (e) {
             console.log('Could not cache branding to localStorage');
@@ -105,7 +125,14 @@ function BrandingProvider({ children }) {
             if (services?.brandingService) {
                 const result = await services.brandingService.getBranding();
                 if (result.success && result.data) {
-                    const newBranding = { ...DEFAULT_BRANDING, ...result.data };
+                    // Firebase data takes full priority - only use DEFAULT_BRANDING for missing fields
+                    const newBranding = { ...DEFAULT_BRANDING };
+                    // Overwrite with Firebase data, ensuring empty strings from Firebase override defaults
+                    Object.keys(result.data).forEach(key => {
+                        if (result.data[key] !== undefined) {
+                            newBranding[key] = result.data[key];
+                        }
+                    });
                     setBranding(newBranding);
                     // Update global cache for receipts
                     if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
@@ -137,7 +164,13 @@ function BrandingProvider({ children }) {
         let unsubscribe;
         if (services?.brandingService?.subscribeToBranding) {
             unsubscribe = services.brandingService.subscribeToBranding((data) => {
-                const newBranding = { ...DEFAULT_BRANDING, ...data };
+                // Firebase data takes full priority
+                const newBranding = { ...DEFAULT_BRANDING };
+                Object.keys(data).forEach(key => {
+                    if (data[key] !== undefined) {
+                        newBranding[key] = data[key];
+                    }
+                });
                 setBranding(newBranding);
                 // Update global cache for receipts
                 if (window.updateCachedBranding) window.updateCachedBranding(newBranding);
@@ -385,7 +418,7 @@ function LoginPage({ onLoginSuccess }) {
                         color: '#1e293b', 
                         margin: '0 0 4px',
                         letterSpacing: '-0.5px'
-                    }}>{branding.companyName || 'EcoSpark'}</h1>
+                    }}>{branding.companyName}</h1>
                     <p style={{ 
                         fontSize: '14px', 
                         color: '#64748b', 
@@ -594,7 +627,7 @@ function LoginPage({ onLoginSuccess }) {
                 fontSize: '13px',
                 zIndex: 1
             }}>
-                © {new Date().getFullYear()} {branding.companyName || 'EcoSpark'}. All rights reserved.
+                © {new Date().getFullYear()} {branding.companyName}. All rights reserved.
             </div>
 
             {/* CSS */}
@@ -1018,7 +1051,7 @@ function Sidebar({ isCollapsed, activeModule, onModuleClick, userProfile, hasMod
                 ) : (
                     <div className="sidebar-logo-icon">🚗</div>
                 )}
-                <div className="sidebar-logo-text">{branding.companyName || 'Ecospark'}</div>
+                <div className="sidebar-logo-text">{branding.companyName}</div>
             </div>
             <div className="sidebar-menu">
                 {filteredMenuGroups.map((group, groupIndex) => (
@@ -3576,7 +3609,7 @@ function VehicleIntake() {
 </head>
 <body>
     <div class="header">
-        <h1>${branding.companyName || 'EcoSpark Car Wash'}</h1>
+        <h1>${branding.companyName}</h1>
         <div class="company">${branding.email || ''} ${branding.phone ? '| ' + branding.phone : ''}</div>
         <div class="date-range">Intake Records: ${rangeLabel}</div>
     </div>
@@ -3634,7 +3667,7 @@ function VehicleIntake() {
     </table>
     
     <div class="footer">
-        Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark Car Wash'}
+        Generated on ${new Date().toLocaleString()} | ${branding.companyName}
     </div>
     
     <script>window.onload = function() { window.print(); }</script>
@@ -5064,7 +5097,7 @@ function VehicleIntake() {
                 <div class="key-tag">
                     <div class="plate-number">${vehicle.plateNumber}</div>
                     <div class="vehicle-type">${vehicle.itemType || vehicle.vehicleType || 'Vehicle'}</div>
-                    <div class="logo">🚗 ${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+                    <div class="logo">🚗 ${getBrandingForReceipts().companyName}</div>
                 </div>
                 <script>
                     window.onload = function() {
@@ -5283,7 +5316,7 @@ function VehicleIntake() {
             <body>
                 <div class="receipt">
                     <div class="header">
-                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="logo">🚗 ${brand.companyName }</div>
                         <div class="tagline">${brand.tagline || 'Premium Car Wash Services'}</div>
                         ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
                         ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
@@ -7056,7 +7089,7 @@ function VehicleIntake() {
                                                     🚗
                                                 </div>
                                             )}
-                                            <h3 style={{ margin: 0, color: '#1e293b' }}>{brand.companyName || 'EcoSpark'}</h3>
+                                            <h3 style={{ margin: 0, color: '#1e293b' }}>{brand.companyName}</h3>
                                             <p style={{ margin: '4px 0', color: '#64748b', fontSize: '14px' }}>{brand.receiptHeader || 'Service Invoice'}</p>
                                             {brand.address && <p style={{ margin: '4px 0 0', color: '#94a3b8', fontSize: '12px' }}>{brand.address}{brand.city ? `, ${brand.city}` : ''}</p>}
                                             {brand.phone && <p style={{ margin: '2px 0 0', color: '#94a3b8', fontSize: '12px' }}>Tel: {brand.phone}</p>}
@@ -7972,7 +8005,7 @@ function VehicleIntakeAll({ onBackClick }) {
             <body>
                 <div class="receipt">
                     <div class="header">
-                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="logo">🚗 ${brand.companyName }</div>
                         <div class="tagline">${brand.tagline || 'Premium Car Wash Services'}</div>
                         ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
                         ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
@@ -9557,7 +9590,7 @@ function ParkingManagement() {
 </head>
 <body>
     <div class="header">
-        <div class="logo">${branding.companyName || 'EcoSpark'}</div>
+        <div class="logo">${branding.companyName}</div>
         <div class="subtitle">PARKING GATE PASS</div>
     </div>
     
@@ -9629,7 +9662,7 @@ function ParkingManagement() {
         }
         
         let html = '<html><head><meta charset="UTF-8"></head><body>';
-        html += `<h2>${branding.companyName || 'EcoSpark'} - Parking History Report</h2>`;
+        html += `<h2>${branding.companyName} - Parking History Report</h2>`;
         html += `<p>Period: ${getFilterLabel()} | Exported: ${new Date().toLocaleString()}</p>`;
         html += `<table border="1" style="border-collapse: collapse;">`;
         html += `<tr style="background:#f0f0f0;"><th>Plate Number</th><th>Vehicle Type</th><th>Customer</th><th>Phone</th><th>Parked At</th><th>Released At</th><th>Space</th><th>Rate</th><th>Fee (${currency})</th><th>Status</th><th>Released By</th></tr>`;
@@ -9721,7 +9754,7 @@ function ParkingManagement() {
             @media print { body { padding: 10px; } }
         </style></head><body>`;
         
-        html += `<h1>${branding.companyName || 'EcoSpark'}</h1>`;
+        html += `<h1>${branding.companyName}</h1>`;
         html += `<div class="subtitle">Parking History Report • ${getFilterLabel()} • Generated: ${new Date().toLocaleString()}</div>`;
         
         html += `<div class="stats">`;
@@ -13263,7 +13296,7 @@ function FleetAccounts() {
     <!-- Header -->
     <div class="header">
         <div>
-            <div class="logo">${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+            <div class="logo">${getBrandingForReceipts().companyName}</div>
             <div style="font-size: 10px; color: #64748b;">${getBrandingForReceipts().tagline || 'Professional Car Wash Services'}</div>
         </div>
         <div class="invoice-info">
@@ -13406,7 +13439,7 @@ function FleetAccounts() {
     
     <!-- Footer -->
     <div class="footer">
-        <div>Thank you for your business with ${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash</div>
+        <div>Thank you for your business with ${getBrandingForReceipts().companyName}</div>
         <div style="margin-top: 4px;">Invoice generated on ${now.toLocaleString()} | ${invoiceNo}</div>
     </div>
 </body>
@@ -15868,7 +15901,7 @@ function CustomerManagement() {
                                     printWindow.document.write(`
                                         <html>
                                         <head>
-                                            <title>Complaints Report - ${branding.companyName || 'EcoSpark'}</title>
+                                            <title>Complaints Report - ${branding.companyName}</title>
                                             <style>
                                                 body { font-family: Arial, sans-serif; margin: 20px; }
                                                 h1 { color: #1f2937; font-size: 20px; margin-bottom: 5px; }
@@ -15884,7 +15917,7 @@ function CustomerManagement() {
                                         </head>
                                         <body>
                                             <h1>⚠️ Complaints Report</h1>
-                                            <div class="subtitle">${branding.companyName || 'EcoSpark'} - Generated on ${new Date().toLocaleString()}</div>
+                                            <div class="subtitle">${branding.companyName} - Generated on ${new Date().toLocaleString()}</div>
                                             
                                             <div class="stats">
                                                 <div class="stat">
@@ -16754,7 +16787,7 @@ function CustomerManagement() {
                                     <img src={branding.logoUrl} alt="Logo" style={{ maxHeight: '50px', maxWidth: '150px', marginBottom: '8px', objectFit: 'contain' }} />
                                 )}
                                 <div style={{ fontSize: '18px', fontWeight: '700', color: branding.primaryColor || '#1f2937', marginBottom: '2px' }}>
-                                    {branding.companyName || 'EcoSpark'} {branding.tagline ? '' : 'Car Wash'}
+                                    {branding.companyName} {branding.tagline ? '' : ''}
                                 </div>
                                 {branding.tagline && (
                                     <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>{branding.tagline}</div>
@@ -17343,7 +17376,7 @@ function CustomerManagement() {
                         {/* Receipt Content */}
                         <div id="receipt-content" style={{ padding: '20px' }}>
                             <div className="header" style={{ textAlign: 'center', borderBottom: '2px dashed #ccc', paddingBottom: '15px', marginBottom: '15px' }}>
-                                <div className="company" style={{ fontSize: '22px', fontWeight: 'bold', color: theme.text }}>{getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+                                <div className="company" style={{ fontSize: '22px', fontWeight: 'bold', color: theme.text }}>{getBrandingForReceipts().companyName}</div>
                                 <div className="tagline" style={{ fontSize: '12px', color: theme.textMuted }}>{getBrandingForReceipts().tagline || 'Car Wash & Auto Services'}</div>
                                 <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '8px' }}>Receipt #{receiptData.receiptNumber}</div>
                                 <div style={{ fontSize: '11px', color: theme.textMuted }}>{new Date(receiptData.date).toLocaleString()}</div>
@@ -17453,7 +17486,7 @@ function CustomerManagement() {
                             )}
                             
                             <div className="footer" style={{ textAlign: 'center', marginTop: '20px', paddingTop: '15px', borderTop: '2px dashed #ccc', fontSize: '11px', color: theme.textMuted }}>
-                                <div>Thank you for choosing {getBrandingForReceipts().companyName || 'EcoSpark'}!</div>
+                                <div>Thank you for choosing {getBrandingForReceipts().companyName}!</div>
                                 <div style={{ marginTop: '4px' }}>We appreciate your business</div>
                             </div>
                         </div>
@@ -18406,7 +18439,7 @@ function GarageManagement() {
             </head>
             <body>
                 <div class="header">
-                    <div class="logo">🔧 ${brand.companyName || 'ECOSPARK'} GARAGE</div>
+                    <div class="logo">🔧 ${brand.companyName} GARAGE</div>
                     <div class="subtitle">Auto Service Receipt</div>
                     ${brand.address ? `<div class="subtitle">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
                     ${brand.phone ? `<div class="subtitle">Tel: ${brand.phone}</div>` : ''}
@@ -19520,7 +19553,7 @@ function GarageManagement() {
                     <div style={{ backgroundColor: 'white', borderRadius: '0', width: '100%', maxWidth: '420px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
                         {/* Receipt Header */}
                         <div style={{ padding: '24px', textAlign: 'center', borderBottom: '2px solid #333' }}>
-                            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#333' }}>🔧 {getBrandingForReceipts().companyName || 'ECOSPARK'} GARAGE</div>
+                            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#333' }}>🔧 {getBrandingForReceipts().companyName} GARAGE</div>
                             <div style={{ color: '#666', fontSize: '12px', marginTop: '4px' }}>Auto Service Receipt</div>
                             {getBrandingForReceipts().address && <div style={{ color: '#666', fontSize: '11px', marginTop: '2px' }}>{getBrandingForReceipts().address}{getBrandingForReceipts().city ? `, ${getBrandingForReceipts().city}` : ''}</div>}
                             {getBrandingForReceipts().phone && <div style={{ color: '#666', fontSize: '11px' }}>Tel: {getBrandingForReceipts().phone}</div>}
@@ -20571,7 +20604,7 @@ function WashBaysContent() {
             </head>
             <body>
                 <div class="header">
-                    <div class="title">${branding.companyName || 'EcoSpark'}</div>
+                    <div class="title">${branding.companyName}</div>
                     <div class="subtitle">${branding.address || ''}</div>
                     <div class="subtitle">${branding.phone || ''}</div>
                 </div>
@@ -20643,7 +20676,7 @@ function WashBaysContent() {
                 </div>
                 
                 <div class="footer">
-                    <p>Thank you for choosing ${branding.companyName || 'EcoSpark'}!</p>
+                    <p>Thank you for choosing ${branding.companyName}!</p>
                     <p>Present this pass at the gate to exit</p>
                     <p style="margin-top: 10px; font-size: 9px;">Receipt ID: WGP-${Date.now().toString(36).toUpperCase()}</p>
                 </div>
@@ -25169,7 +25202,7 @@ function HRModule() {
             <body>
                 <div class="payslip">
                     <div class="header">
-                        <div class="logo">🚗 ${brand.companyName || 'ECOSPARK'}</div>
+                        <div class="logo">🚗 ${brand.companyName }</div>
                         <div class="subtitle">${brand.tagline || 'Car Wash & Auto Services'}</div>
                         ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
                         ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
@@ -25232,7 +25265,7 @@ function HRModule() {
                     </div>
                     
                     <div class="footer">
-                        <p><strong>${brand.companyName || 'EcoSpark'} Car Wash & Auto Services</strong></p>
+                        <p><strong>${brand.companyName } Car Wash & Auto Services</strong></p>
                         <p>This is a computer-generated payslip. No signature required.</p>
                         <p>For queries, contact HR department.</p>
                     </div>
@@ -26824,7 +26857,7 @@ function BillingModule() {
         
         html += `
         <div class="footer">
-            <strong>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash & Garage</strong> • Billing Report • ${reportDate}
+            <strong>${getBrandingForReceipts().companyName } Car Wash & Garage</strong> • Billing Report • ${reportDate}
         </div>
         </body></html>`;
         
@@ -27057,7 +27090,7 @@ function BillingModule() {
         </div>
         
         <div class="footer">
-            <strong>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash & Garage</strong> • Daily Sales Report • ${todayFormatted}
+            <strong>${getBrandingForReceipts().companyName } Car Wash & Garage</strong> • Daily Sales Report • ${todayFormatted}
         </div>
         
         </body></html>`;
@@ -27647,7 +27680,7 @@ function BillingModule() {
             </head>
             <body>
                 <div class="header">
-                    <div class="logo">🌿 ${getBrandingForReceipts().companyName?.toUpperCase() || 'ECOSPARK'}</div>
+                    <div class="logo">${getBrandingForReceipts().companyName?.toUpperCase() }</div>
                     <div class="tagline">${getBrandingForReceipts().tagline || 'Car Wash & Auto Services'}</div>
                 </div>
                 
@@ -27674,7 +27707,7 @@ function BillingModule() {
                 
                 <div class="footer">
                     <p>Thank you for your business!</p>
-                    <p>Visit us again at ${getBrandingForReceipts().companyName || 'EcoSpark'}</p>
+                    <p>Visit us again at ${getBrandingForReceipts().companyName }</p>
                 </div>
                 
                 <script>setTimeout(() => window.print(), 500);</script>
@@ -33119,7 +33152,7 @@ function InventoryModule() {
                                         .total { font-size: 18px; color: #059669; }
                                     </style></head><body>
                                     <div class="header">
-                                        <h2>🚗 ${getBrandingForReceipts().companyName || 'EcoSpark'}</h2>
+                                        <h2>🚗 ${getBrandingForReceipts().companyName }</h2>
                                         <p>Inventory Item Receipt</p>
                                     </div>
                                     <div class="row"><span class="label">Item Name</span><span class="value">${viewItem.name}</span></div>
@@ -33134,7 +33167,7 @@ function InventoryModule() {
                                     ${viewItem.lastUsage ? `<div class="row"><span class="label">Last Usage</span><span class="value">${viewItem.lastUsage.amount} ${viewItem.unit || ''} on ${new Date(viewItem.lastUsage.date).toLocaleDateString()}</span></div>` : ''}
                                     <div class="footer">
                                         <p>Generated: ${new Date().toLocaleString()}</p>
-                                        <p>${getBrandingForReceipts().companyName || 'EcoSpark'} Car Wash Management System</p>
+                                        <p>${getBrandingForReceipts().companyName } Car Wash Management System</p>
                                     </div>
                                     </body></html>`;
                                     printWindow.document.write(html);
@@ -33385,7 +33418,7 @@ function InventoryModule() {
                                         `<tr><td>${new Date(u.date).toLocaleDateString()}</td><td>${u.releasedBy?.name || '—'}</td><td class="right">-${u.amount}</td><td class="right">${u.remainingQty ?? '—'}</td><td>${u.notes || '—'}</td></tr>`
                                     ).join('')}
                                     </table>
-                                    <div class="footer">Generated ${new Date().toLocaleDateString()} • ${getBrandingForReceipts().companyName || 'EcoSpark'}</div>
+                                    <div class="footer">Generated ${new Date().toLocaleDateString()} • ${getBrandingForReceipts().companyName }</div>
                                     </body></html>`;
                                     printWindow.document.write(html);
                                     printWindow.document.close();
@@ -33815,19 +33848,41 @@ function BrandingSettings({ theme, cardStyle, inputStyle, labelStyle }) {
             if (services?.brandingService) {
                 const result = await services.brandingService.saveBranding(formData);
                 if (result.success) {
-                    // Immediately cache to localStorage for loading screen
+                    // Immediately cache ALL fields to localStorage for loading screen and receipts
                     try {
                         localStorage.setItem('ecospark_branding', JSON.stringify({
                             companyName: formData.companyName,
                             tagline: formData.tagline,
                             logoUrl: formData.logoUrl,
+                            logoType: formData.logoType,
                             primaryColor: formData.primaryColor,
-                            secondaryColor: formData.secondaryColor
+                            secondaryColor: formData.secondaryColor,
+                            accentColor: formData.accentColor,
+                            address: formData.address,
+                            city: formData.city,
+                            phone: formData.phone,
+                            email: formData.email,
+                            website: formData.website,
+                            taxPin: formData.taxPin,
+                            businessReg: formData.businessReg,
+                            receiptHeader: formData.receiptHeader,
+                            receiptFooter: formData.receiptFooter,
+                            invoiceFooter: formData.invoiceFooter,
+                            currency: formData.currency,
+                            currencySymbol: formData.currencySymbol,
+                            timezone: formData.timezone,
+                            dateFormat: formData.dateFormat,
+                            facebook: formData.facebook,
+                            instagram: formData.instagram,
+                            twitter: formData.twitter,
+                            shortName: formData.shortName
                         }));
+                        // Also update the global cached branding immediately
+                        window._cachedBranding = formData;
                     } catch (e) { /* ignore */ }
                     
-                    // Update document title immediately
-                    document.title = `${formData.companyName || 'EcoSpark'} - ${formData.tagline || 'Car Wash Management'}`;
+                    // Update document title immediately - use saved values
+                    document.title = `${formData.companyName} - ${formData.tagline || 'Car Wash Management'}`;
                     
                     // Update CSS variables immediately
                     if (formData.primaryColor) {
@@ -35957,7 +36012,7 @@ function ReportsAnalytics() {
     const printReport = () => {
         const branding = getBrandingForReceipts();
         const content = `
-<!DOCTYPE html><html><head><title>${branding.companyName || 'EcoSpark'} Analytics Report</title>
+<!DOCTYPE html><html><head><title>${branding.companyName } Analytics Report</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b}
 .header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
@@ -35973,7 +36028,7 @@ td{padding:10px;border-bottom:1px solid #e2e8f0}tr:nth-child(even){background:#f
 .footer{margin-top:30px;text-align:center;color:#64748b;font-size:12px;padding-top:20px;border-top:1px solid #e2e8f0}
 @media print{body{padding:20px}}
 </style></head><body>
-<div class="header"><div class="logo">${branding.companyName || 'EcoSpark'}</div><div class="subtitle">Analytics Report - ${new Date().toLocaleDateString()}</div></div>
+<div class="header"><div class="logo">${branding.companyName }</div><div class="subtitle">Analytics Report - ${new Date().toLocaleDateString()}</div></div>
 
 <div class="section"><div class="section-title">Key Performance Metrics (${dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'Last 7 Days' : dateRange === 'month' ? 'This Month' : 'This Year'})</div>
 <div class="grid">
@@ -35999,7 +36054,7 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
 <table><thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">% of Total</th></tr></thead>
 <tbody>${topExpenseCategories.map(([cat, amt]) => `<tr><td>${cat}</td><td style="text-align:right">${branding.currencySymbol || 'KES'} ${amt.toLocaleString()}</td><td style="text-align:right">${totalExpenses > 0 ? ((amt / totalExpenses) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark'} Car Wash Management System</div>
+<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName } Car Wash Management System</div>
 </body></html>`;
         const w = window.open('', '_blank');
         w.document.write(content);
@@ -36637,7 +36692,7 @@ ${topExpenseCategories.length > 0 ? `<div class="section"><div class="section-ti
         }
 
         const content = `
-<!DOCTYPE html><html><head><title>${branding.companyName || 'EcoSpark'} - ${reportTitle}</title>
+<!DOCTYPE html><html><head><title>${branding.companyName } - ${reportTitle}</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#1e293b;font-size:12px}
 .header{text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:2px solid #1e293b}
@@ -36653,9 +36708,9 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0;font-size:11px}tr:nth-child(
 .footer{margin-top:30px;text-align:center;color:#64748b;font-size:11px;padding-top:20px;border-top:1px solid #e2e8f0}
 @media print{body{padding:15px}.grid{grid-template-columns:repeat(4,1fr)}}
 </style></head><body>
-<div class="header"><div class="logo">${branding.companyName || 'EcoSpark'}</div><div class="subtitle">${reportTitle} - ${periodLabel}</div></div>
+<div class="header"><div class="logo">${branding.companyName }</div><div class="subtitle">${reportTitle} - ${periodLabel}</div></div>
 ${reportBody}
-<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName || 'EcoSpark'} Car Wash Management System</div>
+<div class="footer">Generated on ${new Date().toLocaleString()} | ${branding.companyName } Car Wash Management System</div>
 </body></html>`;
 
         if (action === 'preview') {

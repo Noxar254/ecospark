@@ -5347,66 +5347,59 @@ export const teamChatService = {
 
 // ==================== BRANDING SERVICE ====================
 export const brandingService = {
-  // Default branding configuration - prioritizes localStorage cache
+  // Default branding configuration - prioritizes localStorage cache for ALL fields
   getDefaultBranding() {
     // Try to get cached branding from localStorage first
-    let cachedCompanyName = '';
-    let cachedTagline = '';
-    let cachedPrimaryColor = '#3b82f6';
-    let cachedSecondaryColor = '#10b981';
+    let cachedData = {};
     try {
       const cached = localStorage.getItem('ecospark_branding');
       if (cached) {
-        const parsed = JSON.parse(cached);
-        cachedCompanyName = parsed.companyName || '';
-        cachedTagline = parsed.tagline || '';
-        cachedPrimaryColor = parsed.primaryColor || '#3b82f6';
-        cachedSecondaryColor = parsed.secondaryColor || '#10b981';
+        cachedData = JSON.parse(cached);
       }
     } catch (e) {}
     
     return {
-      // Company Identity - use cached values if available
-      companyName: cachedCompanyName || 'EcoSpark',
-      tagline: cachedTagline || 'Car Wash Management System',
-      shortName: 'ES',
+      // Company Identity - use cached values if available, otherwise generic defaults
+      companyName: cachedData.companyName || 'Car Wash',
+      tagline: cachedData.tagline || 'Management System',
+      shortName: cachedData.shortName || 'CW',
       
       // Contact Information
-      address: '',
-      city: '',
-      phone: '',
-      email: '',
-      website: '',
+      address: cachedData.address || '',
+      city: cachedData.city || '',
+      phone: cachedData.phone || '',
+      email: cachedData.email || '',
+      website: cachedData.website || '',
       
       // Legal Information
-      taxPin: '',
-      businessReg: '',
+      taxPin: cachedData.taxPin || '',
+      businessReg: cachedData.businessReg || '',
       
       // Brand Colors - use cached if available
-      primaryColor: cachedPrimaryColor,
-      secondaryColor: cachedSecondaryColor,
-      accentColor: '#f59e0b',
+      primaryColor: cachedData.primaryColor || '#3b82f6',
+      secondaryColor: cachedData.secondaryColor || '#10b981',
+      accentColor: cachedData.accentColor || '#f59e0b',
       
       // Receipt Settings
-      receiptHeader: 'OFFICIAL RECEIPT',
-      receiptFooter: 'Thank you for choosing us!',
-      invoiceFooter: 'Payment due within 30 days',
-      termsAndConditions: '',
+      receiptHeader: cachedData.receiptHeader || 'OFFICIAL RECEIPT',
+      receiptFooter: cachedData.receiptFooter || 'Thank you for choosing us!',
+      invoiceFooter: cachedData.invoiceFooter || 'Payment due within 30 days',
+      termsAndConditions: cachedData.termsAndConditions || '',
       
       // Logo (Base64 or URL)
-      logoUrl: '',
-      logoType: 'icon', // 'icon', 'text', 'image'
+      logoUrl: cachedData.logoUrl || '',
+      logoType: cachedData.logoType || 'icon', // 'icon', 'text', 'image'
       
       // Social Media
-      facebook: '',
-      instagram: '',
-      twitter: '',
+      facebook: cachedData.facebook || '',
+      instagram: cachedData.instagram || '',
+      twitter: cachedData.twitter || '',
       
       // Additional Settings
-      currency: 'KES',
-      currencySymbol: 'KSh',
-      timezone: 'Africa/Nairobi',
-      dateFormat: 'DD/MM/YYYY',
+      currency: cachedData.currency || 'KES',
+      currencySymbol: cachedData.currencySymbol || 'KSh',
+      timezone: cachedData.timezone || 'Africa/Nairobi',
+      dateFormat: cachedData.dateFormat || 'DD/MM/YYYY',
       
       // Metadata
       createdAt: new Date().toISOString(),
@@ -5435,9 +5428,17 @@ export const brandingService = {
       const brandingRef = doc(db, 'settings', 'branding');
       const snapshot = await getDoc(brandingRef);
       if (snapshot.exists()) {
-        // Merge with defaults to ensure all fields exist
+        // Get structural defaults (for fields that may not exist in Firebase yet)
         const defaults = this.getDefaultBranding();
-        return { success: true, data: { ...defaults, ...snapshot.data() } };
+        const firebaseData = snapshot.data();
+        // Firebase data takes full priority - override defaults with all Firebase values
+        const result = { ...defaults };
+        Object.keys(firebaseData).forEach(key => {
+          if (firebaseData[key] !== undefined) {
+            result[key] = firebaseData[key];
+          }
+        });
+        return { success: true, data: result };
       }
       return { success: true, data: this.getDefaultBranding() };
     } catch (error) {
@@ -5452,7 +5453,15 @@ export const brandingService = {
     return onSnapshot(brandingRef, (snapshot) => {
       if (snapshot.exists()) {
         const defaults = this.getDefaultBranding();
-        callback({ ...defaults, ...snapshot.data() });
+        const firebaseData = snapshot.data();
+        // Firebase data takes full priority
+        const result = { ...defaults };
+        Object.keys(firebaseData).forEach(key => {
+          if (firebaseData[key] !== undefined) {
+            result[key] = firebaseData[key];
+          }
+        });
+        callback(result);
       } else {
         callback(this.getDefaultBranding());
       }
