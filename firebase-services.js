@@ -1627,10 +1627,11 @@ export const staffService = {
   // Add new staff member
   async addStaff(staffData) {
     try {
-      const staffId = Date.now().toString();
-      const staffRef = ref(realtimeDb, `staff/${staffId}`);
+      const dbId = Date.now().toString();
+      const staffRef = ref(realtimeDb, `staff/${dbId}`);
       await set(staffRef, {
-        id: staffId,
+        id: dbId,
+        staffId: staffData.staffId || '', // The formatted staff ID like S01-2026
         name: staffData.name,
         role: staffData.role || 'Washer',
         phone: staffData.phone || '',
@@ -1647,7 +1648,7 @@ export const staffService = {
         status: 'active',
         createdAt: new Date().toISOString()
       });
-      return { success: true, id: staffId };
+      return { success: true, id: dbId };
     } catch (error) {
       console.error('Error adding staff:', error);
       return { success: false, error: error.message };
@@ -3549,6 +3550,7 @@ export const userService = {
       const userRef = doc(db, 'users', userId);
       const profileData = {
         ...userData,
+        userId: userData.userId || '', // The formatted user ID like U01-2026
         role: userData.role || 'receptionist',
         isActive: true,
         createdAt: new Date().toISOString(),

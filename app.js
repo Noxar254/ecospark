@@ -24780,8 +24780,11 @@ function HRModule() {
     const [successMessage, setSuccessMessage] = useState(null);
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [workHistorySearch, setWorkHistorySearch] = useState('');
     const [filterPaymentType, setFilterPaymentType] = useState('all');
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
+    const [showPaymentHistoryModal, setShowPaymentHistoryModal] = useState(false);
+    const [paymentHistoryStaff, setPaymentHistoryStaff] = useState(null);
 
     // Payment form
     const [paymentForm, setPaymentForm] = useState({
@@ -25089,6 +25092,31 @@ function HRModule() {
         try {
             const services = window.FirebaseServices;
             const stats = getStaffStats(selectedStaff.id, selectedStaff.name);
+            const currentUser = window.currentUserProfile;
+            const firebaseUser = services?.authService?.getCurrentUser ? services.authService.getCurrentUser() : null;
+            
+            // Debug log to see what's available
+            console.log('Current User Profile:', currentUser);
+            console.log('Firebase User:', firebaseUser);
+            
+            // Get the processor name - try multiple sources
+            let processorName = 'System';
+            if (currentUser?.displayName) {
+                processorName = currentUser.displayName;
+            } else if (currentUser?.name) {
+                processorName = currentUser.name;
+            } else if (currentUser?.email) {
+                processorName = currentUser.email.split('@')[0];
+            } else if (firebaseUser?.displayName) {
+                processorName = firebaseUser.displayName;
+            } else if (firebaseUser?.email) {
+                processorName = firebaseUser.email.split('@')[0];
+            }
+            
+            const processorId = currentUser?.id || currentUser?.uid || firebaseUser?.uid || 'unknown';
+            
+            console.log('Processor Name:', processorName);
+            console.log('Processor ID:', processorId);
             
             const grossAmount = parseFloat(paymentForm.amount) || 0;
             const paye = parseFloat(paymentForm.paye) || 0;
@@ -25115,7 +25143,9 @@ function HRModule() {
                 otherDeductions: otherDeductions,
                 totalDeductions: totalDeductions,
                 deductions: totalDeductions,
-                notes: paymentForm.notes
+                notes: paymentForm.notes,
+                processedBy: processorId,
+                processedByName: processorName
             });
             
             setSuccessMessage('Payment recorded successfully');
@@ -25224,13 +25254,13 @@ function HRModule() {
     // Print payment receipt (Payslip)
     const handlePrintReceipt = (payment) => {
         const brand = getBrandingForReceipts();
-        const grossAmount = payment.grossAmount || payment.amount || 0;
-        const paye = payment.paye || 0;
-        const nhif = payment.nhif || 0;
-        const nssf = payment.nssf || 0;
-        const otherDeductions = payment.otherDeductions || 0;
-        const totalDeductions = payment.totalDeductions || (paye + nhif + nssf + otherDeductions);
-        const netPay = payment.amount || (grossAmount - totalDeductions);
+        const grossAmount = parseFloat(payment.grossAmount) || parseFloat(payment.amount) || 0;
+        const paye = parseFloat(payment.paye) || 0;
+        const nhif = parseFloat(payment.nhif) || 0;
+        const nssf = parseFloat(payment.nssf) || 0;
+        const otherDeductions = parseFloat(payment.otherDeductions) || 0;
+        const totalDeductions = paye + nhif + nssf + otherDeductions;
+        const netPay = parseFloat(payment.amount) || (grossAmount - totalDeductions);
 
         const receiptContent = `
             <html>
@@ -25238,109 +25268,73 @@ function HRModule() {
                 <title>Payslip - ${payment.staffName}</title>
                 <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; max-width: 500px; margin: 0 auto; color: #333; }
-                    .payslip { border: 2px solid #1e3a5f; }
-                    .header { background: #1e3a5f; color: white; padding: 20px; text-align: center; }
-                    .logo { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
-                    .subtitle { font-size: 14px; opacity: 0.9; }
-                    .company-info { font-size: 11px; opacity: 0.8; margin-top: 4px; }
-                    .payslip-title { background: #f8f9fa; padding: 12px; text-align: center; font-size: 16px; font-weight: 600; border-bottom: 1px solid #ddd; text-transform: uppercase; letter-spacing: 1px; }
-                    .section { padding: 16px 20px; border-bottom: 1px solid #eee; }
-                    .section-title { font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.5px; }
-                    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-                    .info-item { display: flex; justify-content: space-between; padding: 4px 0; }
-                    .info-item .label { color: #666; font-size: 13px; }
-                    .info-item .value { font-weight: 600; font-size: 13px; }
-                    .earnings-row, .deduction-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #eee; font-size: 13px; }
-                    .earnings-row:last-child, .deduction-row:last-child { border-bottom: none; }
-                    .earnings-row .amount { color: #16a34a; font-weight: 600; }
-                    .deduction-row .amount { color: #dc2626; font-weight: 600; }
-                    .subtotal { display: flex; justify-content: space-between; padding: 10px 0; font-weight: 600; border-top: 2px solid #ddd; margin-top: 8px; }
-                    .subtotal.gross .amount { color: #16a34a; }
-                    .subtotal.deduct .amount { color: #dc2626; }
-                    .net-pay { background: #1e3a5f; color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
-                    .net-pay .label { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
-                    .net-pay .amount { font-size: 24px; font-weight: bold; }
-                    .footer { padding: 16px 20px; text-align: center; font-size: 11px; color: #666; background: #f8f9fa; }
-                    .footer p { margin: 4px 0; }
-                    .signature-area { padding: 20px; display: flex; justify-content: space-between; }
-                    .signature-box { width: 45%; }
-                    .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 8px; font-size: 12px; color: #666; }
-                    @media print { 
-                        body { padding: 10px; } 
-                        .payslip { border: 1px solid #333; }
-                    }
+                    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 40px; max-width: 420px; margin: 0 auto; color: #1e293b; font-size: 13px; }
+                    .payslip { border: 1px solid #e2e8f0; }
+                    .header { padding: 24px; text-align: center; border-bottom: 1px solid #e2e8f0; }
+                    .company-name { font-size: 18px; font-weight: 700; color: #1e293b; margin-bottom: 2px; }
+                    .company-details { font-size: 11px; color: #64748b; }
+                    .title { padding: 12px 24px; background: #f8fafc; text-align: center; font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #e2e8f0; }
+                    .section { padding: 20px 24px; border-bottom: 1px solid #e2e8f0; }
+                    .section:last-child { border-bottom: none; }
+                    .section-title { font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 600; margin-bottom: 12px; letter-spacing: 0.5px; }
+                    .row { display: flex; justify-content: space-between; padding: 6px 0; }
+                    .row .label { color: #64748b; }
+                    .row .value { font-weight: 500; color: #1e293b; }
+                    .divider { border-top: 1px dashed #e2e8f0; margin: 12px 0; }
+                    .total-row { display: flex; justify-content: space-between; padding: 8px 0; font-weight: 600; }
+                    .total-row.deduction .value { color: #ef4444; }
+                    .net-section { padding: 20px 24px; background: #f8fafc; }
+                    .net-row { display: flex; justify-content: space-between; align-items: center; }
+                    .net-label { font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; }
+                    .net-amount { font-size: 22px; font-weight: 700; color: #10b981; }
+                    .footer { padding: 16px 24px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+                    @media print { body { padding: 20px; } }
                 </style>
             </head>
             <body>
                 <div class="payslip">
                     <div class="header">
-                        <div class="logo">🚗 ${brand.companyName }</div>
-                        <div class="subtitle">${brand.tagline || 'Car Wash & Auto Services'}</div>
-                        ${brand.address ? `<div class="company-info">${brand.address}${brand.city ? ', ' + brand.city : ''}</div>` : ''}
-                        ${brand.phone ? `<div class="company-info">Tel: ${brand.phone}</div>` : ''}
+                        <div class="company-name">${brand.companyName || 'Company Name'}</div>
+                        <div class="company-details">${brand.address ? brand.address + (brand.city ? ', ' + brand.city : '') : ''}${brand.phone ? ' • ' + brand.phone : ''}</div>
                     </div>
                     
-                    <div class="payslip-title">Employee Payslip</div>
+                    <div class="title">Payslip</div>
                     
                     <div class="section">
-                        <div class="section-title">Employee Information</div>
-                        <div class="info-grid">
-                            <div class="info-item"><span class="label">Employee Name:</span></div>
-                            <div class="info-item"><span class="value">${payment.staffName || 'N/A'}</span></div>
-                            <div class="info-item"><span class="label">Payment Type:</span></div>
-                            <div class="info-item"><span class="value" style="text-transform: capitalize;">${payment.paymentType || 'Salary'}</span></div>
-                            <div class="info-item"><span class="label">Pay Period:</span></div>
-                            <div class="info-item"><span class="value">${payment.periodStart ? new Date(payment.periodStart).toLocaleDateString('en-GB') : '-'} to ${payment.periodEnd ? new Date(payment.periodEnd).toLocaleDateString('en-GB') : '-'}</span></div>
-                            <div class="info-item"><span class="label">Payment Date:</span></div>
-                            <div class="info-item"><span class="value">${new Date(payment.paidAt || payment.createdAt).toLocaleDateString('en-GB')}</span></div>
-                            <div class="info-item"><span class="label">Payslip No:</span></div>
-                            <div class="info-item"><span class="value">#PS-${payment.id?.slice(-6).toUpperCase() || 'N/A'}</span></div>
-                        </div>
+                        <div class="section-title">Details</div>
+                        <div class="row"><span class="label">Employee</span><span class="value">${payment.staffName || 'N/A'}</span></div>
+                        <div class="row"><span class="label">Payslip No.</span><span class="value">#${payment.id?.slice(-6).toUpperCase() || 'N/A'}</span></div>
+                        <div class="row"><span class="label">Payment Date</span><span class="value">${new Date(payment.paidAt || payment.createdAt).toLocaleDateString()}</span></div>
+                        <div class="row"><span class="label">Period</span><span class="value">${payment.periodStart && payment.periodEnd ? new Date(payment.periodStart).toLocaleDateString() + ' - ' + new Date(payment.periodEnd).toLocaleDateString() : '-'}</span></div>
+                        <div class="row"><span class="label">Processed By</span><span class="value">${payment.processedByName || 'System'}</span></div>
                     </div>
                     
                     <div class="section">
                         <div class="section-title">Earnings</div>
-                        ${payment.baseSalary > 0 ? `<div class="earnings-row"><span>Base Salary</span><span class="amount">${brand.currencySymbol || 'KES'} ${(payment.baseSalary || 0).toLocaleString()}</span></div>` : ''}
-                        ${payment.totalCommission > 0 ? `<div class="earnings-row"><span>Commission (${payment.jobsCount || 0} jobs)</span><span class="amount">${brand.currencySymbol || 'KES'} ${(payment.totalCommission || 0).toLocaleString()}</span></div>` : ''}
-                        ${payment.baseSalary <= 0 && payment.totalCommission <= 0 ? `<div class="earnings-row"><span>Gross Pay</span><span class="amount">${brand.currencySymbol || 'KES'} ${grossAmount.toLocaleString()}</span></div>` : ''}
-                        <div class="subtotal gross">
-                            <span>GROSS EARNINGS</span>
-                            <span class="amount">${brand.currencySymbol || 'KES'} ${grossAmount.toLocaleString()}</span>
-                        </div>
+                        <div class="row"><span class="label">Gross Amount</span><span class="value">${brand.currencySymbol || 'KES'} ${grossAmount.toLocaleString()}</span></div>
                     </div>
                     
+                    ${totalDeductions > 0 ? `
                     <div class="section">
-                        <div class="section-title">Statutory Deductions</div>
-                        ${paye > 0 ? `<div class="deduction-row"><span>P.A.Y.E (Tax)</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${paye.toLocaleString()}</span></div>` : ''}
-                        ${nhif > 0 ? `<div class="deduction-row"><span>NHIF</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${nhif.toLocaleString()}</span></div>` : ''}
-                        ${nssf > 0 ? `<div class="deduction-row"><span>NSSF</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${nssf.toLocaleString()}</span></div>` : ''}
-                        ${otherDeductions > 0 ? `<div class="deduction-row"><span>Other Deductions</span><span class="amount">- ${brand.currencySymbol || 'KES'} ${otherDeductions.toLocaleString()}</span></div>` : ''}
-                        ${totalDeductions === 0 ? `<div class="deduction-row"><span>No deductions</span><span class="amount">${brand.currencySymbol || 'KES'} 0</span></div>` : ''}
-                        <div class="subtotal deduct">
-                            <span>TOTAL DEDUCTIONS</span>
-                            <span class="amount">- ${brand.currencySymbol || 'KES'} ${totalDeductions.toLocaleString()}</span>
-                        </div>
+                        <div class="section-title">Deductions</div>
+                        ${paye > 0 ? `<div class="row"><span class="label">P.A.Y.E</span><span class="value" style="color:#ef4444">-${brand.currencySymbol || 'KES'} ${paye.toLocaleString()}</span></div>` : ''}
+                        ${nhif > 0 ? `<div class="row"><span class="label">NHIF</span><span class="value" style="color:#ef4444">-${brand.currencySymbol || 'KES'} ${nhif.toLocaleString()}</span></div>` : ''}
+                        ${nssf > 0 ? `<div class="row"><span class="label">NSSF</span><span class="value" style="color:#ef4444">-${brand.currencySymbol || 'KES'} ${nssf.toLocaleString()}</span></div>` : ''}
+                        ${otherDeductions > 0 ? `<div class="row"><span class="label">Other</span><span class="value" style="color:#ef4444">-${brand.currencySymbol || 'KES'} ${otherDeductions.toLocaleString()}</span></div>` : ''}
+                        <div class="divider"></div>
+                        <div class="total-row deduction"><span class="label">Total Deductions</span><span class="value">-${brand.currencySymbol || 'KES'} ${totalDeductions.toLocaleString()}</span></div>
                     </div>
+                    ` : ''}
                     
-                    <div class="net-pay">
-                        <span class="label">Net Pay</span>
-                        <span class="amount">${brand.currencySymbol || 'KES'} ${netPay.toLocaleString()}</span>
-                    </div>
-                    
-                    <div class="signature-area">
-                        <div class="signature-box">
-                            <div class="signature-line">Employee Signature</div>
-                        </div>
-                        <div class="signature-box">
-                            <div class="signature-line">Authorized Signature</div>
+                    <div class="net-section">
+                        <div class="net-row">
+                            <span class="net-label">Net Pay</span>
+                            <span class="net-amount">${brand.currencySymbol || 'KES'} ${netPay.toLocaleString()}</span>
                         </div>
                     </div>
                     
                     <div class="footer">
-                        <p><strong>${brand.companyName } Car Wash & Auto Services</strong></p>
-                        <p>This is a computer-generated payslip. No signature required.</p>
-                        <p>For queries, contact HR department.</p>
+                        This is a computer-generated payslip
                     </div>
                 </div>
             </body>
@@ -25566,8 +25560,28 @@ function HRModule() {
             {activeTab === 'work' && (
                 <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-                        <h3 style={{ ...headerStyle, margin: 0 }}>Work History <span style={{ fontSize: '12px', fontWeight: '400', color: isDark ? '#64748b' : '#94a3b8' }}>({allWorkHistory.length} jobs)</span></h3>
-                        <button style={btnPrimary} onClick={() => setShowAddWorkModal(true)}>➕ Add Manual Entry</button>
+                        <h3 style={{ ...headerStyle, margin: 0 }}>Work History <span style={{ fontSize: '12px', fontWeight: '400', color: isDark ? '#64748b' : '#94a3b8' }}>({allWorkHistory.filter(w => !workHistorySearch || w.staffName?.toLowerCase().includes(workHistorySearch.toLowerCase())).length} jobs)</span></h3>
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ position: 'relative' }}>
+                                <input
+                                    type="text"
+                                    placeholder="Search by staff name..."
+                                    value={workHistorySearch}
+                                    onChange={(e) => setWorkHistorySearch(e.target.value)}
+                                    style={{
+                                        padding: '8px 12px 8px 36px',
+                                        border: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`,
+                                        background: isDark ? '#1e293b' : '#fff',
+                                        color: isDark ? '#f1f5f9' : '#1e293b',
+                                        fontSize: '13px',
+                                        minWidth: '220px',
+                                        borderRadius: '0'
+                                    }}
+                                />
+                                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '14px', opacity: 0.5 }}>🔍</span>
+                            </div>
+                            <button style={btnPrimary} onClick={() => setShowAddWorkModal(true)}>➕ Add Manual Entry</button>
+                        </div>
                     </div>
                     <div style={cardStyle}>
                         <div style={{ overflowX: 'auto' }}>
@@ -25584,15 +25598,15 @@ function HRModule() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {allWorkHistory.length === 0 ? (
+                                    {allWorkHistory.filter(w => !workHistorySearch || w.staffName?.toLowerCase().includes(workHistorySearch.toLowerCase())).length === 0 ? (
                                         <tr>
                                             <td colSpan="7" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
                                                 <div style={{ fontSize: '24px', marginBottom: '8px' }}>📋</div>
-                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No work entries yet</p>
-                                                <p style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '8px' }}>Complete jobs in Wash Bays or Garage to see them here</p>
+                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>{workHistorySearch ? 'No results found' : 'No work entries yet'}</p>
+                                                <p style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '8px' }}>{workHistorySearch ? `No staff matching "${workHistorySearch}"` : 'Complete jobs in Wash Bays or Garage to see them here'}</p>
                                             </td>
                                         </tr>
-                                    ) : allWorkHistory.slice(0, 100).map(work => {
+                                    ) : allWorkHistory.filter(w => !workHistorySearch || w.staffName?.toLowerCase().includes(workHistorySearch.toLowerCase())).slice(0, 100).map(work => {
                                         const jobType = JOB_TYPES.find(jt => jt.id === work.jobType);
                                         const sourceLabel = work.source === 'washbay' ? '🚿 Wash Bay' : work.source === 'garage' ? '🔧 Garage' : '📝 Manual';
                                         const sourceColor = work.source === 'washbay' ? '#3b82f6' : work.source === 'garage' ? '#f59e0b' : '#8b5cf6';
@@ -25637,7 +25651,8 @@ function HRModule() {
             {/* Payments Tab */}
             {activeTab === 'payments' && (
                 <div>
-                    <h3 style={{ ...headerStyle, marginBottom: '20px' }}>Payment History</h3>
+                    <h3 style={{ ...headerStyle, marginBottom: '20px' }}>Latest Payments</h3>
+                    <p style={{ fontSize: '13px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '16px' }}>Showing the most recent payment for each staff member. Click "History" to view all payments.</p>
                     <div style={cardStyle}>
                         <div style={{ overflowX: 'auto' }}>
                             <table style={tableStyle}>
@@ -25649,78 +25664,112 @@ function HRModule() {
                                         <th style={thStyle}>Period</th>
                                         <th style={thStyle}>Jobs</th>
                                         <th style={thStyle}>Amount</th>
+                                        <th style={thStyle}>Processed By</th>
                                         <th style={thStyle}>Status</th>
                                         <th style={thStyle}>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {payments.length === 0 ? (
-                                        <tr>
-                                            <td colSpan="8" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
-                                                <div style={{ fontSize: '24px', marginBottom: '8px' }}>💰</div>
-                                                <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No payments recorded yet</p>
-                                            </td>
-                                        </tr>
-                                    ) : payments.map(payment => (
-                                        <tr key={payment.id}>
-                                            <td style={tdStyle}>{new Date(payment.paidAt).toLocaleDateString()}</td>
-                                            <td style={tdStyle}>{payment.staffName}</td>
-                                            <td style={tdStyle}>
-                                                <span style={{ textTransform: 'capitalize' }}>{payment.paymentType}</span>
-                                            </td>
-                                            <td style={tdStyle}>
-                                                {payment.periodStart && payment.periodEnd 
-                                                    ? `${new Date(payment.periodStart).toLocaleDateString()} - ${new Date(payment.periodEnd).toLocaleDateString()}`
-                                                    : '-'
-                                                }
-                                            </td>
-                                            <td style={tdStyle}>{payment.jobsCount || 0}</td>
-                                            <td style={tdStyle}>
-                                                <span style={{ fontWeight: '700', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(payment.amount || 0).toLocaleString()}</span>
-                                            </td>
-                                            <td style={tdStyle}>
-                                                <span style={{
-                                                    display: 'inline-block',
-                                                    padding: '4px 10px',
-                                                    borderRadius: '0',
-                                                    fontSize: '11px',
-                                                    fontWeight: '600',
-                                                    backgroundColor: payment.status === 'cancelled' ? '#fee2e2' : payment.status === 'pending' ? '#fef3c7' : '#dcfce7',
-                                                    color: payment.status === 'cancelled' ? '#dc2626' : payment.status === 'pending' ? '#d97706' : '#16a34a'
-                                                }}>
-                                                    {payment.status === 'cancelled' ? '❌ Cancelled' : payment.status === 'pending' ? '⏳ Pending' : '✅ Paid'}
-                                                </span>
-                                            </td>
-                                            <td style={tdStyle}>
-                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                                    <button
-                                                        style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
-                                                        onClick={() => { setViewingPayment(payment); setShowViewPaymentModal(true); }}
-                                                    >👁️ View</button>
-                                                    {payment.status !== 'cancelled' && (
-                                                        <button
-                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
-                                                            onClick={() => handlePrintReceipt(payment)}
-                                                        >🖨️ Print</button>
-                                                    )}
-                                                    {payment.status === 'pending' && (
-                                                        <button
-                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#dcfce7', color: '#16a34a' }}
-                                                            onClick={() => handleMarkAsPaid(payment)}
-                                                            disabled={actionLoading}
-                                                        >✓ Mark Paid</button>
-                                                    )}
-                                                    {payment.status !== 'cancelled' && (
-                                                        <button
-                                                            style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#fee2e2', color: '#dc2626' }}
-                                                            onClick={() => handleCancelPayment(payment)}
-                                                            disabled={actionLoading}
-                                                        >✕ Cancel</button>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {(() => {
+                                        // Get only the latest payment per staff
+                                        const latestPaymentsMap = {};
+                                        payments.forEach(payment => {
+                                            if (!latestPaymentsMap[payment.staffId] || new Date(payment.paidAt) > new Date(latestPaymentsMap[payment.staffId].paidAt)) {
+                                                latestPaymentsMap[payment.staffId] = payment;
+                                            }
+                                        });
+                                        const latestPayments = Object.values(latestPaymentsMap).sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt));
+                                        
+                                        if (latestPayments.length === 0) {
+                                            return (
+                                                <tr>
+                                                    <td colSpan="8" style={{ ...tdStyle, textAlign: 'center', padding: '40px' }}>
+                                                        <div style={{ fontSize: '24px', marginBottom: '8px' }}>💰</div>
+                                                        <p style={{ color: isDark ? '#64748b' : '#94a3b8' }}>No payments recorded yet</p>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+                                        
+                                        return latestPayments.map(payment => {
+                                            const staffMember = staffList.find(s => s.id === payment.staffId);
+                                            const totalPaymentsCount = payments.filter(p => p.staffId === payment.staffId).length;
+                                            return (
+                                                <tr key={payment.id}>
+                                                    <td style={tdStyle}>{new Date(payment.paidAt).toLocaleDateString()}</td>
+                                                    <td style={tdStyle}>
+                                                        <div>{payment.staffName}</div>
+                                                        {totalPaymentsCount > 1 && (
+                                                            <div style={{ fontSize: '10px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '2px' }}>{totalPaymentsCount} total payments</div>
+                                                        )}
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        <span style={{ textTransform: 'capitalize' }}>{payment.paymentType}</span>
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        {payment.periodStart && payment.periodEnd 
+                                                            ? `${new Date(payment.periodStart).toLocaleDateString()} - ${new Date(payment.periodEnd).toLocaleDateString()}`
+                                                            : '-'
+                                                        }
+                                                    </td>
+                                                    <td style={tdStyle}>{payment.jobsCount || 0}</td>
+                                                    <td style={tdStyle}>
+                                                        <span style={{ fontWeight: '700', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(payment.amount || 0).toLocaleString()}</span>
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        <div style={{ fontSize: '13px', color: isDark ? '#f1f5f9' : '#1e293b' }}>{payment.processedByName || 'System'}</div>
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        <span style={{
+                                                            display: 'inline-block',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '0',
+                                                            fontSize: '11px',
+                                                            fontWeight: '600',
+                                                            backgroundColor: payment.status === 'cancelled' ? '#fee2e2' : payment.status === 'pending' ? '#fef3c7' : '#dcfce7',
+                                                            color: payment.status === 'cancelled' ? '#dc2626' : payment.status === 'pending' ? '#d97706' : '#16a34a'
+                                                        }}>
+                                                            {payment.status === 'cancelled' ? '❌ Cancelled' : payment.status === 'pending' ? '⏳ Pending' : '✅ Paid'}
+                                                        </span>
+                                                    </td>
+                                                    <td style={tdStyle}>
+                                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                            {totalPaymentsCount > 1 && (
+                                                                <button
+                                                                    style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#dbeafe', color: '#2563eb' }}
+                                                                    onClick={() => { setPaymentHistoryStaff(staffMember || { id: payment.staffId, name: payment.staffName }); setShowPaymentHistoryModal(true); }}
+                                                                >📜 History</button>
+                                                            )}
+                                                            <button
+                                                                style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
+                                                                onClick={() => { setViewingPayment(payment); setShowViewPaymentModal(true); }}
+                                                            >👁️ View</button>
+                                                            {payment.status !== 'cancelled' && (
+                                                                <button
+                                                                    style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px' }}
+                                                                    onClick={() => handlePrintReceipt(payment)}
+                                                                >🖨️ Print</button>
+                                                            )}
+                                                            {payment.status === 'pending' && (
+                                                                <button
+                                                                    style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#dcfce7', color: '#16a34a' }}
+                                                                    onClick={() => handleMarkAsPaid(payment)}
+                                                                    disabled={actionLoading}
+                                                                >✓ Mark Paid</button>
+                                                            )}
+                                                            {payment.status !== 'cancelled' && (
+                                                                <button
+                                                                    style={{ ...btnSecondary, padding: '5px 10px', fontSize: '11px', background: '#fee2e2', color: '#dc2626' }}
+                                                                    onClick={() => handleCancelPayment(payment)}
+                                                                    disabled={actionLoading}
+                                                                >✕ Cancel</button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        });
+                                    })()}
                                 </tbody>
                             </table>
                         </div>
@@ -25956,128 +26005,115 @@ function HRModule() {
             {/* View Payment Details Modal */}
             {showViewPaymentModal && viewingPayment && (
                 <div style={modalOverlay} onClick={() => setShowViewPaymentModal(false)}>
-                    <div style={{ ...modalContent, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>💵 Payment Details</h2>
-                            <button onClick={() => setShowViewPaymentModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                    <div style={{ ...modalContent, maxWidth: '480px', padding: '0' }} onClick={e => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>Payment Details</h2>
+                                <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginTop: '2px' }}>#{viewingPayment.id?.slice(-6).toUpperCase() || 'N/A'}</div>
+                            </div>
+                            <button onClick={() => setShowViewPaymentModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b', padding: '4px' }}>✕</button>
                         </div>
 
-                        {/* Payment Header */}
-                        <div style={{ background: isDark ? '#0f172a' : '#f0fdf4', padding: '16px', borderRadius: '0', marginBottom: '20px', textAlign: 'center' }}>
-                            <div style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px' }}>Payslip No.</div>
-                            <div style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>#PS-{viewingPayment.id?.slice(-6).toUpperCase() || 'N/A'}</div>
-                        </div>
+                        {/* Content */}
+                        <div style={{ padding: '20px 24px' }}>
+                            {/* Staff & Status */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '2px' }}>Employee</div>
+                                    <div style={{ fontSize: '15px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>{viewingPayment.staffName}</div>
+                                </div>
+                                <span style={{
+                                    padding: '4px 10px',
+                                    fontSize: '11px',
+                                    fontWeight: '600',
+                                    backgroundColor: viewingPayment.status === 'cancelled' ? '#fee2e2' : viewingPayment.status === 'pending' ? '#fef3c7' : '#dcfce7',
+                                    color: viewingPayment.status === 'cancelled' ? '#dc2626' : viewingPayment.status === 'pending' ? '#d97706' : '#16a34a'
+                                }}>
+                                    {viewingPayment.status === 'cancelled' ? 'Cancelled' : viewingPayment.status === 'pending' ? 'Pending' : 'Paid'}
+                                </span>
+                            </div>
 
-                        {/* Employee & Period Info */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
-                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Employee</div>
-                                <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>{viewingPayment.staffName}</div>
-                            </div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
-                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Payment Type</div>
-                                <div style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b', textTransform: 'capitalize' }}>{viewingPayment.paymentType || 'Salary'}</div>
-                            </div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
-                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Pay Period</div>
-                                <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>
-                                    {viewingPayment.periodStart ? new Date(viewingPayment.periodStart).toLocaleDateString('en-GB') : '-'} to {viewingPayment.periodEnd ? new Date(viewingPayment.periodEnd).toLocaleDateString('en-GB') : '-'}
+                            {/* Details Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '2px' }}>Payment Type</div>
+                                    <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b', textTransform: 'capitalize' }}>{viewingPayment.paymentType || 'Salary'}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '2px' }}>Payment Date</div>
+                                    <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>{new Date(viewingPayment.paidAt || viewingPayment.createdAt).toLocaleDateString()}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '2px' }}>Pay Period</div>
+                                    <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>
+                                        {viewingPayment.periodStart && viewingPayment.periodEnd 
+                                            ? `${new Date(viewingPayment.periodStart).toLocaleDateString()} - ${new Date(viewingPayment.periodEnd).toLocaleDateString()}`
+                                            : '-'
+                                        }
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '2px' }}>Processed By</div>
+                                    <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>{viewingPayment.processedByName || 'System'}</div>
                                 </div>
                             </div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0' }}>
-                                <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>Payment Date</div>
-                                <div style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>
-                                    {new Date(viewingPayment.paidAt || viewingPayment.createdAt).toLocaleDateString('en-GB')}
+
+                            {/* Amounts */}
+                            <div style={{ borderTop: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, paddingTop: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                    <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Gross Amount</span>
+                                    <span style={{ fontSize: '13px', fontWeight: '500', color: isDark ? '#f1f5f9' : '#1e293b' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.grossAmount || viewingPayment.amount || 0).toLocaleString()}</span>
+                                </div>
+                                {(parseFloat(viewingPayment.paye) > 0 || parseFloat(viewingPayment.nhif) > 0 || parseFloat(viewingPayment.nssf) > 0 || parseFloat(viewingPayment.otherDeductions) > 0) && (
+                                    <>
+                                        {parseFloat(viewingPayment.paye) > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                <span style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>P.A.Y.E</span>
+                                                <span style={{ fontSize: '12px', color: '#ef4444' }}>-{getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(viewingPayment.paye).toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                        {parseFloat(viewingPayment.nhif) > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                <span style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>NHIF</span>
+                                                <span style={{ fontSize: '12px', color: '#ef4444' }}>-{getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(viewingPayment.nhif).toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                        {parseFloat(viewingPayment.nssf) > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                <span style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>NSSF</span>
+                                                <span style={{ fontSize: '12px', color: '#ef4444' }}>-{getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(viewingPayment.nssf).toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                        {parseFloat(viewingPayment.otherDeductions) > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                <span style={{ fontSize: '12px', color: isDark ? '#64748b' : '#94a3b8' }}>Other Deductions</span>
+                                                <span style={{ fontSize: '12px', color: '#ef4444' }}>-{getBrandingForReceipts().currencySymbol || 'KES'} {parseFloat(viewingPayment.otherDeductions).toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                    <span style={{ fontSize: '14px', fontWeight: '600', color: isDark ? '#f1f5f9' : '#1e293b' }}>Net Pay</span>
+                                    <span style={{ fontSize: '18px', fontWeight: '700', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.amount || 0).toLocaleString()}</span>
                                 </div>
                             </div>
-                        </div>
 
-                        {/* Earnings Section */}
-                        <div style={{ marginBottom: '16px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: '600', color: '#16a34a', marginBottom: '8px', textTransform: 'uppercase' }}>📈 Earnings</div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', borderRadius: '0', overflow: 'hidden' }}>
-                                {viewingPayment.baseSalary > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Base Salary</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.baseSalary || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {viewingPayment.totalCommission > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Commission ({viewingPayment.jobsCount || 0} jobs)</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.totalCommission || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#1e3a5f20' : '#dcfce7' }}>
-                                    <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>GROSS EARNINGS</span>
-                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#16a34a' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.grossAmount || viewingPayment.amount || 0).toLocaleString()}</span>
+                            {/* Notes */}
+                            {viewingPayment.notes && (
+                                <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                    <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#94a3b8', textTransform: 'uppercase', marginBottom: '4px' }}>Notes</div>
+                                    <div style={{ fontSize: '13px', color: isDark ? '#f1f5f9' : '#1e293b' }}>{viewingPayment.notes}</div>
                                 </div>
-                            </div>
+                            )}
                         </div>
 
-                        {/* Deductions Section */}
-                        <div style={{ marginBottom: '16px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: '600', color: '#dc2626', marginBottom: '8px', textTransform: 'uppercase' }}>📉 Deductions</div>
-                            <div style={{ background: isDark ? '#0f172a' : '#f8fafc', borderRadius: '0', overflow: 'hidden' }}>
-                                {(viewingPayment.paye > 0) && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>P.A.Y.E (Tax)</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.paye || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {(viewingPayment.nhif > 0) && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NHIF</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.nhif || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {(viewingPayment.nssf > 0) && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>NSSF</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.nssf || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {(viewingPayment.otherDeductions > 0) && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>Other Deductions</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.otherDeductions || 0).toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {(!viewingPayment.paye && !viewingPayment.nhif && !viewingPayment.nssf && !viewingPayment.otherDeductions && (viewingPayment.totalDeductions || 0) === 0) && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
-                                        <span style={{ fontSize: '13px', color: isDark ? '#94a3b8' : '#64748b' }}>No deductions</span>
-                                        <span style={{ fontSize: '13px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b' }}>{getBrandingForReceipts().currencySymbol || 'KES'} 0</span>
-                                    </div>
-                                )}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: isDark ? '#7f1d1d20' : '#fee2e2' }}>
-                                    <span style={{ fontSize: '13px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>TOTAL DEDUCTIONS</span>
-                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#dc2626' }}>- {getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.totalDeductions || 0).toLocaleString()}</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Net Pay */}
-                        <div style={{ background: '#1e3a5f', padding: '16px', borderRadius: '0', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontSize: '14px', fontWeight: '700', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>NET PAY</span>
-                            <span style={{ fontSize: '24px', fontWeight: '700', color: 'white' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewingPayment.amount || 0).toLocaleString()}</span>
-                        </div>
-
-                        {/* Notes */}
-                        {viewingPayment.notes && (
-                            <div style={{ marginBottom: '20px' }}>
-                                <div style={{ fontSize: '12px', fontWeight: '600', color: isDark ? '#94a3b8' : '#64748b', marginBottom: '6px' }}>Notes</div>
-                                <div style={{ background: isDark ? '#0f172a' : '#f8fafc', padding: '12px', borderRadius: '0', fontSize: '13px', color: isDark ? '#f1f5f9' : '#1e293b' }}>
-                                    {viewingPayment.notes}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Actions */}
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                            <button style={btnSecondary} onClick={() => setShowViewPaymentModal(false)}>Close</button>
-                            <button style={btnPrimary} onClick={() => { handlePrintReceipt(viewingPayment); }}>
-                                🖨️ Print Payslip
-                            </button>
+                        {/* Footer Actions */}
+                        <div style={{ padding: '16px 24px', borderTop: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                            <button style={{ ...btnSecondary, padding: '8px 16px', fontSize: '13px' }} onClick={() => setShowViewPaymentModal(false)}>Close</button>
+                            {viewingPayment.status !== 'cancelled' && (
+                                <button style={{ ...btnPrimary, padding: '8px 16px', fontSize: '13px' }} onClick={() => handlePrintReceipt(viewingPayment)}>🖨️ Print</button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -26261,6 +26297,113 @@ function HRModule() {
                             <button style={btnPrimary} onClick={handleAddWork} disabled={actionLoading || !workForm.staffId || !workForm.serviceName || !workForm.servicePrice}>
                                 {actionLoading ? 'Adding...' : 'Add Work Entry'}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Payment History Modal */}
+            {showPaymentHistoryModal && paymentHistoryStaff && (
+                <div style={modalOverlay} onClick={() => setShowPaymentHistoryModal(false)}>
+                    <div style={{ ...modalContent, width: '95%', maxWidth: '900px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: '24px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexShrink: 0 }}>
+                            <h2 style={{ margin: 0, fontSize: '18px', color: isDark ? '#f1f5f9' : '#1e293b' }}>📜 Payment History - {paymentHistoryStaff.name}</h2>
+                            <button onClick={() => setShowPaymentHistoryModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: isDark ? '#94a3b8' : '#64748b' }}>✕</button>
+                        </div>
+                        
+                        {/* Summary */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px', flexShrink: 0 }}>
+                            {(() => {
+                                const staffPayments = payments.filter(p => p.staffId === paymentHistoryStaff.id);
+                                const totalPaid = staffPayments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                                // Get total jobs from actual work history (same as Staff List tab)
+                                const totalJobs = allWorkHistory.filter(w => 
+                                    w.staffId === paymentHistoryStaff.id || 
+                                    w.staffName?.toLowerCase() === paymentHistoryStaff.name?.toLowerCase()
+                                ).length;
+                                return (
+                                    <>
+                                        <div style={{ background: isDark ? '#1e293b' : '#f0fdf4', padding: '14px', border: `1px solid ${isDark ? '#334155' : '#bbf7d0'}` }}>
+                                            <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#16a34a', fontWeight: '600', marginBottom: '4px' }}>TOTAL PAID</div>
+                                            <div style={{ fontSize: '18px', fontWeight: '700', color: '#10b981' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {totalPaid.toLocaleString()}</div>
+                                        </div>
+                                        <div style={{ background: isDark ? '#1e293b' : '#eff6ff', padding: '14px', border: `1px solid ${isDark ? '#334155' : '#bfdbfe'}` }}>
+                                            <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#3b82f6', fontWeight: '600', marginBottom: '4px' }}>TOTAL JOBS</div>
+                                            <div style={{ fontSize: '18px', fontWeight: '700', color: '#3b82f6' }}>{totalJobs}</div>
+                                        </div>
+                                        <div style={{ background: isDark ? '#1e293b' : '#f8fafc', padding: '14px', border: `1px solid ${isDark ? '#334155' : '#e2e8f0'}` }}>
+                                            <div style={{ fontSize: '11px', color: isDark ? '#64748b' : '#64748b', fontWeight: '600', marginBottom: '4px' }}>PAYMENTS</div>
+                                            <div style={{ fontSize: '18px', fontWeight: '700', color: isDark ? '#f1f5f9' : '#1e293b' }}>{staffPayments.length}</div>
+                                        </div>
+                                    </>
+                                );
+                            })()}
+                        </div>
+
+                        {/* Payment History Table */}
+                        <div style={{ overflowY: 'auto', flex: 1 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead style={{ position: 'sticky', top: 0, background: isDark ? '#0f172a' : '#f8fafc', zIndex: 1 }}>
+                                    <tr>
+                                        <th style={{ ...thStyle, padding: '12px' }}>Date</th>
+                                        <th style={{ ...thStyle, padding: '12px' }}>Type</th>
+                                        <th style={{ ...thStyle, padding: '12px' }}>Period</th>
+                                        <th style={{ ...thStyle, padding: '12px', textAlign: 'right' }}>Amount</th>
+                                        <th style={{ ...thStyle, padding: '12px' }}>Processed By</th>
+                                        <th style={{ ...thStyle, padding: '12px', textAlign: 'center' }}>Status</th>
+                                        <th style={{ ...thStyle, padding: '12px', textAlign: 'center' }}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {payments.filter(p => p.staffId === paymentHistoryStaff.id).sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt)).map((payment, index) => (
+                                        <tr key={payment.id} style={{ background: index === 0 ? (isDark ? '#1e3a5f20' : '#dbeafe30') : 'transparent' }}>
+                                            <td style={{ ...tdStyle, padding: '12px' }}>
+                                                <div style={{ fontWeight: index === 0 ? '600' : '400' }}>{new Date(payment.paidAt).toLocaleDateString()}</div>
+                                                {index === 0 && <div style={{ fontSize: '10px', color: '#3b82f6', fontWeight: '600', marginTop: '2px' }}>LATEST</div>}
+                                            </td>
+                                            <td style={{ ...tdStyle, padding: '12px', textTransform: 'capitalize' }}>{payment.paymentType}</td>
+                                            <td style={{ ...tdStyle, padding: '12px', fontSize: '12px', color: isDark ? '#94a3b8' : '#64748b' }}>
+                                                {payment.periodStart && payment.periodEnd 
+                                                    ? `${new Date(payment.periodStart).toLocaleDateString()} - ${new Date(payment.periodEnd).toLocaleDateString()}`
+                                                    : '-'
+                                                }
+                                            </td>
+                                            <td style={{ ...tdStyle, padding: '12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: '600', color: payment.status === 'cancelled' ? '#94a3b8' : '#10b981', textDecoration: payment.status === 'cancelled' ? 'line-through' : 'none' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(payment.amount || 0).toLocaleString()}</td>
+                                            <td style={{ ...tdStyle, padding: '12px', fontSize: '12px' }}>{payment.processedByName || 'System'}</td>
+                                            <td style={{ ...tdStyle, padding: '12px', textAlign: 'center' }}>
+                                                <span style={{
+                                                    display: 'inline-block',
+                                                    padding: '3px 8px',
+                                                    fontSize: '10px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: payment.status === 'cancelled' ? '#fee2e2' : payment.status === 'pending' ? '#fef3c7' : '#dcfce7',
+                                                    color: payment.status === 'cancelled' ? '#dc2626' : payment.status === 'pending' ? '#d97706' : '#16a34a'
+                                                }}>
+                                                    {payment.status === 'cancelled' ? 'Cancelled' : payment.status === 'pending' ? 'Pending' : 'Paid'}
+                                                </span>
+                                            </td>
+                                            <td style={{ ...tdStyle, padding: '12px', textAlign: 'center' }}>
+                                                <div style={{ display: 'inline-flex', gap: '6px' }}>
+                                                    <button
+                                                        style={{ ...btnSecondary, padding: '4px 8px', fontSize: '10px' }}
+                                                        onClick={() => { setShowPaymentHistoryModal(false); setViewingPayment(payment); setShowViewPaymentModal(true); }}
+                                                    >👁️</button>
+                                                    {payment.status !== 'cancelled' && (
+                                                        <button
+                                                            style={{ ...btnSecondary, padding: '4px 8px', fontSize: '10px' }}
+                                                            onClick={() => handlePrintReceipt(payment)}
+                                                        >🖨️</button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '16px', borderTop: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`, marginTop: '16px', flexShrink: 0 }}>
+                            <button style={{ ...btnSecondary, padding: '10px 20px' }} onClick={() => setShowPaymentHistoryModal(false)}>Close</button>
                         </div>
                     </div>
                 </div>
