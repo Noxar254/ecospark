@@ -10752,6 +10752,7 @@ function ParkingManagement() {
                                     <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Phone</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Parked</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Released</th>
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Duration</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Rate Applied</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Fee</th>
                                     <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: theme.textSecondary, textTransform: 'uppercase' }}>Status</th>
@@ -10782,6 +10783,26 @@ function ParkingManagement() {
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.text }}>
                                                 {record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                            </td>
+                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                {(() => {
+                                                    if (!record.parkedAt || !record.releasedAt) return '-';
+                                                    const parked = new Date(record.parkedAt);
+                                                    const released = new Date(record.releasedAt);
+                                                    const diffMs = released - parked;
+                                                    const totalMinutes = Math.floor(diffMs / 60000);
+                                                    const hours = Math.floor(totalMinutes / 60);
+                                                    const minutes = totalMinutes % 60;
+                                                    if (hours >= 24) {
+                                                        const days = Math.floor(hours / 24);
+                                                        const remHours = hours % 24;
+                                                        return <span style={{ fontWeight: '600', color: '#dc2626', fontSize: '13px' }}>{days}d {remHours}h {minutes}m</span>;
+                                                    } else if (hours >= 6) {
+                                                        return <span style={{ fontWeight: '600', color: '#f59e0b', fontSize: '13px' }}>{hours}h {minutes}m</span>;
+                                                    } else {
+                                                        return <span style={{ fontWeight: '600', color: '#10b981', fontSize: '13px' }}>{hours}h {minutes}m</span>;
+                                                    }
+                                                })()}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                                 <div style={{ fontSize: '13px', fontWeight: '500', color: theme.text }}>
