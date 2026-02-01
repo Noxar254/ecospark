@@ -9539,6 +9539,7 @@ function ParkingManagement() {
         const branding = getBrandingForReceipts();
         const currency = branding.currencySymbol || 'KES';
         const isPaid = paymentInfo.status === 'cleared';
+        const isWaived = record.feeWaived === true;
         
         const printContent = `
 <!DOCTYPE html>
@@ -9571,8 +9572,8 @@ function ParkingManagement() {
             padding: 6px 0;
             font-weight: bold;
             font-size: 11px;
-            background: ${isPaid ? '#000' : '#fff'};
-            color: ${isPaid ? '#fff' : '#000'};
+            background: ${isWaived ? '#fff' : (isPaid ? '#000' : '#fff')};
+            color: ${isWaived ? '#000' : (isPaid ? '#fff' : '#000')};
             border: 1px solid #000;
             margin: 6px 0;
         }
@@ -9605,7 +9606,7 @@ function ParkingManagement() {
     
     <div class="plate">${record.plateNumber}</div>
     
-    <div class="status">${isPaid ? '*** CLEARED ***' : '-- PENDING PAYMENT --'}</div>
+    <div class="status">${isWaived ? '*** FEE WAIVED ***' : (isPaid ? '*** CLEARED ***' : '-- PENDING PAYMENT --')}</div>
     
     <div class="row"><span class="label">Type:</span><span class="value">${record.vehicleType || 'Vehicle'}</span></div>
     <div class="row"><span class="label">Customer:</span><span class="value">${record.customerName || 'Walk-in'}</span></div>
@@ -9616,13 +9617,16 @@ function ParkingManagement() {
     <div class="row"><span class="label">In:</span><span class="value">${record.parkedAt ? new Date(record.parkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</span></div>
     <div class="row"><span class="label">Out:</span><span class="value">${record.releasedAt ? new Date(record.releasedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</span></div>
     ${record.parkingSpaceName ? `<div class="row"><span class="label">Space:</span><span class="value">${record.parkingSpaceName}</span></div>` : ''}
-    <div class="row"><span class="label">Rate:</span><span class="value">${record.rateApplied || 'Standard'}</span></div>
+    <div class="row"><span class="label">Rate:</span><span class="value">${isWaived ? 'WAIVED' : (record.rateApplied || 'Standard')}</span></div>
     
     <div class="divider"></div>
     
-    <div class="amount">${currency} ${(record.parkingFee || 0).toLocaleString()}</div>
+    <div class="amount">${isWaived ? 'NO CHARGE' : `${currency} ${(record.parkingFee || 0).toLocaleString()}`}</div>
     
-    ${paymentInfo.invoice ? `
+    ${isWaived ? `
+    <div class="row"><span class="label">Waived by:</span><span class="value">${record.feeWaivedBy?.name || 'Staff'}</span></div>
+    ${record.feeWaivedAt ? `<div class="row"><span class="label">Waived:</span><span class="value">${new Date(record.feeWaivedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>` : ''}
+    ` : paymentInfo.invoice ? `
     <div class="row"><span class="label">Invoice:</span><span class="value">${paymentInfo.invoice.invoiceNumber || '-'}</span></div>
     ${isPaid && paymentInfo.invoice.paymentMethod ? `<div class="row"><span class="label">Paid via:</span><span class="value">${paymentInfo.invoice.paymentMethod.toUpperCase()}</span></div>` : ''}
     ${isPaid && paymentInfo.invoice.paidAt ? `<div class="row"><span class="label">Paid:</span><span class="value">${new Date(paymentInfo.invoice.paidAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>` : ''}
@@ -10806,9 +10810,7 @@ function ParkingManagement() {
                                                 </span>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                {isWaived ? (
-                                                    <span style={{ fontSize: '12px', color: '#6366f1', fontWeight: '500' }}>Fee waived</span>
-                                                ) : isCleared ? (
+                                                {(isWaived || isCleared) ? (
                                                     <button
                                                         onClick={() => printGatePass(record)}
                                                         style={{
