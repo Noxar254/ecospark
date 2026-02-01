@@ -32575,6 +32575,35 @@ function InventoryModule() {
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [usageHistoryModal, setUsageHistoryModal] = useState(null);
     const exportMenuRef = React.useRef(null);
+    
+    // Dark theme support
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : '#fff',
+        bgSecondary: isDark ? '#0f172a' : '#f9fafb',
+        bgHover: isDark ? '#334155' : '#f3f4f6',
+        text: isDark ? '#f1f5f9' : '#1f2937',
+        textSecondary: isDark ? '#94a3b8' : '#6b7280',
+        textMuted: isDark ? '#64748b' : '#9ca3af',
+        border: isDark ? '#334155' : '#e5e7eb',
+        borderLight: isDark ? '#475569' : '#f3f4f6',
+        inputBg: isDark ? '#0f172a' : '#fff',
+        cardBg: isDark ? '#1e293b' : '#fff',
+        modalBg: isDark ? '#1e293b' : '#fff',
+    };
 
     const { inventoryService } = window.FirebaseServices;
 
@@ -32777,9 +32806,9 @@ function InventoryModule() {
         return styles[status] || styles['in-stock'];
     };
 
-    const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '0', fontSize: '14px', outline: 'none' };
+    const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${theme.border}`, borderRadius: '0', fontSize: '14px', outline: 'none', background: theme.inputBg, color: theme.text };
     const btnPrimary = { padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
-    const btnSecondary = { padding: '10px 20px', background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
+    const btnSecondary = { padding: '10px 20px', background: theme.bgHover, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
 
     return (
         <div style={{ padding: '0' }}>
@@ -32791,7 +32820,7 @@ function InventoryModule() {
                     right: '24px', 
                     zIndex: 9999,
                     padding: '16px 24px', 
-                    background: '#fff',
+                    background: theme.cardBg,
                     borderLeft: `4px solid ${message.type === 'success' ? '#22c55e' : '#ef4444'}`,
                     boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
                     display: 'flex', 
@@ -32813,14 +32842,14 @@ function InventoryModule() {
                         {message.type === 'success' ? '✓' : '✕'}
                     </div>
                     <div>
-                        <div style={{ fontWeight: '600', fontSize: '14px', color: '#1f2937' }}>
+                        <div style={{ fontWeight: '600', fontSize: '14px', color: theme.text }}>
                             {message.type === 'success' ? 'Success' : 'Error'}
                         </div>
-                        <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>{message.text}</div>
+                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>{message.text}</div>
                     </div>
                     <button 
                         onClick={() => setMessage({ type: '', text: '' })} 
-                        style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px', padding: '0' }}
+                        style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: theme.textMuted, fontSize: '18px', padding: '0' }}
                     >×</button>
                 </div>
             )}
@@ -32833,10 +32862,10 @@ function InventoryModule() {
                     { label: 'Low Stock', value: stats.lowStock, icon: '⚠', color: '#f59e0b' },
                     { label: 'Out of Stock', value: stats.outOfStock, icon: '✕', color: '#ef4444' }
                 ].map((stat, i) => (
-                    <div key={i} style={{ background: '#fff', padding: '20px', border: '1px solid #e5e7eb', borderRadius: '0' }}>
+                    <div key={i} style={{ background: theme.cardBg, padding: '20px', border: `1px solid ${theme.border}`, borderRadius: '0' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
-                                <p style={{ margin: '0 0 4px', color: '#6b7280', fontSize: '13px' }}>{stat.label}</p>
+                                <p style={{ margin: '0 0 4px', color: theme.textSecondary, fontSize: '13px' }}>{stat.label}</p>
                                 <p style={{ margin: '0', fontSize: '28px', fontWeight: '700', color: stat.color }}>{stat.value}</p>
                             </div>
                             <span style={{ fontSize: '24px', opacity: 0.8 }}>{stat.icon}</span>
@@ -32866,9 +32895,9 @@ function InventoryModule() {
                     <div style={{ position: 'relative' }} ref={exportMenuRef}>
                         <button onClick={() => setShowExportMenu(!showExportMenu)} style={btnSecondary}>📥 Export ▾</button>
                         {showExportMenu && (
-                            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, minWidth: '140px' }}>
-                                <button onClick={exportExcel} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }} onMouseOver={(e) => e.target.style.background='#f3f4f6'} onMouseOut={(e) => e.target.style.background='none'}>📊 Export Excel</button>
-                                <button onClick={exportPDF} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#374151' }} onMouseOver={(e) => e.target.style.background='#f3f4f6'} onMouseOut={(e) => e.target.style.background='none'}>📄 Export PDF</button>
+                            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: '0', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 100, minWidth: '140px' }}>
+                                <button onClick={exportExcel} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: theme.text }} onMouseOver={(e) => e.target.style.background=theme.bgHover} onMouseOut={(e) => e.target.style.background='none'}>📊 Export Excel</button>
+                                <button onClick={exportPDF} style={{ display: 'block', width: '100%', padding: '10px 16px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: theme.text }} onMouseOver={(e) => e.target.style.background=theme.bgHover} onMouseOut={(e) => e.target.style.background='none'}>📄 Export PDF</button>
                             </div>
                         )}
                     </div>
@@ -32877,24 +32906,24 @@ function InventoryModule() {
             </div>
 
             {/* Table */}
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', overflow: 'hidden' }}>
+            <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: '0', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                        <tr style={{ background: '#f9fafb' }}>
-                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Item Name</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Category</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Quantity</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Usage/Day</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Cost</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Status</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                        <tr style={{ background: theme.bgSecondary }}>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Item Name</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Category</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Quantity</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Usage/Day</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Cost</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Status</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
-                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</td></tr>
+                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>Loading...</td></tr>
                         ) : filteredItems.length === 0 ? (
-                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>No items found</td></tr>
+                            <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>No items found</td></tr>
                         ) : (
                             filteredItems.map(item => {
                                 const status = inventoryService.getStockStatus(item.quantity, item.minStock);
@@ -32902,8 +32931,8 @@ function InventoryModule() {
                                 const usageAlert = inventoryService.getUsageAlert(item);
                                 const alertStyle = getUsageAlertStyle(usageAlert);
                                 return (
-                                    <tr key={item.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                                        <td style={{ padding: '14px 16px', fontSize: '14px', fontWeight: '500' }}>
+                                    <tr key={item.id} style={{ borderBottom: `1px solid ${theme.borderLight}` }}>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', fontWeight: '500', color: theme.text }}>
                                             {item.name}
                                             {usageAlert && usageAlert.level !== 'ok' && (
                                                 <span style={{ marginLeft: '8px', padding: '2px 6px', background: alertStyle.bg, color: alertStyle.color, fontSize: '10px', fontWeight: '600' }}>
@@ -32911,15 +32940,15 @@ function InventoryModule() {
                                                 </span>
                                             )}
                                         </td>
-                                        <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{item.category}</td>
-                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'center', fontWeight: '600' }}>{item.quantity} {item.unit}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', color: theme.textSecondary }}>{item.category}</td>
+                                        <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'center', fontWeight: '600', color: theme.text }}>{item.quantity} {item.unit}</td>
                                         <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'center' }}>
                                             {item.dailyUsageRate ? (
-                                                <span style={{ padding: '4px 8px', background: alertStyle?.bg || '#f3f4f6', color: alertStyle?.color || '#6b7280', fontSize: '12px', fontWeight: '500' }}>
+                                                <span style={{ padding: '4px 8px', background: alertStyle?.bg || theme.bgHover, color: alertStyle?.color || theme.textSecondary, fontSize: '12px', fontWeight: '500' }}>
                                                     {item.dailyUsageRate} {item.unit || 'units'}
                                                 </span>
                                             ) : (
-                                                <span style={{ color: '#9ca3af', fontSize: '12px' }}>No data</span>
+                                                <span style={{ color: theme.textMuted, fontSize: '12px' }}>No data</span>
                                             )}
                                         </td>
                                         <td style={{ padding: '14px 16px', fontSize: '14px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(item.cost || 0).toLocaleString()}</td>
@@ -32933,7 +32962,7 @@ function InventoryModule() {
                                                 {canEdit('inventory') && <button onClick={() => setUsageModal(item)} style={{ padding: '6px 10px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>Use</button>}
                                                 <button onClick={() => setUsageHistoryModal(item)} style={{ padding: '6px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#166534', fontWeight: '600' }}>History</button>
                                                 <button onClick={() => setViewItem(item)} style={{ padding: '6px 10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: '#2563eb' }}>View</button>
-                                                {canEdit('inventory') && <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '11px' }}>Edit</button>}
+                                                {canEdit('inventory') && <button onClick={() => handleEdit(item)} style={{ padding: '6px 10px', background: theme.bgHover, border: `1px solid ${theme.border}`, borderRadius: '0', cursor: 'pointer', fontSize: '11px', color: theme.text }}>Edit</button>}
                                                 {canDelete('inventory') && <button onClick={() => setDeleteConfirm(item)} style={{ padding: '6px 10px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '11px' }}>Del</button>}
                                             </div>
                                         </td>
@@ -32948,19 +32977,19 @@ function InventoryModule() {
             {/* Modal */}
             {showModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
-                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>{editItem ? 'Edit Item' : 'Add New Item'}</h3>
-                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>{editItem ? 'Edit Item' : 'Add New Item'}</h3>
+                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
                         </div>
                         <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 <div>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Item Name *</label>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Item Name *</label>
                                     <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} style={inputStyle} required />
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Category *</label>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Category *</label>
                                     <select value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} style={inputStyle} required>
                                         <option value="">Select category</option>
                                         <option value="Cleaning Supplies">Cleaning Supplies</option>
@@ -32973,28 +33002,28 @@ function InventoryModule() {
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Quantity *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Quantity *</label>
                                         <input type="number" min="0" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: e.target.value })} style={inputStyle} required />
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Min Stock *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Min Stock *</label>
                                         <input type="number" min="0" value={formData.minStock} onChange={(e) => setFormData({ ...formData, minStock: e.target.value })} style={inputStyle} required />
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Unit (optional)</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Unit (optional)</label>
                                         <input type="text" placeholder="e.g., pcs, liters, kg" value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} style={inputStyle} />
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Cost per Unit ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Cost per Unit ({getBrandingForReceipts().currencySymbol || 'KES'})</label>
                                         <input type="number" min="0" step="0.01" placeholder="0.00" value={formData.cost} onChange={(e) => setFormData({ ...formData, cost: e.target.value })} style={inputStyle} />
                                     </div>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Usage Alert (days)</label>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Usage Alert (days)</label>
                                     <input type="number" min="1" placeholder="Alert when supply drops below X days" value={formData.usageAlertDays} onChange={(e) => setFormData({ ...formData, usageAlertDays: e.target.value })} style={inputStyle} />
-                                    <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#9ca3af' }}>Alert when remaining supply falls below this many days</p>
+                                    <p style={{ margin: '4px 0 0', fontSize: '11px', color: theme.textMuted }}>Alert when remaining supply falls below this many days</p>
                                 </div>
                             </div>
                             <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
@@ -33009,39 +33038,39 @@ function InventoryModule() {
             {/* View Item Modal */}
             {viewItem && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '400px', borderRadius: '0', overflow: 'hidden' }}>
-                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Item Details</h3>
-                            <button onClick={() => setViewItem(null)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '400px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Item Details</h3>
+                            <button onClick={() => setViewItem(null)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
                         </div>
                         <div style={{ padding: '24px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Item Name</span>
-                                    <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.name}</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Item Name</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px', color: theme.text }}>{viewItem.name}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Category</span>
-                                    <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.category}</span>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Category</span>
+                                    <span style={{ fontWeight: '500', fontSize: '14px', color: theme.text }}>{viewItem.category}</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Quantity</span>
-                                    <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.quantity} {viewItem.unit}</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Quantity</span>
+                                    <span style={{ fontWeight: '600', fontSize: '14px', color: theme.text }}>{viewItem.quantity} {viewItem.unit}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Min Stock Level</span>
-                                    <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.minStock}</span>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Min Stock Level</span>
+                                    <span style={{ fontWeight: '500', fontSize: '14px', color: theme.text }}>{viewItem.minStock}</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Cost per Unit</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Cost per Unit</span>
                                     <span style={{ fontWeight: '600', fontSize: '14px', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(viewItem.cost || 0).toLocaleString()}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Total Value</span>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Total Value</span>
                                     <span style={{ fontWeight: '700', fontSize: '14px', color: '#059669' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {((viewItem.cost || 0) * viewItem.quantity).toLocaleString()}</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
-                                    <span style={{ color: '#6b7280', fontSize: '14px' }}>Status</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                    <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Status</span>
                                     <span style={{ padding: '4px 12px', background: getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).bg, color: getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).color, fontSize: '12px', fontWeight: '600', borderRadius: '0' }}>
                                         {getStatusStyle(inventoryService.getStockStatus(viewItem.quantity, viewItem.minStock)).label}
                                     </span>
@@ -33049,11 +33078,11 @@ function InventoryModule() {
                                 {viewItem.dailyUsageRate > 0 && (
                                     <>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
-                                            <span style={{ color: '#6b7280', fontSize: '14px' }}>Daily Usage Rate</span>
-                                            <span style={{ fontWeight: '600', fontSize: '14px' }}>{viewItem.dailyUsageRate} {viewItem.unit}/day</span>
+                                            <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Daily Usage Rate</span>
+                                            <span style={{ fontWeight: '600', fontSize: '14px', color: theme.text }}>{viewItem.dailyUsageRate} {viewItem.unit}/day</span>
                                         </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#f9fafb' }}>
-                                            <span style={{ color: '#6b7280', fontSize: '14px' }}>Days of Supply Left</span>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: theme.bgSecondary }}>
+                                            <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Days of Supply Left</span>
                                             <span style={{ fontWeight: '600', fontSize: '14px', color: inventoryService.getUsageAlert(viewItem)?.level === 'critical' ? '#dc2626' : inventoryService.getUsageAlert(viewItem)?.level === 'warning' ? '#f59e0b' : '#22c55e' }}>
                                                 {Math.floor(viewItem.quantity / viewItem.dailyUsageRate)} days
                                             </span>
@@ -33062,8 +33091,8 @@ function InventoryModule() {
                                 )}
                                 {viewItem.lastUsage && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px' }}>
-                                        <span style={{ color: '#6b7280', fontSize: '14px' }}>Last Usage</span>
-                                        <span style={{ fontWeight: '500', fontSize: '14px' }}>{viewItem.lastUsage.amount} {viewItem.unit} - {new Date(viewItem.lastUsage.date).toLocaleDateString()}</span>
+                                        <span style={{ color: theme.textSecondary, fontSize: '14px' }}>Last Usage</span>
+                                        <span style={{ fontWeight: '500', fontSize: '14px', color: theme.text }}>{viewItem.lastUsage.amount} {viewItem.unit} - {new Date(viewItem.lastUsage.date).toLocaleDateString()}</span>
                                     </div>
                                 )}
                             </div>
@@ -33123,18 +33152,18 @@ function InventoryModule() {
             {/* Record Usage Modal */}
             {usageModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
-                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>Record Usage</h3>
-                            <button onClick={() => { setUsageModal(null); setUsageAmount(''); setUsageNotes(''); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>Record Usage</h3>
+                            <button onClick={() => { setUsageModal(null); setUsageAmount(''); setUsageNotes(''); }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
                         </div>
                         <div style={{ padding: '24px' }}>
-                            <div style={{ background: '#f9fafb', padding: '16px', marginBottom: '20px' }}>
-                                <p style={{ margin: '0 0 4px', fontWeight: '600', fontSize: '15px' }}>{usageModal.name}</p>
-                                <p style={{ margin: 0, color: '#6b7280', fontSize: '13px' }}>Available: <strong>{usageModal.quantity} {usageModal.unit}</strong></p>
+                            <div style={{ background: theme.bgSecondary, padding: '16px', marginBottom: '20px' }}>
+                                <p style={{ margin: '0 0 4px', fontWeight: '600', fontSize: '15px', color: theme.text }}>{usageModal.name}</p>
+                                <p style={{ margin: 0, color: theme.textSecondary, fontSize: '13px' }}>Available: <strong>{usageModal.quantity} {usageModal.unit}</strong></p>
                             </div>
                             <div style={{ marginBottom: '16px' }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount Used *</label>
+                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Amount Used *</label>
                                 <input 
                                     type="number" 
                                     min="1" 
@@ -33146,7 +33175,7 @@ function InventoryModule() {
                                 />
                             </div>
                             <div style={{ marginBottom: '20px' }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Notes (optional)</label>
+                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Notes (optional)</label>
                                 <input 
                                     type="text" 
                                     value={usageNotes} 
@@ -33167,11 +33196,11 @@ function InventoryModule() {
             {/* Delete Confirmation Modal */}
             {deleteConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
                         <div style={{ padding: '24px', textAlign: 'center' }}>
                             <div style={{ width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>🗑️</div>
-                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>Delete Item</h3>
-                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Are you sure you want to delete <strong>"{deleteConfirm.name}"</strong>? This action cannot be undone.</p>
+                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: theme.text }}>Delete Item</h3>
+                            <p style={{ margin: '0 0 24px', color: theme.textSecondary, fontSize: '14px' }}>Are you sure you want to delete <strong>"{deleteConfirm.name}"</strong>? This action cannot be undone.</p>
                             <div style={{ display: 'flex', gap: '12px' }}>
                                 <button onClick={() => setDeleteConfirm(null)} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
                                 <button onClick={() => handleDelete(deleteConfirm.id)} style={{ flex: 1, padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Delete</button>
@@ -33392,6 +33421,35 @@ function ExpensesModule() {
         paymentMethod: 'cash'
     });
 
+    // Dark theme support
+    const [isDark, setIsDark] = useState(document.documentElement.getAttribute('data-theme') === 'dark');
+    
+    useEffect(() => {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.attributeName === 'data-theme') {
+                    setIsDark(document.documentElement.getAttribute('data-theme') === 'dark');
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }, []);
+
+    const theme = {
+        bg: isDark ? '#1e293b' : '#fff',
+        bgSecondary: isDark ? '#0f172a' : '#f9fafb',
+        bgHover: isDark ? '#334155' : '#f3f4f6',
+        text: isDark ? '#f1f5f9' : '#1f2937',
+        textSecondary: isDark ? '#94a3b8' : '#6b7280',
+        textMuted: isDark ? '#64748b' : '#9ca3af',
+        border: isDark ? '#334155' : '#e5e7eb',
+        borderLight: isDark ? '#475569' : '#f3f4f6',
+        inputBg: isDark ? '#0f172a' : '#fff',
+        cardBg: isDark ? '#1e293b' : '#fff',
+        modalBg: isDark ? '#1e293b' : '#fff',
+    };
+
     const { expensesService } = window.FirebaseServices;
 
     const categories = ['Utilities', 'Supplies', 'Maintenance', 'Salaries', 'Transport', 'Marketing', 'Equipment', 'Other'];
@@ -33503,23 +33561,23 @@ function ExpensesModule() {
         printWindow.onload = () => printWindow.print();
     };
 
-    const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '0', fontSize: '14px', outline: 'none' };
+    const inputStyle = { width: '100%', padding: '10px 12px', border: `1px solid ${theme.border}`, borderRadius: '0', fontSize: '14px', outline: 'none', background: theme.inputBg, color: theme.text };
     const btnPrimary = { padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
-    const btnSecondary = { padding: '10px 20px', background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
+    const btnSecondary = { padding: '10px 20px', background: theme.bgHover, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: '0', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
 
     return (
         <div style={{ padding: '0' }}>
             {/* Toast */}
             {message.text && (
-                <div style={{ position: 'fixed', top: '24px', right: '24px', zIndex: 9999, padding: '16px 24px', background: '#fff', borderLeft: `4px solid ${message.type === 'success' ? '#22c55e' : '#ef4444'}`, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '12px', minWidth: '280px' }}>
+                <div style={{ position: 'fixed', top: '24px', right: '24px', zIndex: 9999, padding: '16px 24px', background: theme.cardBg, borderLeft: `4px solid ${message.type === 'success' ? '#22c55e' : '#ef4444'}`, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '12px', minWidth: '280px' }}>
                     <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: message.type === 'success' ? '#dcfce7' : '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}>
                         {message.type === 'success' ? '✓' : '✕'}
                     </div>
                     <div>
-                        <div style={{ fontWeight: '600', fontSize: '14px', color: '#1f2937' }}>{message.type === 'success' ? 'Success' : 'Error'}</div>
-                        <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>{message.text}</div>
+                        <div style={{ fontWeight: '600', fontSize: '14px', color: theme.text }}>{message.type === 'success' ? 'Success' : 'Error'}</div>
+                        <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>{message.text}</div>
                     </div>
-                    <button onClick={() => setMessage({ type: '', text: '' })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px' }}>×</button>
+                    <button onClick={() => setMessage({ type: '', text: '' })} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: theme.textMuted, fontSize: '18px' }}>×</button>
                 </div>
             )}
 
@@ -33531,10 +33589,10 @@ function ExpensesModule() {
                     { label: 'This Week', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.thisWeek.toLocaleString()}`, icon: '📊', color: '#f59e0b' },
                     { label: 'Today', value: `${getBrandingForReceipts().currencySymbol || 'KES'} ${stats.today.toLocaleString()}`, icon: '📌', color: '#22c55e' }
                 ].map((stat, i) => (
-                    <div key={i} style={{ background: '#fff', padding: '20px', border: '1px solid #e5e7eb', borderRadius: '0' }}>
+                    <div key={i} style={{ background: theme.cardBg, padding: '20px', border: `1px solid ${theme.border}`, borderRadius: '0' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
-                                <p style={{ margin: '0 0 4px', color: '#6b7280', fontSize: '13px' }}>{stat.label}</p>
+                                <p style={{ margin: '0 0 4px', color: theme.textSecondary, fontSize: '13px' }}>{stat.label}</p>
                                 <p style={{ margin: '0', fontSize: '22px', fontWeight: '700', color: stat.color }}>{stat.value}</p>
                             </div>
                             <span style={{ fontSize: '24px', opacity: 0.8 }}>{stat.icon}</span>
@@ -33565,39 +33623,39 @@ function ExpensesModule() {
             </div>
 
             {/* Table */}
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '0', overflow: 'hidden' }}>
+            <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: '0', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                        <tr style={{ background: '#f9fafb' }}>
-                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Date</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Title</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Category</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Payment</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Amount</th>
-                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+                        <tr style={{ background: theme.bgSecondary }}>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Date</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Title</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'left', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Category</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Payment</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Amount</th>
+                            <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: '600', fontSize: '13px', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}` }}>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
-                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</td></tr>
+                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>Loading...</td></tr>
                         ) : filteredExpenses.length === 0 ? (
-                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>No expenses found</td></tr>
+                            <tr><td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: theme.textSecondary }}>No expenses found</td></tr>
                         ) : (
                             filteredExpenses.map(expense => (
-                                <tr key={expense.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                                    <td style={{ padding: '14px 16px', fontSize: '14px', color: '#6b7280' }}>{expense.date}</td>
+                                <tr key={expense.id} style={{ borderBottom: `1px solid ${theme.borderLight}` }}>
+                                    <td style={{ padding: '14px 16px', fontSize: '14px', color: theme.textSecondary }}>{expense.date}</td>
                                     <td style={{ padding: '14px 16px' }}>
-                                        <div style={{ fontWeight: '500', fontSize: '14px' }}>{expense.title}</div>
-                                        {expense.description && <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{expense.description}</div>}
+                                        <div style={{ fontWeight: '500', fontSize: '14px', color: theme.text }}>{expense.title}</div>
+                                        {expense.description && <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>{expense.description}</div>}
                                     </td>
                                     <td style={{ padding: '14px 16px' }}>
-                                        <span style={{ padding: '4px 10px', background: '#f3f4f6', fontSize: '12px', fontWeight: '500' }}>{expense.category}</span>
+                                        <span style={{ padding: '4px 10px', background: theme.bgHover, fontSize: '12px', fontWeight: '500', color: theme.text }}>{expense.category}</span>
                                     </td>
-                                    <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: '#6b7280', textTransform: 'capitalize' }}>{expense.paymentMethod || '-'}</td>
+                                    <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', color: theme.textSecondary, textTransform: 'capitalize' }}>{expense.paymentMethod || '-'}</td>
                                     <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', fontSize: '14px', color: '#dc2626' }}>{getBrandingForReceipts().currencySymbol || 'KES'} {(expense.amount || 0).toLocaleString()}</td>
                                     <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                                            {canEdit('expenses') && <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '0', cursor: 'pointer', fontSize: '12px' }}>Edit</button>}
+                                            {canEdit('expenses') && <button onClick={() => handleEdit(expense)} style={{ padding: '6px 12px', background: theme.bgHover, border: `1px solid ${theme.border}`, borderRadius: '0', cursor: 'pointer', fontSize: '12px', color: theme.text }}>Edit</button>}
                                             {canDelete('expenses') && <button onClick={() => setDeleteConfirm(expense)} style={{ padding: '6px 12px', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: '0', cursor: 'pointer', color: '#dc2626', fontSize: '12px' }}>Delete</button>}
                                         </div>
                                     </td>
@@ -33611,37 +33669,37 @@ function ExpensesModule() {
             {/* Add/Edit Modal */}
             {showModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
-                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>{editItem ? 'Edit Expense' : 'Add Expense'}</h3>
-                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '440px', borderRadius: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.text }}>{editItem ? 'Edit Expense' : 'Add Expense'}</h3>
+                            <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: theme.textSecondary }}>×</button>
                         </div>
                         <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 <div>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Title *</label>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Title *</label>
                                     <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} placeholder="e.g., Electricity Bill" style={inputStyle} required />
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Category *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Category *</label>
                                         <select value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} style={inputStyle} required>
                                             <option value="">Select</option>
                                             {categories.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Amount ({getBrandingForReceipts().currencySymbol || 'KES'}) *</label>
                                         <input type="number" min="0" step="0.01" value={formData.amount} onChange={(e) => setFormData({ ...formData, amount: e.target.value })} placeholder="0.00" style={inputStyle} required />
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Date *</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Date *</label>
                                         <input type="date" value={formData.date} onChange={(e) => setFormData({ ...formData, date: e.target.value })} style={inputStyle} required />
                                     </div>
                                     <div>
-                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Payment Method</label>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Payment Method</label>
                                         <select value={formData.paymentMethod} onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })} style={inputStyle}>
                                             <option value="cash">Cash</option>
                                             <option value="mpesa">M-Pesa</option>
@@ -33652,7 +33710,7 @@ function ExpensesModule() {
                                     </div>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>Description (optional)</label>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: theme.textSecondary }}>Description (optional)</label>
                                     <input type="text" value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder="Additional notes..." style={inputStyle} />
                                 </div>
                             </div>
@@ -33668,11 +33726,11 @@ function ExpensesModule() {
             {/* Delete Confirmation */}
             {deleteConfirm && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ background: '#fff', width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
+                    <div style={{ background: theme.modalBg, width: '100%', maxWidth: '380px', borderRadius: '0', overflow: 'hidden' }}>
                         <div style={{ padding: '24px', textAlign: 'center' }}>
                             <div style={{ width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>🗑️</div>
-                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>Delete Expense</h3>
-                            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '14px' }}>Delete <strong>"{deleteConfirm.title}"</strong> ({getBrandingForReceipts().currencySymbol || 'KES'} {(deleteConfirm.amount || 0).toLocaleString()})?</p>
+                            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '600', color: theme.text }}>Delete Expense</h3>
+                            <p style={{ margin: '0 0 24px', color: theme.textSecondary, fontSize: '14px' }}>Delete <strong>"{deleteConfirm.title}"</strong> ({getBrandingForReceipts().currencySymbol || 'KES'} {(deleteConfirm.amount || 0).toLocaleString()})?</p>
                             <div style={{ display: 'flex', gap: '12px' }}>
                                 <button onClick={() => setDeleteConfirm(null)} style={{ ...btnSecondary, flex: 1 }}>Cancel</button>
                                 <button onClick={() => handleDelete(deleteConfirm.id)} style={{ flex: 1, padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>Delete</button>
