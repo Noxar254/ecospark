@@ -10084,6 +10084,28 @@ function ParkingManagement() {
         );
     };
 
+    // Waive parking fee and release vehicle (for inactive/short stays)
+    const handleWaiveFee = async (vehicle) => {
+        showAlert(
+            'Waive Parking Fee',
+            `Waive fee for ${vehicle.plateNumber}?\n\nThe vehicle will be released with no charge.\nThis will be recorded in history as "Waived".`,
+            'info',
+            async () => {
+                setActionLoading(true);
+                try {
+                    const services = window.FirebaseServices;
+                    await services.parkingService.waiveFee(vehicle.id, 'Short stay / Inactive');
+                    showAlert('Success', `${vehicle.plateNumber} released.\nFee waived successfully.`, 'success');
+                } catch (err) {
+                    showAlert('Error', 'Failed to waive fee: ' + err.message, 'error');
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+            true
+        );
+    };
+
     // Save settings
     const handleSaveSettings = async () => {
         setActionLoading(true);
@@ -10580,7 +10602,7 @@ function ParkingManagement() {
                                                 )}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
                                                     <button
                                                         onClick={() => { setSelectedVehicle(vehicle); setSelectedRate(''); setShowApplyFeeModal(true); }}
                                                         style={{ padding: '6px 12px', borderRadius: '2px', border: 'none', backgroundColor: '#dbeafe', color: '#1d4ed8', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
@@ -10594,6 +10616,15 @@ function ParkingManagement() {
                                                     >
                                                         Release
                                                     </button>
+                                                    {!meetsThreshold && (
+                                                        <button
+                                                            onClick={() => handleWaiveFee(vehicle)}
+                                                            disabled={actionLoading}
+                                                            style={{ padding: '6px 12px', borderRadius: '2px', border: 'none', backgroundColor: '#fef3c7', color: '#d97706', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                                                        >
+                                                            Waive
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -10727,6 +10758,7 @@ function ParkingManagement() {
                                 {paginationData.paginatedItems.map(record => {
                                     const paymentInfo = getPaymentStatus(record.id);
                                     const isCleared = paymentInfo.status === 'cleared';
+                                    const isWaived = record.feeWaived === true;
                                     return (
                                         <tr key={record.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                                             <td style={{ padding: '14px 16px' }}>
@@ -10749,14 +10781,14 @@ function ParkingManagement() {
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                                                 <div style={{ fontSize: '13px', fontWeight: '500', color: theme.text }}>
-                                                    {record.rateUsed || 'Standard'}
+                                                    {isWaived ? 'Waived' : (record.rateUsed || 'Standard')}
                                                 </div>
                                                 <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                                                    {getCurrency()} {(record.defaultRate || record.hourlyRate || record.parkingFee || 0).toLocaleString()}
+                                                    {isWaived ? 'No charge' : `${getCurrency()} ${(record.defaultRate || record.hourlyRate || record.parkingFee || 0).toLocaleString()}`}
                                                 </div>
                                             </td>
-                                            <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', color: '#059669' }}>
-                                                {getCurrency()} {(record.parkingFee || 0).toLocaleString()}
+                                            <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: '600', color: isWaived ? theme.textSecondary : '#059669' }}>
+                                                {isWaived ? `${getCurrency()} 0` : `${getCurrency()} ${(record.parkingFee || 0).toLocaleString()}`}
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                 <span style={{
@@ -10767,14 +10799,16 @@ function ParkingManagement() {
                                                     borderRadius: '20px',
                                                     fontSize: '12px',
                                                     fontWeight: '600',
-                                                    backgroundColor: isCleared ? '#dcfce7' : '#fef3c7',
-                                                    color: isCleared ? '#166534' : '#92400e'
+                                                    backgroundColor: isWaived ? '#e0e7ff' : (isCleared ? '#dcfce7' : '#fef3c7'),
+                                                    color: isWaived ? '#4338ca' : (isCleared ? '#166534' : '#92400e')
                                                 }}>
-                                                    {isCleared ? '✓ Cleared' : '⏳ Pending'}
+                                                    {isWaived ? '🏷️ Waived' : (isCleared ? '✓ Cleared' : '⏳ Pending')}
                                                 </span>
                                             </td>
                                             <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                {isCleared ? (
+                                                {isWaived ? (
+                                                    <span style={{ fontSize: '12px', color: '#6366f1', fontWeight: '500' }}>Fee waived</span>
+                                                ) : isCleared ? (
                                                     <button
                                                         onClick={() => printGatePass(record)}
                                                         style={{

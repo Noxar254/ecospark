@@ -5977,6 +5977,41 @@ export const parkingService = {
     }
   },
 
+  // Waive parking fee and release vehicle
+  async waiveFee(parkingId, reason = '') {
+    try {
+      const currentUser = window.currentUserProfile;
+      const parkingRef = doc(db, 'parking', parkingId);
+      
+      // Get the parking record to check for parking space
+      const parkingDoc = await getDoc(parkingRef);
+      if (parkingDoc.exists()) {
+        const parkingData = parkingDoc.data();
+        // If vehicle was in a parking space, release the space
+        if (parkingData.parkingSpaceId) {
+          await this.releaseSpace(parkingData.parkingSpaceId);
+        }
+      }
+      
+      await updateDoc(parkingRef, {
+        status: 'released',
+        isPaid: true,
+        paymentMethod: 'waived',
+        parkingFee: 0,
+        feeWaived: true,
+        feeWaivedReason: reason,
+        feeWaivedAt: new Date().toISOString(),
+        feeWaivedBy: currentUser ? { name: currentUser.name || currentUser.displayName || 'Unknown', id: currentUser.id || currentUser.uid } : { name: 'Unknown', id: null },
+        releasedAt: new Date().toISOString(),
+        releasedBy: currentUser ? { name: currentUser.name || currentUser.displayName || 'Unknown', id: currentUser.id || currentUser.uid } : { name: 'Unknown', id: null },
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
   // Update parking record
   async updateParking(parkingId, data) {
     try {
