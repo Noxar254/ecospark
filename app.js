@@ -18457,6 +18457,71 @@ function GarageManagement() {
         }
     };
 
+    // Mark payment as cleared for a completed job
+    const handleMarkPaid = async (job) => {
+        const services = window.FirebaseServices;
+        if (!services?.garageJobsService) {
+            setError('Services not available');
+            return;
+        }
+
+        setActionLoading(true);
+        try {
+            const currentUser = window.currentUserProfile;
+            const result = await services.garageJobsService.updatePaymentStatus(job.id, 'cleared', {
+                paymentMethod: 'cash',
+                paidBy: currentUser?.displayName || 'System'
+            });
+
+            if (result.success) {
+                // Also update the corresponding invoice if exists
+                if (services.billingService) {
+                    try {
+                        const invoicesResult = await services.billingService.getInvoices();
+                        if (invoicesResult.success) {
+                            const matchingInvoice = invoicesResult.data.find(inv => 
+                                inv.jobId === job.id || 
+                                (inv.source === 'garage' && inv.plateNumber === job.plateNumber && inv.paymentStatus !== 'paid')
+                            );
+                            if (matchingInvoice) {
+                                await services.billingService.markAsPaid(matchingInvoice.id, {
+                                    paymentMethod: 'cash',
+                                    paidAmount: matchingInvoice.totalAmount,
+                                    paidBy: currentUser?.displayName || 'System'
+                                });
+                            }
+                        }
+                    } catch (invErr) {
+                        console.warn('Could not update invoice:', invErr);
+                    }
+                }
+
+                // Log activity
+                if (services.activityService) {
+                    services.activityService.logActivity({
+                        type: 'garage',
+                        action: 'Payment Cleared',
+                        details: `${job.plateNumber} - Payment confirmed`,
+                        amount: job.totalCost || 0,
+                        status: 'success',
+                        loggedBy: currentUser?.displayName || 'System',
+                        loggedByEmail: currentUser?.email || null,
+                        loggedByRole: currentUser?.role || null
+                    });
+                }
+
+                showAlert('✅ Payment Cleared', `Payment for ${job.plateNumber} has been confirmed.`, 'success');
+            } else {
+                setError('Failed to update payment: ' + (result.error || 'Unknown error'));
+            }
+        } catch (err) {
+            console.error('Mark paid error:', err);
+            setError('Failed to mark as paid: ' + err.message);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     // Service Categories
     const SERVICE_CATEGORIES = [
         { id: 'maintenance', name: 'Maintenance', color: '#3b82f6' },
@@ -19007,6 +19072,9 @@ function GarageManagement() {
                                     {activeTab === 'queue' ? 'Priority' : 'Status'}
                                 </th>
                                 <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Cost</th>
+                                {activeTab === 'completed' && (
+                                    <th style={{ padding: '14px 16px', textAlign: 'center', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Payment</th>
+                                )}
                                 <th style={{ padding: '14px 16px', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Time</th>
                                 <th style={{ padding: '14px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, whiteSpace: 'nowrap' }}>Actions</th>
                             </tr>
@@ -19014,7 +19082,7 @@ function GarageManagement() {
                     <tbody>
                         {filteredData.length === 0 ? (
                             <tr>
-                                <td colSpan="8" style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary }}>
+                                <td colSpan={activeTab === 'completed' ? 9 : 8} style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary }}>
                                     <div>
                                         <span style={{ fontSize: '48px', display: 'block', marginBottom: '12px' }}>
                                             {activeTab === 'queue' ? '📋' : activeTab === 'jobs' ? '🔧' : '✅'}
@@ -19127,6 +19195,23 @@ function GarageManagement() {
                                             )}
                                         </span>
                                     </td>
+                                    {activeTab === 'completed' && (
+                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                padding: '4px 12px',
+                                                borderRadius: '0',
+                                                fontSize: '12px',
+                                                fontWeight: '600',
+                                                backgroundColor: item.paymentStatus === 'cleared' ? '#d1fae5' : '#fef3c7',
+                                                color: item.paymentStatus === 'cleared' ? '#059669' : '#d97706'
+                                            }}>
+                                                {item.paymentStatus === 'cleared' ? '✓ Cleared' : '⏳ Awaiting'}
+                                            </span>
+                                        </td>
+                                    )}
                                     <td style={{ padding: '14px 16px', color: theme.textSecondary, fontSize: '13px' }}>
                                         {formatTimeAgo(item.addedAt || item.startedAt || item.createdAt)}
                                     </td>
@@ -19189,6 +19274,15 @@ function GarageManagement() {
                                             )}
                                             {activeTab === 'completed' && (
                                                 <>
+                                                    {item.paymentStatus !== 'cleared' && (
+                                                        <button
+                                                            onClick={() => handleMarkPaid(item)}
+                                                            disabled={actionLoading}
+                                                            style={{ padding: '6px 12px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}
+                                                        >
+                                                            💳 Mark Paid
+                                                        </button>
+                                                    )}
                                                     <button
                                                         onClick={() => handleShowHistory(item)}
                                                         style={{ padding: '6px 12px', backgroundColor: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '0', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}

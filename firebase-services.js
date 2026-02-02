@@ -875,6 +875,46 @@ export const billingService = {
             console.warn('Could not update wash history payment status:', washHistoryErr);
           }
         }
+        
+        // Auto-update garage job payment status if this is a garage invoice
+        if (invoiceData.source === 'garage') {
+          try {
+            // Try to find and update garage job by jobId (stored in invoice) or by matching criteria
+            if (invoiceData.jobId) {
+              const jobRef = doc(db, 'garageJobs', invoiceData.jobId);
+              await updateDoc(jobRef, {
+                paymentStatus: 'cleared',
+                paidAt: new Date().toISOString(),
+                paymentMethod: paymentData.method || 'cash',
+                paidBy: paymentData.paidBy || 'Billing',
+                updatedAt: new Date().toISOString()
+              });
+              console.log('✅ Auto-updated garage job payment status to cleared:', invoiceData.jobId);
+            } else if (invoiceData.plateNumber) {
+              // Fallback: find by plate number for completed jobs with awaiting payment
+              const q = query(
+                collection(db, 'garageJobs'),
+                where('plateNumber', '==', invoiceData.plateNumber),
+                where('status', '==', 'completed'),
+                where('paymentStatus', '==', 'awaiting')
+              );
+              const snapshot = await getDocs(q);
+              if (!snapshot.empty) {
+                const jobDoc = snapshot.docs[0];
+                await updateDoc(jobDoc.ref, {
+                  paymentStatus: 'cleared',
+                  paidAt: new Date().toISOString(),
+                  paymentMethod: paymentData.method || 'cash',
+                  paidBy: paymentData.paidBy || 'Billing',
+                  updatedAt: new Date().toISOString()
+                });
+                console.log('✅ Auto-updated garage job payment status by plate:', invoiceData.plateNumber);
+              }
+            }
+          } catch (garageErr) {
+            console.warn('Could not auto-update garage job payment status:', garageErr);
+          }
+        }
       }
       
       return { success: true };
@@ -3291,12 +3331,33 @@ export const garageJobsService = {
       await updateDoc(jobRef, {
         ...completionData,
         status: 'completed',
+        paymentStatus: 'awaiting',
         completedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
       return { success: true };
     } catch (error) {
       console.error('Error completing garage job:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Update payment status
+  async updatePaymentStatus(jobId, paymentStatus, paymentData = {}) {
+    try {
+      const jobRef = doc(db, 'garageJobs', jobId);
+      await updateDoc(jobRef, {
+        paymentStatus: paymentStatus,
+        ...(paymentStatus === 'cleared' && {
+          paidAt: new Date().toISOString(),
+          paymentMethod: paymentData.paymentMethod || 'cash',
+          paidBy: paymentData.paidBy || 'System'
+        }),
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating payment status:', error);
       return { success: false, error: error.message };
     }
   },
